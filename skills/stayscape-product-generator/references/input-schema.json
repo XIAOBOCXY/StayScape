@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["target_date", "weather", "target_crowd", "room_inventory", "allowed_hotel_services", "allowed_partner_resources"],
+  "properties": {
+    "target_date": {"type": "string"},
+    "weather": {"type": "string"},
+    "target_crowd": {"type": "string"},
+    "theme": {"type": "string"},
+    "room_inventory": {"type": "object", "required": ["id", "room_type"]},
+    "requested_selections": {"type": "array"},
+    "allowed_hotel_services": {"type": "array"},
+    "allowed_partner_resources": {"type": "array"}
+  }
+}
+

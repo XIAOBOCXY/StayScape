@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["adult_count", "child_count", "child_ages", "budget", "weather", "products"],
+  "properties": {
+    "adult_count": {"type": "integer", "minimum": 1},
+    "child_count": {"type": "integer", "minimum": 0},
+    "child_ages": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "budget": {"type": "string"},
+    "weather": {"type": "string"},
+    "interests": {"type": "array"},
+    "allergy_information": {"type": "string"},
+    "products": {"type": "array"}
+  }
+}
+

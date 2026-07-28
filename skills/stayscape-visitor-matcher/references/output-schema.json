@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["selected_product_ids", "reasons", "schedule_notes", "limited_adjustments", "allergy_warning"],
+  "properties": {
+    "selected_product_ids": {"type": "array", "items": {"type": "integer"}},
+    "reasons": {"type": "object", "additionalProperties": {"type": "string"}},
+    "schedule_notes": {"type": "object", "additionalProperties": {"type": "array"}},
+    "limited_adjustments": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "allergy_warning": {"type": "string"}
+  },
+  "additionalProperties": false
+}
+

@@ -1,0 +1,15 @@
+{
+  "target_date": "2026-07-29",
+  "weather": "RAIN",
+  "target_crowd": "FAMILY",
+  "theme": "雨天亲子非遗",
+  "room_inventory": {"id": 1, "room_type": "亲子房"},
+  "requested_selections": [
+    {"resource_type": "HOTEL_SERVICE", "resource_id": 1, "quantity_per_package": 3},
+    {"resource_type": "HOTEL_SERVICE", "resource_id": 2, "quantity_per_package": 1},
+    {"resource_type": "PARTNER_RESOURCE", "resource_id": 1, "quantity_per_package": 3}
+  ],
+  "allowed_hotel_services": [{"id": 1, "service_name": "家庭早餐"}, {"id": 2, "service_name": "延迟退房"}],
+  "allowed_partner_resources": [{"id": 1, "resource_name": "室内非遗手作体验", "package_enabled": true, "status": "AVAILABLE"}]
+}
+

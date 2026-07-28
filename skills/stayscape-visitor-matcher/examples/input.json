@@ -1,0 +1,11 @@
+{
+  "adult_count": 2,
+  "child_count": 1,
+  "child_ages": [6],
+  "budget": "700",
+  "weather": "RAIN",
+  "interests": ["手工"],
+  "allergy_information": "花生过敏",
+  "products": [{"id": 1, "product_name": "杭州雨天亲子非遗文化宿", "sale_quantity": 4, "suggested_price": "599.00"}]
+}
+

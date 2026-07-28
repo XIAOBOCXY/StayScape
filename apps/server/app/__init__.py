@@ -1,0 +1,2 @@
+"""StayScape backend application package."""
+

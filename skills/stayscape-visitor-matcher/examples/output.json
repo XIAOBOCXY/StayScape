@@ -1,0 +1,8 @@
+{
+  "selected_product_ids": [1],
+  "reasons": {"1": "预算、亲子年龄和雨天室内体验条件匹配。"},
+  "schedule_notes": {"1": [{"time": "15:00", "title": "办理入住", "description": "酒店前台办理入住"}, {"time": "16:00", "title": "室内非遗手作体验", "description": "场次以商户确认结果为准"}]},
+  "limited_adjustments": {"1": ["可备注希望的体验场次", "过敏信息需酒店与商户再次确认"]},
+  "allergy_warning": "已记录花生过敏；该信息不是安全保证，请在确认前人工核对。"
+}
+
