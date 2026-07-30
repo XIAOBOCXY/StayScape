@@ -1,4 +1,16 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+class MarketingAssetOutput(BaseModel):
+    asset_type: Literal["POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT", "STORE_CARD"]
+    platform: str = Field(min_length=1, max_length=60)
+    title: str = Field(min_length=1, max_length=180)
+    content: str = Field(default="", max_length=4000)
+    visual_brief: str = Field(default="", max_length=500)
+    call_to_action: str = Field(default="", max_length=180)
+    poster_svg: str = Field(default="", max_length=30000)
 
 
 class ProductAgentOutput(BaseModel):
@@ -11,6 +23,7 @@ class ProductAgentOutput(BaseModel):
     resource_quantities: dict[str, int] = Field(default_factory=dict)
     marketing_title: str = Field(min_length=1, max_length=220)
     marketing_content: str = ""
+    marketing_assets: list[MarketingAssetOutput] = Field(default_factory=list)
     recommendation_reason: str = ""
     risk_message: str = ""
 
@@ -21,4 +34,3 @@ class VisitorAgentOutput(BaseModel):
     schedule_notes: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
     limited_adjustments: dict[str, list[str]] = Field(default_factory=dict)
     allergy_warning: str = ""
-

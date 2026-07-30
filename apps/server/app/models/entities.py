@@ -157,6 +157,7 @@ class TravelProduct(TimestampMixin, Base):
     bottleneck_resource: Mapped[str | None] = mapped_column(String(160), nullable=True)
     marketing_title: Mapped[str] = mapped_column(String(220), default="", nullable=False)
     marketing_content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    marketing_assets: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     recommendation_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     risk_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="DRAFT", nullable=False)

@@ -13,7 +13,8 @@ budget constraints.
 
 ## Responsibilities
 
-- Understand visitor needs and map them to supplied product IDs.
+- Understand both structured fields and a visitor's natural-language description,
+  then map the interpreted needs to supplied product IDs.
 - Explain budget, child-age, interest, weather, and schedule fit.
 - Produce a concise itinerary and limited, non-binding adjustment suggestions.
 - Repeat allergy and dietary information as a safety reminder.
@@ -29,4 +30,3 @@ budget constraints.
 
 Return strict JSON matching `references/output-schema.json` without Markdown
 fences.
-

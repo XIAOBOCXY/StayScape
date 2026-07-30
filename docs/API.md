@@ -11,12 +11,14 @@
 | 酒店 | GET/PATCH | `/hotel/rooms`、`/hotel/rooms/{id}` | 房量维护 |
 | 酒店 | GET/PATCH | `/hotel/services`、`/hotel/services/{id}` | 酒店服务维护 |
 | 酒店 | GET/PATCH | `/hotel/resources`、`/hotel/resources/{id}/package` | 资源池和组包许可 |
-| 酒店 | POST | `/hotel/products/generate` | Agent候选+规则校验生成 |
+| 酒店 | POST | `/hotel/products/generate` | Agent候选+规则校验生成，可通过 `variant_count` 生成多套候选 |
+| 酒店 | GET/PATCH/DELETE | `/hotel/products/{id}` | 产品详情、内容/天气/入住日期编辑、删除 |
+| 酒店 | POST | `/hotel/products/{id}/marketing-assets` | 重新生成图文海报、社媒文案、短视频脚本和门店卖点卡 |
 | 酒店 | PATCH | `/hotel/products/{id}/status` | 模拟发布、暂停、下架 |
-| 商户 | GET/PATCH | `/merchant/resources`、`/merchant/resources/{id}` | 商户名额、价格、状态 |
+| 商户 | GET/POST/PATCH | `/merchant/resources`、`/merchant/resources/{id}` | 资源名称、日期、起止场次、名额、价格、天气和状态 |
 | 游客 | GET | `/visitor/products` | 可售产品 |
 | 游客 | POST | `/visitor/consult` | 智能咨询 |
-| 游客 | POST | `/visitor/recommend` | 个性化推荐 |
+| 游客 | POST | `/visitor/recommend` | 支持 `natural_language` 自然语言解析的个性化推荐 |
 | 游客 | POST | `/visitor/intents` | 预约意向 |
 | 实时 | WS | `/ws/hotel/{hotel_id}` | 资源变化通知 |
 
@@ -34,4 +36,3 @@
   }
 }
 ```
-

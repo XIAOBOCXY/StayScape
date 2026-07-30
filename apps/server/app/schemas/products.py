@@ -21,6 +21,8 @@ class GenerateProductRequest(BaseModel):
     room_inventory_id: int | None = Field(default=None, gt=0)
     resource_selections: list[ResourceSelection] = Field(default_factory=list)
     preferred_price: Decimal = Field(default=Decimal("599"), gt=0)
+    variant_count: int = Field(default=1, ge=1, le=5)
+    creative_direction: str = Field(default="", max_length=160)
 
 
 class ProductResourceRead(BaseModel):
@@ -34,6 +36,21 @@ class ProductResourceRead(BaseModel):
     unit_cost: Decimal
     replaceable: bool
     required: bool
+    available_date: date | None = None
+    start_time: time | None = None
+    end_time: time | None = None
+    address: str | None = None
+    description: str | None = None
+
+
+class MarketingAsset(BaseModel):
+    asset_type: Literal["POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT", "STORE_CARD"]
+    platform: str
+    title: str
+    content: str
+    visual_brief: str = ""
+    call_to_action: str = ""
+    poster_svg: str = ""
 
 
 class Financials(BaseModel):
@@ -65,6 +82,7 @@ class ProductRead(BaseModel):
     bottleneck_resource: str | None
     marketing_title: str
     marketing_content: str
+    marketing_assets: list[MarketingAsset] = Field(default_factory=list)
     recommendation_reason: str
     risk_message: str
     status: str
@@ -99,7 +117,9 @@ class ProductDetailResponse(ProductRead):
 
 class ProductGenerateResponse(BaseModel):
     product: ProductRead
+    products: list[ProductRead] = Field(default_factory=list)
     trace_id: str
+    trace_ids: list[str] = Field(default_factory=list)
     validation: dict[str, Any]
     fallback_used: bool = False
 
@@ -107,6 +127,20 @@ class ProductGenerateResponse(BaseModel):
 class ProductListResponse(BaseModel):
     items: list[ProductRead]
     total: int
+
+
+class ProductUpdateRequest(BaseModel):
+    target_date: date | None = None
+    weather: str | None = None
+    target_crowd: str | None = None
+    theme: str | None = Field(default=None, min_length=1, max_length=120)
+    product_name: str | None = Field(default=None, min_length=1, max_length=180)
+    marketing_title: str | None = Field(default=None, min_length=1, max_length=220)
+    marketing_content: str | None = None
+    recommendation_reason: str | None = None
+    risk_message: str | None = None
+    room_inventory_id: int | None = Field(default=None, gt=0)
+    regenerate_marketing: bool = False
 
 
 class DynamicAdjustmentRead(BaseModel):

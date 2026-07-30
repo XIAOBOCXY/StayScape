@@ -1,6 +1,6 @@
 from typing import Any
 
-from ..models import PartnerResource, TravelProduct
+from ..models import HotelService, PartnerResource, ProductResource, RoomInventory, TravelProduct
 
 
 def decimal_text(value) -> str:
@@ -27,6 +27,7 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
         "bottleneck_resource": product.bottleneck_resource,
         "marketing_title": product.marketing_title,
         "marketing_content": product.marketing_content,
+        "marketing_assets": product.marketing_assets or [],
         "recommendation_reason": product.recommendation_reason,
         "risk_message": product.risk_message,
         "status": product.status,
@@ -42,6 +43,11 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
                 "unit_cost": item.unit_cost,
                 "replaceable": item.replaceable,
                 "required": item.required,
+                "available_date": _resource_date(item),
+                "start_time": _resource_start(item),
+                "end_time": _resource_end(item),
+                "address": _resource_address(item),
+                "description": _resource_description(item),
             }
             for item in product.resources
         ],
@@ -64,6 +70,49 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
             for item in product.adjustments
         ]
     return data
+
+
+def _resource_object(item: ProductResource):
+    """Resolve the source object through the product's loaded relationship graph when available."""
+    product = item.product
+    if item.resource_type == "ROOM" and product and product.room_inventory and product.room_inventory.id == item.resource_id:
+        return product.room_inventory
+    if product:
+        # Product resources intentionally keep only IDs so the deterministic engine
+        # owns the source of truth. Lazy loading is safe for the request-scoped DB.
+        for service in getattr(product.hotel, "services", []) if product.hotel else []:
+            if isinstance(service, HotelService) and service.id == item.resource_id:
+                return service
+        for merchant in getattr(product.hotel, "merchants", []) if product.hotel else []:
+            for resource in getattr(merchant, "resources", []):
+                if isinstance(resource, PartnerResource) and resource.id == item.resource_id:
+                    return resource
+    return None
+
+
+def _resource_date(item: ProductResource):
+    source = _resource_object(item)
+    return getattr(source, "available_date", None)
+
+
+def _resource_start(item: ProductResource):
+    source = _resource_object(item)
+    return getattr(source, "start_time", None)
+
+
+def _resource_end(item: ProductResource):
+    source = _resource_object(item)
+    return getattr(source, "end_time", None)
+
+
+def _resource_address(item: ProductResource):
+    source = _resource_object(item)
+    return getattr(source, "address", None)
+
+
+def _resource_description(item: ProductResource):
+    source = _resource_object(item)
+    return getattr(source, "description", None)
 
 
 def partner_resource_to_dict(resource: PartnerResource, referenced_product_count: int = 0) -> dict[str, Any]:

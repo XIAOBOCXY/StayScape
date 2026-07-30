@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -60,7 +60,14 @@ class ProductService:
         if late_checkout:
             selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": late_checkout.id, "quantity_per_package": 1})
         partners = list(self.db.scalars(select(PartnerResource).join(Merchant).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date).order_by(PartnerResource.id)).all())
-        selected = next((item for item in partners if self._partner_candidate(item, request)), None)
+        eligible = [item for item in partners if self._partner_candidate(item, request)]
+        if request.weather == "RAIN":
+            eligible.sort(key=lambda item: (not item.indoor, item.settlement_price, item.id))
+        elif request.weather == "SUNNY":
+            eligible.sort(key=lambda item: (item.indoor, item.settlement_price, item.id))
+        else:
+            eligible.sort(key=lambda item: (not item.indoor, item.settlement_price, item.id))
+        selected = eligible[0] if eligible else None
         if selected:
             selections.append({"resource_type": "PARTNER_RESOURCE", "resource_id": selected.id, "quantity_per_package": 3 if selected.category == "CULTURE" else 1})
         return selections
@@ -75,7 +82,7 @@ class ProductService:
             and is_weather_supported(resource.weather_tags, request.weather)
         )
 
-    def _payload(self, request: GenerateProductRequest, room: RoomInventory, selections: list[dict[str, Any]]) -> dict[str, Any]:
+    def _payload(self, request: GenerateProductRequest, room: RoomInventory, selections: list[dict[str, Any]], *, variant_index: int = 0) -> dict[str, Any]:
         services = list(self.db.scalars(select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.available_date == request.target_date)).all())
         partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date)).unique().all())
         return {
@@ -83,17 +90,21 @@ class ProductService:
             "weather": request.weather,
             "target_crowd": request.target_crowd,
             "theme": request.theme,
+            "creative_direction": request.creative_direction,
+            "variant_index": variant_index,
+            "variant_total": request.variant_count,
             "visitor_budget": str(request.visitor_budget),
+            "preferred_price": str(request.preferred_price),
             "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests},
             "requested_selections": selections,
             "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status} for item in services if item.status == "AVAILABLE"],
             "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and item.merchant.cooperation_status == "ACTIVE" and item.package_enabled and item.status == "AVAILABLE"],
         }
 
-    def generate(self, request: GenerateProductRequest) -> tuple[TravelProduct, dict[str, Any], str, bool]:
+    def generate(self, request: GenerateProductRequest, *, variant_index: int = 0) -> tuple[TravelProduct, dict[str, Any], str, bool]:
         room = self._room(request)
         selections = [item.model_dump() for item in request.resource_selections] or self._default_selections(request, room)
-        payload = self._payload(request, room, selections)
+        payload = self._payload(request, room, selections, variant_index=variant_index)
         agent_result = self.orchestrator.generate_product(payload)
         output: ProductAgentOutput = agent_result.value  # type: ignore[assignment]
         if output.room_inventory_id != room.id:
@@ -112,20 +123,27 @@ class ProductService:
         capacity_inputs = [CapacityInput(room.room_type, room.available_count, 1)]
         unit_cost = room.accounting_cost
         warnings: list[str] = []
+        schedule_slots: list[tuple[time | None, time | None, str]] = []
         for service in services:
             if service is None:
                 continue
             q = output.resource_quantities.get(str(service.id), requested_by_type.get(("HOTEL_SERVICE", service.id), {}).get("quantity_per_package", DEFAULT_QUANTITIES.get(service.service_type, 1)))
             self._validate_service(service, request, q)
+            if any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
+                raise AppError("TIME_CONFLICT", f"酒店服务{service.service_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
             resource_rows.append(ProductResource(resource_type="HOTEL_SERVICE", resource_id=service.id, resource_name=service.service_name, quantity_per_package=q, unit_cost=service.unit_cost, replaceable=service.replaceable, required=True))
             capacity_inputs.append(CapacityInput(service.service_name, service.available_quantity, q))
             unit_cost += service.unit_cost * q
+            schedule_slots.append((service.start_time, service.end_time, service.service_name))
         for partner in selected_partners:
             q = output.resource_quantities.get(str(partner.id), requested_by_type.get(("PARTNER_RESOURCE", partner.id), {}).get("quantity_per_package", 1))
             self._validate_partner(partner, request, q)
+            if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in schedule_slots):
+                raise AppError("TIME_CONFLICT", f"文化体验{partner.resource_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
             resource_rows.append(ProductResource(resource_type="PARTNER_RESOURCE", resource_id=partner.id, resource_name=partner.resource_name, quantity_per_package=q, unit_cost=partner.settlement_price, replaceable=True, required=True))
             capacity_inputs.append(CapacityInput(partner.resource_name, partner.remaining_capacity, q))
             unit_cost += partner.settlement_price * q
+            schedule_slots.append((partner.start_time, partner.end_time, partner.resource_name))
         if len(resource_rows) < 2:
             raise AppError("VALIDATION_ERROR", "套餐至少需要客房和一项酒店服务或文旅体验", field="resource_selections")
         validation = validate_package(capacity_inputs=capacity_inputs, unit_cost=unit_cost, room_minimum_price=room.minimum_price, minimum_gross_margin=request.minimum_gross_margin, visitor_budget=request.visitor_budget, preferred_price=request.preferred_price, warnings=warnings)
@@ -138,7 +156,7 @@ class ProductService:
             product_code=f"SS-{request.target_date.strftime('%Y%m%d')}-{uuid4().hex[:8].upper()}",
             product_name=output.product_name,
             theme=output.theme,
-            target_crowd=output.target_crowd,
+            target_crowd=request.target_crowd,
             weather=request.weather,
             target_date=request.target_date,
             room_inventory_id=room.id,
@@ -151,6 +169,7 @@ class ProductService:
             bottleneck_resource=validation.capacity.bottleneck_resource,
             marketing_title=output.marketing_title,
             marketing_content=output.marketing_content,
+            marketing_assets=[item.model_dump(mode="json") for item in output.marketing_assets],
             recommendation_reason=output.recommendation_reason,
             risk_message=output.risk_message,
             status="DRAFT",
@@ -160,11 +179,50 @@ class ProductService:
         self.db.flush()
         return product, validation.as_dict(), agent_result.trace_id, agent_result.fallback_used
 
+    def generate_many(self, request: GenerateProductRequest) -> list[tuple[TravelProduct, dict[str, Any], str, bool]]:
+        """Generate several creative candidates over the same real inventory snapshot.
+
+        Each candidate is independently validated and persisted as a draft. The
+        business numbers remain deterministic and identical when the resource
+        selections are identical; only the creative packaging varies.
+        """
+        return [self.generate(request, variant_index=index) for index in range(request.variant_count)]
+
+    def _marketing_payload(self, product: TravelProduct, creative_direction: str = "") -> dict[str, Any]:
+        room = self.db.get(RoomInventory, product.room_inventory_id)
+        selections = [{"resource_type": row.resource_type, "resource_id": row.resource_id, "quantity_per_package": row.quantity_per_package} for row in product.resources if row.resource_type != "ROOM"]
+        request = GenerateProductRequest(
+            target_date=product.target_date,
+            weather=product.weather,
+            target_crowd=product.target_crowd,
+            theme=product.theme,
+            room_inventory_id=product.room_inventory_id,
+            resource_selections=selections,
+            preferred_price=product.suggested_price,
+            visitor_budget=max(Decimal("700"), product.suggested_price),
+            variant_count=1,
+            creative_direction=creative_direction,
+        )
+        return self._payload(request, room, selections)
+
+    def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "") -> tuple[str, bool]:
+        result = self.orchestrator.generate_product(self._marketing_payload(product, creative_direction))
+        output: ProductAgentOutput = result.value  # type: ignore[assignment]
+        product.marketing_title = output.marketing_title
+        product.marketing_content = output.marketing_content
+        product.recommendation_reason = output.recommendation_reason
+        product.risk_message = output.risk_message
+        product.marketing_assets = [item.model_dump(mode="json") for item in output.marketing_assets]
+        self.db.flush()
+        return result.trace_id, result.fallback_used
+
     def _validate_service(self, service: HotelService, request: GenerateProductRequest, quantity: int) -> None:
         if quantity <= 0:
             raise AppError("VALIDATION_ERROR", "每套服务消耗量必须大于0", field=f"service_{service.id}")
         if service.available_date != request.target_date or service.status != "AVAILABLE" or service.available_quantity <= 0:
             raise AppError("HOTEL_SERVICE_UNAVAILABLE", f"酒店服务{service.service_name}当前不可用", field="resource_selections", retryable=True)
+        if not crowd_supported(service.suitable_crowds, request.target_crowd):
+            raise AppError("CROWD_NOT_SUPPORTED", f"酒店服务{service.service_name}不适合当前客群", field="target_crowd", retryable=True)
         validate_interval(service.start_time, service.end_time, service.service_name)
 
     def _validate_partner(self, partner: PartnerResource, request: GenerateProductRequest, quantity: int) -> None:
@@ -214,22 +272,33 @@ class ProductService:
         unit_cost = room.accounting_cost
         invalid_reason = None
         partner_row = None
+        schedule_slots: list[tuple[time | None, time | None, str]] = []
         for row in rows:
             if row.resource_type == "ROOM":
                 continue
             if row.resource_type == "HOTEL_SERVICE":
                 service = self.db.get(HotelService, row.resource_id)
-                if not service or service.status != "AVAILABLE" or service.available_quantity <= 0:
+                if not service or service.available_date != product.target_date or service.status != "AVAILABLE" or service.available_quantity <= 0:
                     invalid_reason = f"酒店服务{row.resource_name}不可用"
+                    break
+                if service.start_time and service.end_time and service.start_time >= service.end_time:
+                    invalid_reason = f"酒店服务{row.resource_name}时间无效"
+                    break
+                if not crowd_supported(service.suitable_crowds, product.target_crowd):
+                    invalid_reason = f"酒店服务{row.resource_name}不适合当前客群"
+                    break
+                if any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
+                    invalid_reason = f"酒店服务{row.resource_name}与套餐内其他活动时间冲突"
                     break
                 capacity_inputs.append(CapacityInput(service.service_name, service.available_quantity, row.quantity_per_package))
                 unit_cost += service.unit_cost * row.quantity_per_package
                 row.unit_cost = service.unit_cost
+                schedule_slots.append((service.start_time, service.end_time, service.service_name))
             elif row.resource_type == "PARTNER_RESOURCE":
                 partner_row = row
                 partner = self.db.get(PartnerResource, row.resource_id)
                 merchant = self.db.get(Merchant, partner.merchant_id) if partner else None
-                if not partner or not merchant or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity):
+                if not partner or not merchant or partner.available_date != product.target_date or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity):
                     replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
                     if replacement:
                         replacement_id = replacement.id
@@ -245,6 +314,9 @@ class ProductService:
                 if not partner:
                     invalid_reason = "合作资源不可用"
                     break
+                if partner.available_date != product.target_date:
+                    invalid_reason = f"{partner.resource_name}日期与产品入住日期不一致"
+                    break
                 if not is_weather_supported(partner.weather_tags, product.weather):
                     replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
                     if replacement:
@@ -256,8 +328,31 @@ class ProductService:
                     else:
                         invalid_reason = f"{partner.resource_name}不支持产品天气{product.weather}且没有替代资源"
                         break
+                if not crowd_supported(partner.suitable_crowds, product.target_crowd, minimum_age=partner.minimum_age, maximum_age=partner.maximum_age):
+                    replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
+                    if replacement:
+                        replacement_id = replacement.id
+                        row.resource_id = replacement.id
+                        row.resource_name = replacement.resource_name
+                        row.unit_cost = replacement.settlement_price
+                        partner = replacement
+                    else:
+                        invalid_reason = f"{partner.resource_name}不适合产品客群且没有替代资源"
+                        break
+                if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in schedule_slots):
+                    replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
+                    if replacement and not any(intervals_overlap(replacement.start_time, replacement.end_time, start, end) for start, end, _ in schedule_slots):
+                        replacement_id = replacement.id
+                        row.resource_id = replacement.id
+                        row.resource_name = replacement.resource_name
+                        row.unit_cost = replacement.settlement_price
+                        partner = replacement
+                    else:
+                        invalid_reason = f"{partner.resource_name}与套餐内其他活动时间冲突且没有替代资源"
+                        break
                 capacity_inputs.append(CapacityInput(partner.resource_name, partner.remaining_capacity, row.quantity_per_package))
                 unit_cost += partner.settlement_price * row.quantity_per_package
+                schedule_slots.append((partner.start_time, partner.end_time, partner.resource_name))
         if invalid_reason:
             product.sale_quantity = 0
             product.status = "PAUSED"
@@ -298,7 +393,13 @@ class ProductService:
                 continue
             if not crowd_supported(candidate.suitable_crowds, product.target_crowd, minimum_age=candidate.minimum_age, maximum_age=candidate.maximum_age):
                 continue
-            if not is_weather_supported(candidate.weather_tags, "RAIN"):
+            if not is_weather_supported(candidate.weather_tags, product.weather):
+                continue
+            if any(
+                intervals_overlap(candidate.start_time, candidate.end_time, source.start_time, source.end_time)
+                for source in [self.db.get(HotelService, existing.resource_id) if existing.resource_type == "HOTEL_SERVICE" else self.db.get(PartnerResource, existing.resource_id) for existing in product.resources if existing.id != row.id and existing.resource_type in {"HOTEL_SERVICE", "PARTNER_RESOURCE"}]
+                if source is not None
+            ):
                 continue
             try:
                 validate_interval(candidate.start_time, candidate.end_time, candidate.resource_name)

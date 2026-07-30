@@ -14,6 +14,7 @@ const router = createRouter({
         { path: 'rooms', component: () => import('../views/hotel/RoomsView.vue') },
         { path: 'services', component: () => import('../views/hotel/ServicesView.vue') },
         { path: 'resources', component: () => import('../views/hotel/ResourcesView.vue') },
+        { path: 'products', component: () => import('../views/hotel/ProductPoolView.vue') },
         { path: 'products/generate', component: () => import('../views/hotel/ProductGeneratorView.vue') },
         { path: 'products/:id', component: () => import('../views/hotel/ProductDetailView.vue') },
         { path: 'operations', component: () => import('../views/hotel/DynamicOperationsView.vue') },
@@ -49,4 +50,3 @@ router.beforeEach((to) => {
 })
 
 export default router
-

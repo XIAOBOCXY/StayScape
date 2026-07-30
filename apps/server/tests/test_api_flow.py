@@ -128,3 +128,71 @@ def test_role_boundaries_are_enforced(client, hotel_token, merchant_token):
     assert client.get("/api/v1/hotel/services", headers=auth(merchant_token)).status_code == 403
     assert client.get("/api/v1/merchant/resources", headers=auth(hotel_token)).status_code == 403
     assert client.get("/api/v1/visitor/products").status_code == 200
+
+
+def test_merchant_can_create_and_edit_resource_name_date_and_session(client, hotel_token, merchant_token):
+    target_date = client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()[0]["available_date"]
+    created = client.post("/api/v1/merchant/resources", headers=auth(merchant_token), json={
+        "resource_name": "西溪湿地亲子手作",
+        "category": "CULTURE",
+        "description": "面向家庭的城市文化体验",
+        "available_date": target_date,
+        "start_time": "14:00",
+        "end_time": "15:30",
+        "remaining_capacity": 8,
+        "settlement_price": "50",
+        "market_price": "88",
+        "suitable_crowds": "FAMILY",
+        "minimum_age": 5,
+        "maximum_age": 60,
+        "indoor": True,
+        "weather_tags": "RAIN,SUNNY",
+        "package_enabled": True,
+    })
+    assert created.status_code == 200, created.text
+    resource_id = created.json()["id"]
+    updated = client.patch(f"/api/v1/merchant/resources/{resource_id}", headers=auth(merchant_token), json={"resource_name": "西溪湿地雨天手作", "available_date": target_date, "start_time": "15:00", "end_time": "16:30", "reason": "更新场次"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["resource"]["resource_name"] == "西溪湿地雨天手作"
+    assert updated.json()["resource"]["start_time"].startswith("15:00")
+
+
+def test_multi_variant_generation_and_marketing_assets(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    request["variant_count"] = 3
+    request["creative_direction"] = "偏亲子研学"
+    response = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    assert response.status_code == 200, response.text
+    products = response.json()["products"]
+    assert len(products) == 3
+    assert len({item["product_name"] for item in products}) == 3
+    assert {item["sale_quantity"] for item in products} == {4}
+    assert {asset["asset_type"] for asset in products[0]["marketing_assets"]} >= {"POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT"}
+
+
+def test_product_content_update_and_delete(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    product_id = generated.json()["product"]["id"]
+    updated = client.patch(f"/api/v1/hotel/products/{product_id}", headers=auth(hotel_token), json={"weather": "SUNNY", "theme": "晴日亲子茶文化", "regenerate_marketing": True})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["weather"] == "SUNNY"
+    assert updated.json()["marketing_assets"]
+    deleted = client.delete(f"/api/v1/hotel/products/{product_id}", headers=auth(hotel_token))
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] is True
+    assert all(item["id"] != product_id for item in client.get("/api/v1/hotel/products", headers=auth(hotel_token)).json()["items"])
+
+
+def test_natural_language_recommendation_is_interpreted_before_matching(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    product_id = generated.json()["product"]["id"]
+    client.patch(f"/api/v1/hotel/products/{product_id}/status", headers=auth(hotel_token), json={"status": "ON_SALE"})
+    recommendation = client.post("/api/v1/visitor/recommend", json={"target_date": request["target_date"], "natural_language": "一家三口带一个6岁孩子，预算700元，明天下雨，喜欢非遗手工，孩子花生过敏。"})
+    assert recommendation.status_code == 200, recommendation.text
+    interpreted = recommendation.json()["interpreted_needs"]
+    assert interpreted["weather"] == "RAIN"
+    assert interpreted["child_ages"] == [6]
+    assert "花生" in interpreted["allergy_information"]
+    assert recommendation.json()["results"]

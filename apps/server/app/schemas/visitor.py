@@ -22,6 +22,7 @@ class VisitorQuestion(BaseModel):
 
 
 class VisitorRecommendRequest(BaseModel):
+    natural_language: str = Field(default="", max_length=1000)
     target_date: date | None = None
     weather: str = "RAIN"
     adult_count: int = Field(default=2, ge=1, le=20)
@@ -53,6 +54,7 @@ class VisitorRecommendResponse(BaseModel):
     results: list[RecommendationResult]
     trace_id: str
     fallback_used: bool = False
+    interpreted_needs: dict[str, object] = Field(default_factory=dict)
 
 
 class VisitorIntentCreate(BaseModel):
@@ -69,4 +71,3 @@ class VisitorIntentCreate(BaseModel):
     other_requirements: str = ""
     contact_name: str = Field(min_length=1, max_length=80)
     contact_phone: str = Field(min_length=6, max_length=40)
-

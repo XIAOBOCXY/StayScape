@@ -1,4 +1,6 @@
-from datetime import date, time
+import re
+from datetime import date, time, timedelta
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -19,6 +21,67 @@ from ...rules.time_rule import intervals_overlap
 from ...rules.weather_rule import is_weather_supported
 
 router = APIRouter(prefix="/visitor", tags=["visitor"])
+
+
+CN_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorRecommendRequest, dict[str, object]]:
+    """Turn visitor free text into structured hints before deterministic matching.
+
+    The parser is deliberately small and explainable. The Agent can phrase the
+    recommendation, but budget, weather, age and inventory decisions continue to
+    use this structured request and the database rules.
+    """
+    text = request.natural_language.strip()
+    if not text:
+        return request, {}
+    updates: dict[str, object] = {}
+    if "明天" in text:
+        updates["target_date"] = date.today() + timedelta(days=1)
+    elif "今天" in text:
+        updates["target_date"] = date.today()
+    weather = "RAIN" if any(word in text for word in ("雨", "下雨", "湿冷")) else "SUNNY" if "晴" in text else "CLOUDY" if any(word in text for word in ("多云", "阴天")) else None
+    if weather:
+        updates["weather"] = weather
+    budget_match = re.search(r"(?:预算|花费|控制在|不超过|以内)[^0-9]{0,8}(\d{3,5})", text)
+    if budget_match:
+        updates["budget"] = Decimal(budget_match.group(1))
+    ages = [int(value) for value in re.findall(r"(\d{1,2})\s*岁", text)]
+    if ages:
+        updates["child_ages"] = ages
+        updates["child_count"] = len(ages)
+    adult_match = re.search(r"(\d+|[一二两三四五六七八九十])\s*(?:位)?大人", text)
+    if adult_match:
+        value = adult_match.group(1)
+        updates["adult_count"] = int(value) if value.isdigit() else CN_NUMBERS.get(value, request.adult_count)
+    child_count_match = re.search(r"(\d+|[一二两三四五六七八九十])\s*(?:位)?(?:个)?(?:小孩|儿童|孩子|小朋友)", text)
+    if child_count_match and "child_count" not in updates:
+        value = child_count_match.group(1)
+        updates["child_count"] = int(value) if value.isdigit() else CN_NUMBERS.get(value, request.child_count)
+    if any(word in text for word in ("情侣", "夫妻", "两个人", "两人")) and not any(word in text for word in ("孩子", "儿童", "小孩", "小朋友", "岁")):
+        updates["child_count"] = 0
+        updates["child_ages"] = []
+    interests = [word for word in ("亲子", "手工", "非遗", "茶", "点茶", "博物馆", "摄影", "旅拍", "美食", "慢游") if word in text]
+    if interests:
+        updates["interests"] = list(dict.fromkeys([*request.interests, *interests]))
+    allergy_terms = [word for word in ("花生", "坚果", "牛奶", "乳制品", "海鲜", "鸡蛋", "不吃辣", "素食") if word in text]
+    if allergy_terms:
+        updates["dietary_restrictions"] = list(dict.fromkeys([*request.dietary_restrictions, *allergy_terms]))
+        updates["allergy_information"] = request.allergy_information or "、".join(allergy_terms)
+    effective = request.model_copy(update=updates)
+    interpreted = {
+        "natural_language": text,
+        "weather": effective.weather,
+        "budget": str(effective.budget),
+        "adult_count": effective.adult_count,
+        "child_count": effective.child_count,
+        "child_ages": effective.child_ages,
+        "interests": effective.interests,
+        "dietary_restrictions": effective.dietary_restrictions,
+        "allergy_information": effective.allergy_information,
+    }
+    return effective, interpreted
 
 
 def public_items(db: Session, query: VisitorProductQuery | None = None) -> list[TravelProduct]:
@@ -119,6 +182,7 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
 
 @router.post("/recommend")
 def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
+    request, interpreted_needs = enrich_recommend_request(request)
     candidates = list_products(db, public_only=True)
     if request.target_date:
         candidates = [item for item in candidates if item.target_date == request.target_date]
@@ -139,6 +203,8 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         "budget": str(request.budget),
         "weather": request.weather,
         "interests": request.interests,
+        "natural_language": request.natural_language,
+        "dietary_restrictions": request.dietary_restrictions,
         "allergy_information": request.allergy_information,
         "products": [{"id": item.id, "product_name": item.product_name, "sale_quantity": item.sale_quantity} for item in valid_candidates],
     }
@@ -161,7 +227,7 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
             "limited_adjustments": output.limited_adjustments.get(str(item.id)) or ["预约意向中可备注希望的体验场次", "实时名额变化后以酒店与商户确认结果为准"],
             "allergy_warning": output.allergy_warning or None,
         })
-    return {"results": results, "trace_id": agent_result.trace_id, "fallback_used": agent_result.fallback_used}
+    return {"results": results, "trace_id": agent_result.trace_id, "fallback_used": agent_result.fallback_used, "interpreted_needs": interpreted_needs}
 
 
 @router.post("/intents")

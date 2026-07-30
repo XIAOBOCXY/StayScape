@@ -10,6 +10,8 @@ StayScape 不把临期房简单降价清仓，而是根据房型库存、酒店�
 
 ## 技术栈
 
+当前版本还支持商户完整维护资源名称、日期和起止场次；酒店产品池可编辑、删除产品；一次生成多套差异化方案；产品详情生成 SVG 图文海报、社媒文案、短视频脚本和门店卖点卡；游客可以直接用自然语言描述人数、预算、天气、兴趣、时间和过敏信息获取推荐。
+
 - 前端：Vue 3、TypeScript、Vite、Vue Router、Pinia、Axios、Element Plus、Vant、ECharts依赖。
 - 后端：Python 3.11、FastAPI、SQLAlchemy 2.x、Pydantic 2.x、Alembic、Pytest、WebSocket。
 - 数据库：本地 SQLite；Docker 使用 PostgreSQL 16。
@@ -86,5 +88,6 @@ OPENCLAW_MODEL=openclaw/default
 ```
 
 更多演示步骤见 [docs/DEMO.md](docs/DEMO.md)，架构边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+赛题对齐说明见 [docs/CONTEST_ALIGNMENT.md](docs/CONTEST_ALIGNMENT.md)。
 
 #

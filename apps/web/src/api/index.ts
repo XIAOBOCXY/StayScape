@@ -16,8 +16,11 @@ export const hotelApi = {
   resources: () => api.get<PartnerResource[]>('/hotel/resources'),
   toggleResourcePackage: (id: number, package_enabled: boolean) => api.patch<PartnerResource>(`/hotel/resources/${id}/package`, undefined, { params: { package_enabled } }),
   products: (status?: string) => api.get<{ items: TravelProduct[]; total: number }>('/hotel/products', { params: status ? { status } : undefined }),
-  generateProduct: (payload: Record<string, unknown>) => api.post<{ product: TravelProduct; trace_id: string; validation: Record<string, unknown>; fallback_used: boolean }>('/hotel/products/generate', payload),
+  generateProduct: (payload: Record<string, unknown>) => api.post<{ product: TravelProduct; products: TravelProduct[]; trace_id: string; trace_ids: string[]; validation: Record<string, unknown>; fallback_used: boolean }>('/hotel/products/generate', payload),
   product: (id: number) => api.get<TravelProduct>(`/hotel/products/${id}`),
+  updateProduct: (id: number, payload: Record<string, unknown>) => api.patch<TravelProduct>(`/hotel/products/${id}`, payload),
+  deleteProduct: (id: number) => api.delete<{ deleted: boolean; archived: boolean; message: string }>(`/hotel/products/${id}`),
+  regenerateMarketing: (id: number) => api.post<TravelProduct>(`/hotel/products/${id}/marketing-assets`),
   productStatus: (id: number, status: string) => api.patch<TravelProduct>(`/hotel/products/${id}/status`, { status }),
   changes: () => api.get<Array<Record<string, unknown>>>('/hotel/changes'),
   intents: () => api.get<Array<Record<string, unknown>>>('/hotel/intents'),
@@ -37,7 +40,7 @@ export const visitorApi = {
   products: (params?: Record<string, unknown>) => api.get<TravelProduct[]>('/visitor/products', { params }),
   product: (id: number) => api.get<TravelProduct>(`/visitor/products/${id}`),
   consult: (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/visitor/consult', payload),
-  recommend: (payload: Record<string, unknown>) => api.post<{ results: Recommendation[]; trace_id: string; fallback_used: boolean }>('/visitor/recommend', payload),
+  recommend: (payload: Record<string, unknown>) => api.post<{ results: Recommendation[]; trace_id: string; fallback_used: boolean; interpreted_needs: Record<string, unknown> }>('/visitor/recommend', payload),
   intent: (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/visitor/intents', payload),
   publicResources: (weather = 'RAIN') => api.get<Array<Record<string, unknown>>>('/visitor/public-resources', { params: { weather } })
 }
@@ -48,4 +51,3 @@ export const demoApi = {
 }
 
 export { api }
-

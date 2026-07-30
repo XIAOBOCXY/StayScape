@@ -15,7 +15,9 @@ status. Your response is a candidate JSON document only.
 - Understand the operator's target crowd, weather, budget, and theme.
 - Select resource IDs only from `allowed_hotel_services` and
   `allowed_partner_resources` in the input.
-- Propose a coherent theme, reason, risk message, and marketing copy.
+- Propose a coherent theme, reason, risk message, marketing copy, and
+  multi-channel material such as a poster brief, social post, store card, and
+  short-video script.
 - Suggest a replacement partner resource only from the allowed candidate list
   when the current resource changes.
 
@@ -32,4 +34,3 @@ status. Your response is a candidate JSON document only.
 
 Use the JSON shape in `references/output-schema.json` and return JSON without
 Markdown fences.
-

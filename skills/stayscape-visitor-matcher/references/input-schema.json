@@ -3,6 +3,7 @@
   "type": "object",
   "required": ["adult_count", "child_count", "child_ages", "budget", "weather", "products"],
   "properties": {
+    "natural_language": {"type": "string"},
     "adult_count": {"type": "integer", "minimum": 1},
     "child_count": {"type": "integer", "minimum": 0},
     "child_ages": {"type": "array", "items": {"type": "integer", "minimum": 0}},
@@ -13,4 +14,3 @@
     "products": {"type": "array"}
   }
 }
-

@@ -22,7 +22,18 @@ def merchant_for(db: Session, user: User) -> Merchant:
 
 
 def snapshot(resource: PartnerResource) -> dict:
-    return {"id": resource.id, "remaining_capacity": resource.remaining_capacity, "settlement_price": str(resource.settlement_price), "market_price": str(resource.market_price), "package_enabled": resource.package_enabled, "status": resource.status, "available_date": resource.available_date.isoformat()}
+    return {
+        "id": resource.id,
+        "resource_name": resource.resource_name,
+        "remaining_capacity": resource.remaining_capacity,
+        "settlement_price": str(resource.settlement_price),
+        "market_price": str(resource.market_price),
+        "package_enabled": resource.package_enabled,
+        "status": resource.status,
+        "available_date": resource.available_date.isoformat(),
+        "start_time": resource.start_time.isoformat() if resource.start_time else None,
+        "end_time": resource.end_time.isoformat() if resource.end_time else None,
+    }
 
 
 def normalized_status(resource: PartnerResource, requested: str | None) -> str:
@@ -73,6 +84,8 @@ async def update_resource(resource_id: int, request: PartnerResourceUpdate, db: 
         raise AppError("VALIDATION_ERROR", "剩余名额不能为负数", field="remaining_capacity")
     if resource.start_time and resource.end_time and resource.start_time >= resource.end_time:
         raise AppError("TIME_INVALID", "活动开始时间必须早于结束时间")
+    if resource.minimum_age is not None and resource.maximum_age is not None and resource.maximum_age < resource.minimum_age:
+        raise AppError("AGE_INVALID", "最大适龄年龄不能小于最小适龄年龄")
     resource.status = normalized_status(resource, request.status)
     changed_keys = set(data)
     if "remaining_capacity" in changed_keys:
@@ -109,4 +122,3 @@ def changes(db: Session = Depends(get_db), user: User = Depends(get_merchant_use
         return []
     items = list(db.scalars(select(ResourceChangeEvent).where(ResourceChangeEvent.resource_type == "PARTNER_RESOURCE", ResourceChangeEvent.resource_id.in_(resource_ids)).order_by(ResourceChangeEvent.created_at.desc()).limit(100)).all())
     return items
-

@@ -12,9 +12,25 @@
     "resource_quantities": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
     "marketing_title": {"type": "string"},
     "marketing_content": {"type": "string"},
+    "marketing_assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["asset_type", "platform", "title", "content"],
+        "properties": {
+          "asset_type": {"enum": ["POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT", "STORE_CARD"]},
+          "platform": {"type": "string"},
+          "title": {"type": "string"},
+          "content": {"type": "string"},
+          "visual_brief": {"type": "string"},
+          "call_to_action": {"type": "string"},
+          "poster_svg": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
     "recommendation_reason": {"type": "string"},
     "risk_message": {"type": "string"}
   },
   "additionalProperties": false
 }
-

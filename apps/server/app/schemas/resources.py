@@ -73,6 +73,7 @@ class ServiceCreate(BaseModel):
 
 
 class ServiceUpdate(BaseModel):
+    available_date: date | None = None
     available_quantity: int | None = Field(default=None, ge=0)
     unit_cost: Decimal | None = Field(default=None, ge=0)
     reference_price: Decimal | None = Field(default=None, ge=0)
@@ -153,6 +154,9 @@ class PartnerResourceCreate(BaseModel):
 
 
 class PartnerResourceUpdate(BaseModel):
+    resource_name: str | None = Field(default=None, min_length=1, max_length=160)
+    category: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = None
     available_date: date | None = None
     start_time: time | None = None
     end_time: time | None = None
@@ -160,6 +164,13 @@ class PartnerResourceUpdate(BaseModel):
     settlement_price: Decimal | None = Field(default=None, ge=0)
     market_price: Decimal | None = Field(default=None, ge=0)
     package_enabled: bool | None = None
+    suitable_crowds: str | None = None
+    minimum_age: int | None = Field(default=None, ge=0, le=120)
+    maximum_age: int | None = Field(default=None, ge=0, le=120)
+    indoor: bool | None = None
+    weather_tags: str | None = None
+    address: str | None = None
+    booking_notice: str | None = None
+    cancellation_rule: str | None = None
     status: str | None = None
     reason: str = "合作资源更新"
-

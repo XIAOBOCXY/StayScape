@@ -84,6 +84,21 @@ export interface ProductResource {
   unit_cost: string
   replaceable: boolean
   required: boolean
+  available_date?: string
+  start_time?: string
+  end_time?: string
+  address?: string
+  description?: string
+}
+
+export interface MarketingAsset {
+  asset_type: 'POSTER' | 'SOCIAL_POST' | 'SHORT_VIDEO_SCRIPT' | 'STORE_CARD'
+  platform: string
+  title: string
+  content: string
+  visual_brief: string
+  call_to_action: string
+  poster_svg?: string
 }
 
 export interface TravelProduct {
@@ -105,6 +120,7 @@ export interface TravelProduct {
   bottleneck_resource?: string
   marketing_title: string
   marketing_content: string
+  marketing_assets: MarketingAsset[]
   recommendation_reason: string
   risk_message: string
   status: string

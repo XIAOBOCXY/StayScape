@@ -11,7 +11,7 @@ from ...models import Hotel, HotelService, Merchant, PartnerResource, ProductRes
 from ...repositories.product_repository import get_product, list_products
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
-from ...schemas.products import AdjustmentRead, GenerateProductRequest, ProductDetailResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ResourceChangeResponse
+from ...schemas.products import AdjustmentRead, GenerateProductRequest, ProductDetailResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
 from ...schemas.resources import MerchantRead, PartnerResourceRead, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
 from ...services.serializers import partner_resource_to_dict, product_to_dict
@@ -209,9 +209,17 @@ def products(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)
 
 @router.post("/products/generate", response_model=ProductGenerateResponse)
 def generate_product(request: GenerateProductRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
-    product, validation, trace_id, fallback_used = ProductService(db, hotel_id_for(db, user)).generate(request)
+    generated = ProductService(db, hotel_id_for(db, user)).generate_many(request)
     db.commit()
-    return {"product": product_to_dict(product), "trace_id": trace_id, "validation": validation, "fallback_used": fallback_used}
+    products = [item[0] for item in generated]
+    return {
+        "product": product_to_dict(products[0]),
+        "products": [product_to_dict(item) for item in products],
+        "trace_id": generated[0][2],
+        "trace_ids": [item[2] for item in generated],
+        "validation": generated[0][1],
+        "fallback_used": any(item[3] for item in generated),
+    }
 
 
 @router.get("/products/{product_id}", response_model=ProductDetailResponse)
@@ -220,6 +228,83 @@ def product_detail(product_id: int, db: Session = Depends(get_db), user: User = 
     if not product or product.hotel_id != hotel_id_for(db, user):
         raise AppError("NOT_FOUND", "产品不存在", status_code=404)
     return product_to_dict(product, include_adjustments=True)
+
+
+@router.patch("/products/{product_id}", response_model=ProductRead)
+def update_product(product_id: int, request: ProductUpdateRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id or product.status == "DELETED":
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+
+    target_date = request.target_date or product.target_date
+    room_id = request.room_inventory_id or product.room_inventory_id
+    room = db.scalar(select(RoomInventory).where(RoomInventory.id == room_id, RoomInventory.hotel_id == hotel_id))
+    if not room:
+        raise AppError("NOT_FOUND", "产品关联客房不存在", status_code=404)
+    if room.available_date != target_date:
+        same_type = db.scalar(select(RoomInventory).where(RoomInventory.hotel_id == hotel_id, RoomInventory.room_type == room.room_type, RoomInventory.available_date == target_date).order_by(RoomInventory.available_count.desc()))
+        if same_type:
+            room = same_type
+            room_id = same_type.id
+        else:
+            raise AppError("DATE_NOT_MATCHED", "没有找到目标日期可用的同房型库存，请先维护客房日期", field="target_date", retryable=True)
+
+    if target_date != product.target_date or room_id != product.room_inventory_id:
+        for row in product.resources:
+            if row.resource_type == "HOTEL_SERVICE":
+                source = db.get(HotelService, row.resource_id)
+            elif row.resource_type == "PARTNER_RESOURCE":
+                source = db.get(PartnerResource, row.resource_id)
+            else:
+                source = room
+            if source is not None and source.available_date != target_date:
+                raise AppError("DATE_NOT_MATCHED", f"资源{row.resource_name}未维护目标日期，请先调整资源日期", field="target_date", retryable=True)
+
+    changed = request.model_dump(exclude_unset=True, exclude={"regenerate_marketing", "target_date", "room_inventory_id"})
+    if request.target_date is not None:
+        changed["target_date"] = target_date
+    if request.room_inventory_id is not None or target_date != product.target_date:
+        changed["room_inventory_id"] = room_id
+    weather_or_context_changed = any(key in changed for key in ("target_date", "room_inventory_id", "weather", "target_crowd"))
+    for key, value in changed.items():
+        setattr(product, key, value)
+    db.flush()
+
+    service = ProductService(db, hotel_id)
+    if weather_or_context_changed:
+        service.recalculate_product(product)
+    if request.regenerate_marketing or any(key in changed for key in ("theme", "weather", "target_crowd")):
+        service.regenerate_marketing(product)
+    db.commit()
+    return product_to_dict(product)
+
+
+@router.post("/products/{product_id}/marketing-assets", response_model=ProductRead)
+def regenerate_marketing_assets(product_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id or product.status == "DELETED":
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    ProductService(db, hotel_id).regenerate_marketing(product)
+    db.commit()
+    return product_to_dict(product)
+
+
+@router.delete("/products/{product_id}")
+def delete_product(product_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id or product.status == "DELETED":
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    intent_count = db.scalar(select(func.count(VisitorIntent.id)).where(VisitorIntent.product_id == product.id)) or 0
+    if intent_count:
+        product.status = "DELETED"
+        db.commit()
+        return {"deleted": True, "archived": True, "message": "产品已有预约意向，已安全归档并从产品池移除"}
+    db.delete(product)
+    db.commit()
+    return {"deleted": True, "archived": False, "message": "产品已删除"}
 
 
 @router.patch("/products/{product_id}/status", response_model=ProductRead)
@@ -261,4 +346,3 @@ def intents(db: Session = Depends(get_db), user: User = Depends(get_hotel_user))
 def skill_logs(db: Session = Depends(get_db), user: User = Depends(get_hotel_user), limit: int = Query(default=50, ge=1, le=200)):
     items = list(db.scalars(select(SkillCallLog).order_by(SkillCallLog.created_at.desc()).limit(limit)).all())
     return items
-
