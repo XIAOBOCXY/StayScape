@@ -32,7 +32,12 @@ class MockAgent:
         room = payload.get("room_inventory") or {}
         selections = payload.get("requested_selections") or []
         service_ids = [item["resource_id"] for item in selections if item["resource_type"] == "HOTEL_SERVICE"]
-        partner_ids = [item["resource_id"] for item in selections if item["resource_type"] == "PARTNER_RESOURCE"]
+        requested_partner_ids = [item["resource_id"] for item in selections if item["resource_type"] == "PARTNER_RESOURCE"]
+        variant_index = int(payload.get("variant_index", 0) or 0)
+        # Multiple partner selections represent alternative packages, not one
+        # package that consumes every activity. Pick one deterministic option
+        # per variant so candidates can have different schedules safely.
+        partner_ids = [requested_partner_ids[variant_index % len(requested_partner_ids)]] if requested_partner_ids else []
         if not partner_ids:
             partner_ids = [item["id"] for item in payload.get("allowed_partner_resources", [])[:1]]
         quantities = {str(item["resource_id"]): int(item["quantity_per_package"]) for item in selections}
@@ -46,7 +51,6 @@ class MockAgent:
         theme = payload.get("theme", "杭州文化体验")
         weather_label = {"RAIN": "雨天", "SUNNY": "晴日", "CLOUDY": "多云"}.get(payload.get("weather", "RAIN"), "杭州")
         partner_name = next((item["resource_name"] for item in payload.get("allowed_partner_resources", []) if item["id"] in partner_ids), "文化体验")
-        variant_index = int(payload.get("variant_index", 0) or 0)
         creative_direction = str(payload.get("creative_direction", "")).strip()
         angles = {
             "FAMILY": ["亲子共创", "亲子研学", "家庭慢游", "亲子发现"],
@@ -62,26 +66,56 @@ class MockAgent:
         if variant_index == 0 and ("非遗" in theme or "非遗" in partner_name):
             name = f"杭州{weather_label}亲子非遗文化宿"
         audience = {"FAMILY": "亲子家庭", "COUPLE": "情侣与朋友", "LOCAL": "本地周末客"}.get(crowd, crowd)
+        partner = next((item for item in payload.get("allowed_partner_resources", []) if item["id"] in partner_ids), {})
+        service_names = "、".join(item.get("service_name", "酒店服务") for item in payload.get("allowed_hotel_services", []) if item["id"] in service_ids) or "酒店服务"
+        partner_time = "-".join(item for item in (partner.get("start_time"), partner.get("end_time")) if item) or "场次待确认"
+        partner_address = partner.get("address") or "杭州文化体验场地"
+        partner_description = partner.get("description") or f"{partner_name}，把杭州文化放进一晚旅居。"
+        partner_capacity = partner.get("remaining_capacity") or 0
         indoor_hint = "室内文化体验" if payload.get("weather") == "RAIN" else "城市文化体验"
         title = f"{weather_label}的{angle}：住进杭州的文化现场"
         content = (
             f"为{audience}设计的{theme}主题旅居。以{room.get('room_type', '舒适客房')}为基地，"
-            f"串联早餐、酒店服务与{partner_name}，在{weather_label}场景下把{indoor_hint}安排进一天的节奏。"
-            f"实时房量、体验名额和最低毛利率由系统规则引擎持续校验。"
+            f"把{service_names}和{partner_name}排进同一张时间卡：{partner_time}，地点在{partner_address}。"
+            f"{partner_description}在{weather_label}场景下，{indoor_hint}不再是空泛口号，而是可直接预约的真实场次。"
+            f"当前合作体验余{partner_capacity}个名额，房量、体验名额和最低毛利率由规则引擎持续校验。"
         )
-        poster_title = escape(title, quote=True)
-        poster_subtitle = escape(f"{weather_label} · {partner_name}", quote=True)
+        safe = lambda value: escape(str(value), quote=True)
+        poster_title = safe(title[:24])
+        poster_subtitle = safe(f"{weather_label} · {partner_name} · {payload.get('target_date', '')}")
+        poster_location = safe(partner_address[:22])
+        poster_time = safe(partner_time)
+        poster_room = safe(room.get("room_type", "舒适客房"))
+        poster_partner = safe(partner_name[:18])
+        poster_price = safe(payload.get("preferred_price", "599"))
         poster_svg = (
             '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" viewBox="0 0 1080 1440">'
-            '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0f766e"/><stop offset="1" stop-color="#d8b56a"/></linearGradient></defs>'
-            '<rect width="1080" height="1440" rx="36" fill="url(#bg)"/>'
-            '<circle cx="860" cy="240" r="230" fill="#ffffff" opacity=".13"/><circle cx="180" cy="1200" r="310" fill="#ffffff" opacity=".08"/>'
-            f'<text x="86" y="190" fill="#fff" font-size="34" font-family="Microsoft YaHei, sans-serif">STAYSCAPE · HANGZHOU</text>'
-            f'<text x="86" y="480" fill="#fff" font-size="68" font-weight="700" font-family="Microsoft YaHei, sans-serif">{poster_title}</text>'
-            f'<text x="86" y="570" fill="#fff" font-size="34" font-family="Microsoft YaHei, sans-serif">{poster_subtitle}</text>'
-            '<rect x="86" y="1050" width="430" height="86" rx="43" fill="#fff" opacity=".92"/>'
-            '<text x="136" y="1106" fill="#0f766e" font-size="32" font-weight="700" font-family="Microsoft YaHei, sans-serif">限量临期主题房 · 即刻咨询</text>'
+            '<defs><linearGradient id="paper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f9f4e8"/><stop offset="1" stop-color="#e8f4ee"/></linearGradient><linearGradient id="scene" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#8fc9c0"/><stop offset="1" stop-color="#e8c77a"/></linearGradient><filter id="shadow"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#174d46" flood-opacity=".18"/></filter></defs>'
+            '<rect width="1080" height="1440" rx="36" fill="url(#paper)"/>'
+            '<circle cx="960" cy="80" r="180" fill="#d8b56a" opacity=".18"/><circle cx="40" cy="1360" r="230" fill="#0f766e" opacity=".08"/>'
+            '<text x="72" y="90" fill="#0f766e" font-size="26" font-weight="700" letter-spacing="4" font-family="Arial, Microsoft YaHei, sans-serif">STAYSCAPE · HANGZHOU</text>'
+            '<rect x="60" y="128" width="960" height="530" rx="34" fill="url(#scene)" filter="url(#shadow)"/>'
+            '<path d="M60 470 Q220 350 370 460 T680 440 T1020 420 V658 H60Z" fill="#3f8c7e" opacity=".78"/><path d="M60 540 Q260 475 470 550 T1020 520 V658 H60Z" fill="#2c716b" opacity=".65"/><path d="M60 585 Q280 540 520 600 T1020 580 V658 H60Z" fill="#f4dfad" opacity=".82"/>'
+            '<path d="M78 604 Q280 555 470 610 T1000 594" fill="none" stroke="#fff8e7" stroke-width="7" opacity=".75"/>'
+            '<rect x="710" y="285" width="220" height="210" rx="12" fill="#f8efe0" opacity=".96"/><rect x="746" y="322" width="62" height="88" rx="5" fill="#87bbb0"/><rect x="833" y="322" width="62" height="88" rx="5" fill="#87bbb0"/><path d="M700 285 L820 215 L940 285Z" fill="#174d46"/><rect x="780" y="425" width="72" height="70" fill="#d6ad68"/><circle cx="816" cy="460" r="5" fill="#174d46"/>'
+            '<path d="M205 508 Q200 455 252 438 Q304 455 299 508Z" fill="#e7a75c"/><path d="M252 438 L252 500" stroke="#174d46" stroke-width="8"/><circle cx="252" cy="430" r="24" fill="#f0bd87"/><path d="M214 520 Q252 492 290 520" fill="none" stroke="#174d46" stroke-width="10"/><path d="M170 408 Q252 340 334 408" fill="#d45c53"/><path d="M170 408 Q252 450 334 408" fill="none" stroke="#8d3f3c" stroke-width="5"/>'
+            '<rect x="118" y="548" width="270" height="62" rx="31" fill="#fff" opacity=".92"/><text x="150" y="588" fill="#174d46" font-size="25" font-weight="700" font-family="Microsoft YaHei, sans-serif">杭州文化现场</text>'
+            '<g opacity=".76"><path d="M930 164 l-14 38 M968 170 l-14 38 M1006 176 l-14 38" stroke="#fff" stroke-width="8" stroke-linecap="round"/><circle cx="930" cy="145" r="10" fill="#fff"/><circle cx="968" cy="151" r="10" fill="#fff"/><circle cx="1006" cy="157" r="10" fill="#fff"/></g>'
+            f'<text x="72" y="736" fill="#174d46" font-size="55" font-weight="700" font-family="Microsoft YaHei, sans-serif">{poster_title}</text>'
+            f'<text x="74" y="788" fill="#5b756e" font-size="25" font-family="Microsoft YaHei, sans-serif">{poster_subtitle}</text>'
+            f'<rect x="70" y="838" width="940" height="180" rx="22" fill="#fff" stroke="#d8e7df"/><circle cx="126" cy="900" r="30" fill="#e7f3ed"/><path d="M110 900 h32 M126 884 v32" stroke="#0f766e" stroke-width="6"/><text x="180" y="895" fill="#174d46" font-size="27" font-weight="700" font-family="Microsoft YaHei, sans-serif">住进一晚，把杭州玩得更具体</text><text x="180" y="940" fill="#6b827b" font-size="22" font-family="Microsoft YaHei, sans-serif">{poster_room}  ·  {poster_partner}</text><text x="180" y="978" fill="#6b827b" font-size="20" font-family="Microsoft YaHei, sans-serif">{poster_time}  ·  {poster_location}</text>'
+            '<rect x="70" y="1050" width="450" height="190" rx="22" fill="#174d46"/><text x="104" y="1100" fill="#bfe5d7" font-size="20" font-family="Microsoft YaHei, sans-serif">真实库存驱动的主题住宿</text><text x="104" y="1170" fill="#fff" font-size="54" font-weight="700" font-family="Arial, Microsoft YaHei, sans-serif">¥' + poster_price + '</text><text x="104" y="1210" fill="#d7efe6" font-size="20" font-family="Microsoft YaHei, sans-serif">/ 套 · 名额实时更新</text>'
+            '<rect x="550" y="1050" width="460" height="190" rx="22" fill="#f2dfac"/><text x="586" y="1100" fill="#7b5b2a" font-size="20" font-family="Microsoft YaHei, sans-serif">今日行动建议</text><text x="586" y="1152" fill="#174d46" font-size="28" font-weight="700" font-family="Microsoft YaHei, sans-serif">先看场次，再锁意向</text><text x="586" y="1198" fill="#6b6250" font-size="20" font-family="Microsoft YaHei, sans-serif">不收款 · 酒店与商户二次确认</text>'
+            '<text x="72" y="1330" fill="#5b756e" font-size="21" font-family="Microsoft YaHei, sans-serif">#杭州亲子游  #临期主题房  #住进文化现场</text>'
             '</svg>'
+        )
+        social_post = (
+            f"{weather_label}的杭州，也值得住一晚 🌿\n\n"
+            f"不是把房间打折，而是把{room.get('room_type', '舒适客房')}、{service_names}和{partner_name}排成一段刚刚好的旅程。\n"
+            f"📍 {partner_address}\n🕓 {partner_time}\n🧒 适合：{audience}\n💰 参考价：¥{payload.get('preferred_price', '599')} / 套\n\n"
+            f"{partner_description}\n\n"
+            "下雨就去室内做手作，晴天就把杭州的风景留在相册里。名额和房量实时变化，先收藏，再来问我今天还能不能订到。\n\n"
+            "#杭州亲子游 #杭州住宿 #非遗体验 #周末微度假 #旅行灵感"
         )
         return {
             "product_name": name,
@@ -94,12 +128,12 @@ class MockAgent:
             "marketing_title": title,
             "marketing_content": content,
             "marketing_assets": [
-                {"asset_type": "POSTER", "platform": "酒店大堂 / 小红书封面", "title": title, "content": f"{content} 现在咨询，锁定实时名额。", "visual_brief": "青绿色与宋韵金渐变，留白突出房型、天气和文化体验。", "call_to_action": "扫码咨询 · 名额实时更新", "poster_svg": poster_svg},
-                {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": f"{weather_label}杭州也值得住一晚", "content": f"{content}｜不追赶行程，把一晚住宿变成一段{partner_name}文化记忆。", "visual_brief": "首图使用文化体验细节，第二张展示早餐与时间安排，末图突出库存紧张提示。", "call_to_action": "评论区咨询可售日期"},
-                {"asset_type": "SHORT_VIDEO_SCRIPT", "platform": "短视频 30 秒", "title": f"30秒讲清{angle}套餐", "content": f"0-5秒：天气转变与房间镜头；5-12秒：{room.get('room_type', '客房')}与早餐；12-22秒：{partner_name}体验片段；22-30秒：展示¥{payload.get('preferred_price', '599')}与实时名额，邀请游客提交预约意向。", "visual_brief": "镜头从酒店空间切到杭州文化体验，字幕同步展示真实库存与毛利约束。", "call_to_action": "立即查看可售套餐"},
-                {"asset_type": "STORE_CARD", "platform": "OTA / 酒店前台", "title": f"{angle}产品卖点卡", "content": f"{weather_label}友好 · {audience} · {partner_name} · 真实库存动态更新", "visual_brief": "四个图标呈现房间、服务、体验、库存状态。", "call_to_action": "预约意向不收款，先锁定需求"},
+                {"asset_type": "POSTER", "platform": "酒店大堂 / 小红书封面", "title": title, "content": f"{content}\n\n现在咨询，锁定实时名额。", "visual_brief": "四段式场景海报：杭州山水与酒店窗景、体验人物/手作桌面、真实场次与地址、价格和库存行动卡；不是纯背景文字。", "call_to_action": "扫码咨询 · 名额实时更新", "poster_svg": poster_svg},
+                {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": f"{weather_label}杭州也值得住一晚", "content": social_post, "visual_brief": "建议做 4:5 首图 + 体验细节图 + 时间卡 + 预约提示图，首图突出具体场景，正文用短句、emoji 和可执行信息。", "call_to_action": "评论区咨询可售日期"},
+                {"asset_type": "SHORT_VIDEO_SCRIPT", "platform": "短视频 30 秒", "title": f"30秒讲清{angle}套餐", "content": f"0-3秒：{weather_label}与杭州窗景建立情绪；3-8秒：推入{room.get('room_type', '客房')}，拍到{room.get('features', '房间细节')}；8-15秒：早餐/服务细节和{service_names}；15-23秒：{partner_name}的{partner_description}，打出{partner_time}与{partner_address}；23-27秒：展示¥{payload.get('preferred_price', '599')}、余{partner_capacity}个体验名额；27-30秒：字幕“先看场次，再提交预约意向”。", "visual_brief": "镜头必须拍到房间、服务、文化体验和地址时间四类具体画面，字幕只做信息强化。", "call_to_action": "立即查看可售套餐"},
+                {"asset_type": "STORE_CARD", "platform": "OTA / 酒店前台", "title": f"{angle}产品卖点卡", "content": f"{weather_label}友好｜{room.get('room_type', '舒适客房')}｜{service_names}｜{partner_name}\n场次 {partner_time} · {partner_address}\n适合 {audience} · 参考价 ¥{payload.get('preferred_price', '599')} · 体验余{partner_capacity}个名额", "visual_brief": "用房间、早餐、手作、地图四个信息模块代替大段宣传语，价格和场次放在首屏。", "call_to_action": "预约意向不收款，先锁定需求"},
             ],
-            "recommendation_reason": f"房间、酒店服务和{partner_name}在同一入住日可用，已结合{weather_label}、{audience}和实时容量匹配。",
+            "recommendation_reason": f"{room.get('room_type', '客房')}、{service_names}和{partner_name}在{payload.get('target_date', '入住当日')}可用，场次为{partner_time}，地点为{partner_address}；系统已结合{weather_label}、{audience}、真实容量和毛利约束匹配。",
             "risk_message": "体验名额、房量、天气与价格会实时变化；如有过敏或饮食禁忌，请在预约意向中提前说明并由酒店与商户再次确认。",
         }
 

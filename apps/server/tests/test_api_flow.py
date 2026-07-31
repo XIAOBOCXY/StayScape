@@ -196,3 +196,59 @@ def test_natural_language_recommendation_is_interpreted_before_matching(client, 
     assert interpreted["child_ages"] == [6]
     assert "花生" in interpreted["allergy_information"]
     assert recommendation.json()["results"]
+
+
+def test_hotel_can_toggle_package_permission_with_explicit_body_value(client, hotel_token):
+    resources = client.get("/api/v1/hotel/resources", headers=auth(hotel_token)).json()
+    resource = next(item for item in resources if "非遗" in item["resource_name"])
+    disabled = client.patch(f"/api/v1/hotel/resources/{resource['id']}/package", headers=auth(hotel_token), json={"package_enabled": False})
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["package_enabled"] is False
+    enabled = client.patch(f"/api/v1/hotel/resources/{resource['id']}/package", headers=auth(hotel_token), json={"package_enabled": True})
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["package_enabled"] is True
+
+
+def test_hotel_can_create_and_edit_expiring_room_date(client, hotel_token):
+    rooms = client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()
+    target_date = rooms[0]["available_date"]
+    created = client.post("/api/v1/hotel/rooms", headers=auth(hotel_token), json={
+        "room_type": "景观亲子房",
+        "available_date": target_date,
+        "available_count": 2,
+        "normal_price": "699",
+        "minimum_price": "499",
+        "accounting_cost": "280",
+        "max_guests": 4,
+        "features": "落地窗、儿童用品",
+    })
+    assert created.status_code == 200, created.text
+    room_id = created.json()["id"]
+    updated = client.patch(f"/api/v1/hotel/rooms/{room_id}", headers=auth(hotel_token), json={"available_date": "2099-12-30", "available_count": 5, "reason": "调整临期日期"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["available_date"] == "2099-12-30"
+    assert updated.json()["available_count"] == 5
+
+
+def test_alternative_partner_variants_do_not_conflict_with_each_other(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    resources = client.get("/api/v1/hotel/resources", headers=auth(hotel_token)).json()
+    tea = next(item for item in resources if item["resource_name"] == "儿童茶文化课堂")
+    request["resource_selections"].append({"resource_type": "PARTNER_RESOURCE", "resource_id": tea["id"], "quantity_per_package": 3})
+    request["variant_count"] = 2
+    response = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    assert response.status_code == 200, response.text
+    products = response.json()["products"]
+    assert len(products) == 2
+    partner_names = [next(item["resource_name"] for item in item["resources"] if item["resource_type"] == "PARTNER_RESOURCE") for item in products]
+    assert set(partner_names) == {"室内非遗手作体验", "儿童茶文化课堂"}
+
+
+def test_natural_language_interpretation_returns_confirmable_requirement_card(client):
+    response = client.post("/api/v1/visitor/interpret", json={"natural_language": "两大两小，孩子6岁和9岁，周六去西湖和运河，预算1000元，花生过敏，不吃辣"})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["interpreted_needs"]["adult_count"] == 2
+    assert data["interpreted_needs"]["child_ages"] == [6, 9]
+    assert "西湖" in data["interpreted_needs"]["requested_places"]
+    assert "花生" in data["interpreted_needs"]["allergy_information"]

@@ -13,7 +13,7 @@ from ...db import get_db
 from ...models import HotelService, PartnerResource, ProductResource, PublicResource, TravelProduct, VisitorIntent
 from ...repositories.product_repository import get_product, list_products
 from ...schemas.products import ProductRead
-from ...schemas.visitor import VisitorIntentCreate, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
+from ...schemas.visitor import VisitorIntentCreate, VisitorInterpretRequest, VisitorInterpretResponse, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
 from ...services.serializers import product_to_dict
 from ...rules.availability_rule import tokens
 from ...rules.crowd_rule import crowd_supported
@@ -24,6 +24,22 @@ router = APIRouter(prefix="/visitor", tags=["visitor"])
 
 
 CN_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def number_value(value: str, default: int = 0) -> int:
+    return int(value) if value.isdigit() else CN_NUMBERS.get(value, default)
+
+
+def parse_weekday(text: str) -> date | None:
+    if "周末" in text:
+        days = (5 - date.today().weekday()) % 7 or 7
+        return date.today() + timedelta(days=days)
+    match = re.search(r"(?:周|星期)([一二三四五六日天])", text)
+    if not match:
+        return None
+    index = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}[match.group(1)]
+    days = (index - date.today().weekday()) % 7 or 7
+    return date.today() + timedelta(days=days)
 
 
 def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorRecommendRequest, dict[str, object]]:
@@ -41,6 +57,10 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
         updates["target_date"] = date.today() + timedelta(days=1)
     elif "今天" in text:
         updates["target_date"] = date.today()
+    else:
+        weekday = parse_weekday(text)
+        if weekday:
+            updates["target_date"] = weekday
     weather = "RAIN" if any(word in text for word in ("雨", "下雨", "湿冷")) else "SUNNY" if "晴" in text else "CLOUDY" if any(word in text for word in ("多云", "阴天")) else None
     if weather:
         updates["weather"] = weather
@@ -51,24 +71,36 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     if ages:
         updates["child_ages"] = ages
         updates["child_count"] = len(ages)
+    group_match = re.search(r"([一二两三四五六七八九十\d]+)\s*大\s*([一二两三四五六七八九十\d]+)\s*小", text)
+    if group_match:
+        updates["adult_count"] = number_value(group_match.group(1), request.adult_count)
+        updates["child_count"] = number_value(group_match.group(2), request.child_count)
     adult_match = re.search(r"(\d+|[一二两三四五六七八九十])\s*(?:位)?大人", text)
     if adult_match:
         value = adult_match.group(1)
-        updates["adult_count"] = int(value) if value.isdigit() else CN_NUMBERS.get(value, request.adult_count)
+        updates["adult_count"] = number_value(value, request.adult_count)
+    family_match = re.search(r"一家([一二两三四五六七八九十\d]+)口", text)
+    if family_match and "adult_count" not in updates and ages:
+        updates["adult_count"] = max(number_value(family_match.group(1), request.adult_count) - len(ages), 1)
     child_count_match = re.search(r"(\d+|[一二两三四五六七八九十])\s*(?:位)?(?:个)?(?:小孩|儿童|孩子|小朋友)", text)
     if child_count_match and "child_count" not in updates:
         value = child_count_match.group(1)
-        updates["child_count"] = int(value) if value.isdigit() else CN_NUMBERS.get(value, request.child_count)
+        updates["child_count"] = number_value(value, request.child_count)
     if any(word in text for word in ("情侣", "夫妻", "两个人", "两人")) and not any(word in text for word in ("孩子", "儿童", "小孩", "小朋友", "岁")):
         updates["child_count"] = 0
         updates["child_ages"] = []
     interests = [word for word in ("亲子", "手工", "非遗", "茶", "点茶", "博物馆", "摄影", "旅拍", "美食", "慢游") if word in text]
     if interests:
         updates["interests"] = list(dict.fromkeys([*request.interests, *interests]))
-    allergy_terms = [word for word in ("花生", "坚果", "牛奶", "乳制品", "海鲜", "鸡蛋", "不吃辣", "素食") if word in text]
+    dietary_terms = [word for word in ("不吃辣", "素食", "清真", "不吃海鲜", "不吃牛肉") if word in text]
+    allergy_terms = [word for word in ("花生", "坚果", "牛奶", "乳制品", "海鲜", "鸡蛋") if word in text and ("过敏" in text or "忌" in text)]
+    if dietary_terms or allergy_terms:
+        updates["dietary_restrictions"] = list(dict.fromkeys([*request.dietary_restrictions, *dietary_terms, *allergy_terms]))
     if allergy_terms:
-        updates["dietary_restrictions"] = list(dict.fromkeys([*request.dietary_restrictions, *allergy_terms]))
-        updates["allergy_information"] = request.allergy_information or "、".join(allergy_terms)
+        updates["allergy_information"] = request.allergy_information or "、".join(f"{item}过敏" for item in allergy_terms)
+    places = [word for word in ("西湖", "运河", "拱宸桥", "茶园", "博物馆", "宋城", "灵隐寺") if word in text]
+    if places:
+        updates["requested_places"] = list(dict.fromkeys([*request.requested_places, *places]))
     effective = request.model_copy(update=updates)
     interpreted = {
         "natural_language": text,
@@ -78,10 +110,25 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
         "child_count": effective.child_count,
         "child_ages": effective.child_ages,
         "interests": effective.interests,
+        "requested_places": effective.requested_places,
         "dietary_restrictions": effective.dietary_restrictions,
         "allergy_information": effective.allergy_information,
+        "other_requirements": effective.other_requirements or text,
     }
     return effective, interpreted
+
+
+def follow_up_questions(request: VisitorRecommendRequest, interpreted: dict[str, object]) -> list[str]:
+    questions: list[str] = []
+    if not request.target_date:
+        questions.append("想安排哪天入住？不填也可以先看当前可售套餐。")
+    if request.child_count and not request.child_ages:
+        questions.append("如果同行有儿童，方便补充每位儿童年龄吗？系统会据此校验体验安全范围。")
+    if not request.budget:
+        questions.append("这次预算上限大约是多少？")
+    if not request.requested_places and not request.interests:
+        questions.append("更想去哪里或体验什么？例如西湖、运河、非遗、茶文化。")
+    return questions[:3]
 
 
 def public_items(db: Session, query: VisitorProductQuery | None = None) -> list[TravelProduct]:
@@ -116,9 +163,13 @@ def matches_conditions(db: Session, product: TravelProduct, request: VisitorReco
             weather_match = False
         if not crowd_supported(resource.suitable_crowds, product.target_crowd, request.child_ages, resource.minimum_age, resource.maximum_age):
             children_match = False
-    if request.child_count and len(request.child_ages) != request.child_count:
+    if request.child_count and request.child_ages and len(request.child_ages) != request.child_count:
         children_match = False
-    interest_match = not request.interests or any(item.lower() in f"{product.product_name} {product.theme} {product.marketing_content}".lower() for item in request.interests)
+    searchable = f"{product.product_name} {product.theme} {product.marketing_content}"
+    for row, resource in product_partner_rows(db, product):
+        searchable += f" {resource.resource_name} {resource.address} {resource.description}"
+    interest_terms = [*request.interests, *request.requested_places]
+    interest_match = not interest_terms or any(item.lower() in searchable.lower() for item in interest_terms)
     budget_match = product.suggested_price <= request.budget
     score = (35 if budget_match else 0) + (25 if children_match else 0) + (20 if weather_match else 0) + (20 if interest_match else 0)
     return children_match, weather_match, interest_match, score
@@ -175,9 +226,20 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
         answer = "套餐中的酒店服务会显示每套消耗量和时间，家庭早餐示例为每套3份。"
     elif "过敏" in question or "花生" in question:
         answer = "过敏信息只作为风险提示，请在预约意向中填写，并由酒店与商户在确认前再次人工核对。"
+    elif any(word in question for word in ("还有", "其他", "推荐", "别的")):
+        answer = "有的，我会优先给你展示当前同日期、真实库存仍可售的其他套餐；如果你补充预算、人数、想去的地方或天气，我还能进一步缩小范围。"
     else:
         answer = "我会结合当前可售库存、预算、客群、天气和体验时间给出推荐；最终库存与价格以系统实时计算为准。"
-    return {"trace_id": result.trace_id, "answer": answer, "safety_notes": "AI建议不替代商户对过敏、儿童安全和场次的最终确认。", "product": product_to_dict(product) if product else None, "fallback_used": result.fallback_used}
+    suggestions = []
+    if any(word in question for word in ("还有", "其他", "推荐", "别的")):
+        suggestions = [product_to_dict(item) for item in list_products(db, public_only=True) if not product or item.id != product.id][:3]
+    return {"trace_id": result.trace_id, "answer": answer, "safety_notes": "AI建议不替代商户对过敏、儿童安全和场次的最终确认。", "product": product_to_dict(product) if product else None, "suggestions": suggestions, "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河还是室内文化体验？", "预算上限和可接受场次是什么？"], "fallback_used": result.fallback_used}
+
+
+@router.post("/interpret", response_model=VisitorInterpretResponse)
+def interpret(request: VisitorInterpretRequest):
+    effective, interpreted = enrich_recommend_request(VisitorRecommendRequest(natural_language=request.natural_language))
+    return {"interpreted_needs": interpreted, "follow_up_questions": follow_up_questions(effective, interpreted)}
 
 
 @router.post("/recommend")
@@ -203,6 +265,7 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         "budget": str(request.budget),
         "weather": request.weather,
         "interests": request.interests,
+        "requested_places": request.requested_places,
         "natural_language": request.natural_language,
         "dietary_restrictions": request.dietary_restrictions,
         "allergy_information": request.allergy_information,
@@ -235,16 +298,42 @@ def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
     product = get_product(db, request.product_id)
     if not product or product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0:
         raise AppError("PRODUCT_UNAVAILABLE", "当前套餐已无法提交预约意向", retryable=True)
-    if request.child_count != len(request.child_ages):
+    effective = VisitorRecommendRequest(
+        natural_language=request.natural_language,
+        adult_count=request.adult_count,
+        child_count=request.child_count,
+        child_ages=request.child_ages,
+        budget=request.budget,
+        interests=request.interests,
+        dietary_restrictions=request.dietary_restrictions,
+        allergy_information=request.allergy_information,
+        arrival_time=request.arrival_time,
+        preferred_experience_time=request.preferred_experience_time,
+        other_requirements=request.other_requirements,
+    )
+    if request.natural_language.strip():
+        effective, _ = enrich_recommend_request(effective)
+    if effective.child_count and effective.child_ages and effective.child_count != len(effective.child_ages):
         raise AppError("VALIDATION_ERROR", "儿童人数与儿童年龄数量不一致", field="child_ages")
     result = {
         "product_id": product.id,
         "product_name": product.product_name,
         "submitted_price": str(product.suggested_price),
         "submitted_quantity": product.sale_quantity,
-        "allergy_information": request.allergy_information,
+        "allergy_information": effective.allergy_information,
     }
-    intent = VisitorIntent(**request.model_dump(), recommendation_result=result, intent_status="NEW")
+    intent_data = request.model_dump(exclude={"natural_language"})
+    intent_data.update({
+        "adult_count": effective.adult_count,
+        "child_count": effective.child_count,
+        "child_ages": effective.child_ages,
+        "budget": effective.budget,
+        "interests": effective.interests,
+        "dietary_restrictions": effective.dietary_restrictions,
+        "allergy_information": effective.allergy_information,
+        "other_requirements": effective.other_requirements or request.natural_language,
+    })
+    intent = VisitorIntent(**intent_data, recommendation_result=result, intent_status="NEW")
     db.add(intent)
     db.commit()
     db.refresh(intent)

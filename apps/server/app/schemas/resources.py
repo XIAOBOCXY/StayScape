@@ -33,10 +33,14 @@ class RoomCreate(BaseModel):
 
 
 class RoomUpdate(BaseModel):
+    room_type: str | None = Field(default=None, min_length=1, max_length=100)
+    available_date: date | None = None
     available_count: int | None = Field(default=None, ge=0)
     normal_price: Decimal | None = Field(default=None, gt=0)
     minimum_price: Decimal | None = Field(default=None, gt=0)
     accounting_cost: Decimal | None = Field(default=None, gt=0)
+    max_guests: int | None = Field(default=None, ge=1, le=20)
+    features: str | None = None
     status: str | None = None
     reason: str = "经营库存调整"
 
@@ -174,3 +178,7 @@ class PartnerResourceUpdate(BaseModel):
     cancellation_rule: str | None = None
     status: str | None = None
     reason: str = "合作资源更新"
+
+
+class PackageToggleRequest(BaseModel):
+    package_enabled: bool

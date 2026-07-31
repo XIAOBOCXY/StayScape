@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -12,7 +12,7 @@ from ...repositories.product_repository import get_product, list_products
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
 from ...schemas.products import AdjustmentRead, GenerateProductRequest, ProductDetailResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
-from ...schemas.resources import MerchantRead, PartnerResourceRead, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
+from ...schemas.resources import MerchantRead, PackageToggleRequest, PartnerResourceRead, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
 from ...services.serializers import partner_resource_to_dict, product_to_dict
 from ..deps import get_hotel_user, resolve_hotel_id
@@ -40,7 +40,18 @@ def service_status(quantity: int, requested: str | None = None) -> str:
 
 
 def room_snapshot(room: RoomInventory) -> dict:
-    return {"id": room.id, "available_count": room.available_count, "status": room.status, "minimum_price": str(room.minimum_price), "normal_price": str(room.normal_price), "accounting_cost": str(room.accounting_cost)}
+    return {
+        "id": room.id,
+        "room_type": room.room_type,
+        "available_date": room.available_date.isoformat(),
+        "available_count": room.available_count,
+        "status": room.status,
+        "minimum_price": str(room.minimum_price),
+        "normal_price": str(room.normal_price),
+        "accounting_cost": str(room.accounting_cost),
+        "max_guests": room.max_guests,
+        "features": room.features,
+    }
 
 
 def service_snapshot(service: HotelService) -> dict:
@@ -108,7 +119,7 @@ async def update_room(room_id: int, request: RoomUpdate, db: Session = Depends(g
         raise AppError("VALIDATION_ERROR", "最低售价不能高于正常售价", field="minimum_price")
     if room.available_count < 0 or room.accounting_cost <= 0:
         raise AppError("VALIDATION_ERROR", "库存和核算成本必须合法")
-    room.status = room_status(room.available_count, room.status)
+    room.status = room_status(room.available_count, request.status or room.status)
     event = ResourceChangeEvent(event_type="ROOM_INVENTORY_CHANGED", resource_type="ROOM", resource_id=room.id, old_value=old, new_value=room_snapshot(room), reason=request.reason, operator_role=user.role, operator_id=user.id)
     db.add(event)
     db.flush()
@@ -181,13 +192,22 @@ def resources(db: Session = Depends(get_db), user: User = Depends(get_hotel_user
 
 
 @router.patch("/resources/{resource_id}/package", response_model=PartnerResourceRead)
-async def toggle_package(resource_id: int, package_enabled: bool, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+async def toggle_package(
+    resource_id: int,
+    request: PackageToggleRequest | None = Body(default=None),
+    package_enabled: bool | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
+    enabled = request.package_enabled if request is not None else package_enabled
+    if enabled is None:
+        raise AppError("VALIDATION_ERROR", "请提供组包许可状态", field="package_enabled")
     hotel_id = hotel_id_for(db, user)
     resource = db.scalar(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(PartnerResource.id == resource_id, Merchant.hotel_id == hotel_id).with_for_update())
     if not resource:
         raise AppError("NOT_FOUND", "合作资源不存在", status_code=404)
     old = {"package_enabled": resource.package_enabled, "status": resource.status}
-    resource.package_enabled = package_enabled
+    resource.package_enabled = enabled
     event = ResourceChangeEvent(event_type="PARTNER_RESOURCE_STATUS_CHANGED", resource_type="PARTNER_RESOURCE", resource_id=resource.id, old_value=old, new_value={"package_enabled": resource.package_enabled, "status": resource.status}, reason="酒店调整组包许可", operator_role=user.role, operator_id=user.id)
     db.add(event)
     db.flush()

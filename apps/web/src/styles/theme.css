@@ -22,3 +22,22 @@
 .section-title h2::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 8px 3px 0; border-radius: 50%; background: var(--gold); }
 .visitor-hero { box-shadow: 0 22px 60px rgba(30,72,64,.1); }
 .visitor-hero-actions .el-button, .visitor-hero-actions .van-button { border-radius: 12px; }
+.el-button { min-height: 36px; border-radius: 10px; font-weight: 600; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; }
+.el-button:hover:not(.is-disabled) { transform: translateY(-1px); }
+.el-button.is-link { min-height: 30px; padding-inline: 7px; }
+.el-input__wrapper, .el-textarea__inner, .el-select__wrapper { border-radius: 10px; box-shadow: 0 0 0 1px #dce9e3 inset; }
+.el-input__wrapper:hover, .el-textarea__inner:hover, .el-select__wrapper:hover { box-shadow: 0 0 0 1px #9fcdbd inset; }
+.el-input__wrapper.is-focus, .el-textarea__inner:focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 2px rgba(15,118,110,.15), 0 0 0 1px var(--teal) inset; }
+.el-switch.is-checked .el-switch__core { background: var(--teal); border-color: var(--teal); }
+.el-table { --el-table-header-bg-color: #f5faf7; --el-table-row-hover-bg-color: #f7fcfa; --el-table-text-color: var(--ink); --el-table-header-text-color: #657c75; font-size: 14px; }
+.el-table th.el-table__cell { font-size: 13px; font-weight: 700; padding: 15px 0; }
+.el-table td.el-table__cell { padding: 17px 0; }
+.data-table { font-size: 14px; }
+.data-table th { font-size: 12px; font-weight: 700; padding-bottom: 14px; }
+.data-table td { padding: 17px 12px; }
+.muted { font-size: 13px; }
+.panel { padding: 22px; }
+.panel:hover, .metric-card:hover, .product-card:hover { box-shadow: 0 20px 55px rgba(30,72,64,.12); }
+.section-title { margin-top: 34px; }
+.resource-snapshot, .metric-link { transition: transform .18s ease, box-shadow .18s ease; }
+.resource-snapshot:hover, .metric-link:hover { transform: translateY(-2px); }

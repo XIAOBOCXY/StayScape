@@ -26,15 +26,25 @@ class VisitorRecommendRequest(BaseModel):
     target_date: date | None = None
     weather: str = "RAIN"
     adult_count: int = Field(default=2, ge=1, le=20)
-    child_count: int = Field(default=1, ge=0, le=20)
+    child_count: int = Field(default=0, ge=0, le=20)
     child_ages: list[int] = Field(default_factory=list)
     budget: Decimal = Field(default=Decimal("700"), gt=0)
     interests: list[str] = Field(default_factory=list)
+    requested_places: list[str] = Field(default_factory=list)
     dietary_restrictions: list[str] = Field(default_factory=list)
     allergy_information: str = ""
     arrival_time: time | None = None
     preferred_experience_time: time | None = None
     other_requirements: str = ""
+
+
+class VisitorInterpretRequest(BaseModel):
+    natural_language: str = Field(min_length=1, max_length=1000)
+
+
+class VisitorInterpretResponse(BaseModel):
+    interpreted_needs: dict[str, object] = Field(default_factory=dict)
+    follow_up_questions: list[str] = Field(default_factory=list)
 
 
 class RecommendationResult(BaseModel):
@@ -58,6 +68,7 @@ class VisitorRecommendResponse(BaseModel):
 
 
 class VisitorIntentCreate(BaseModel):
+    natural_language: str = Field(default="", max_length=1000)
     product_id: int
     adult_count: int = Field(ge=1, le=20)
     child_count: int = Field(ge=0, le=20)

@@ -21,6 +21,17 @@ from ..schemas.products import GenerateProductRequest
 
 
 DEFAULT_QUANTITIES = {"BREAKFAST": 3, "LATE_CHECKOUT": 1}
+NON_EXCLUSIVE_SERVICE_TYPES = {"BREAKFAST", "PARKING", "LUGGAGE_STORAGE", "LATE_CHECKOUT"}
+
+
+def blocks_schedule(service: HotelService) -> bool:
+    """Only bookable activities occupy an exclusive time slot.
+
+    Breakfast, parking, luggage storage and late checkout are entitlements with
+    broad windows. They can coexist with a cultural activity and should not
+    prevent a second alternative package from being generated.
+    """
+    return service.service_type not in NON_EXCLUSIVE_SERVICE_TYPES
 
 
 def json_safe(value):
@@ -95,10 +106,10 @@ class ProductService:
             "variant_total": request.variant_count,
             "visitor_budget": str(request.visitor_budget),
             "preferred_price": str(request.preferred_price),
-            "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests},
+            "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests, "features": room.features, "available_count": room.available_count},
             "requested_selections": selections,
-            "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status} for item in services if item.status == "AVAILABLE"],
-            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and item.merchant.cooperation_status == "ACTIVE" and item.package_enabled and item.status == "AVAILABLE"],
+            "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE"],
+            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and item.merchant.cooperation_status == "ACTIVE" and item.package_enabled and item.status == "AVAILABLE"],
         }
 
     def generate(self, request: GenerateProductRequest, *, variant_index: int = 0) -> tuple[TravelProduct, dict[str, Any], str, bool]:
@@ -129,12 +140,13 @@ class ProductService:
                 continue
             q = output.resource_quantities.get(str(service.id), requested_by_type.get(("HOTEL_SERVICE", service.id), {}).get("quantity_per_package", DEFAULT_QUANTITIES.get(service.service_type, 1)))
             self._validate_service(service, request, q)
-            if any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
+            if blocks_schedule(service) and any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
                 raise AppError("TIME_CONFLICT", f"酒店服务{service.service_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
             resource_rows.append(ProductResource(resource_type="HOTEL_SERVICE", resource_id=service.id, resource_name=service.service_name, quantity_per_package=q, unit_cost=service.unit_cost, replaceable=service.replaceable, required=True))
             capacity_inputs.append(CapacityInput(service.service_name, service.available_quantity, q))
             unit_cost += service.unit_cost * q
-            schedule_slots.append((service.start_time, service.end_time, service.service_name))
+            if blocks_schedule(service):
+                schedule_slots.append((service.start_time, service.end_time, service.service_name))
         for partner in selected_partners:
             q = output.resource_quantities.get(str(partner.id), requested_by_type.get(("PARTNER_RESOURCE", partner.id), {}).get("quantity_per_package", 1))
             self._validate_partner(partner, request, q)
@@ -261,6 +273,10 @@ class ProductService:
         replacement_id = None
         replacement_message = ""
         room = self.db.get(RoomInventory, product.room_inventory_id)
+        if room and room.available_date != product.target_date:
+            product.sale_quantity = 0
+            product.status = "PAUSED"
+            return self._record_adjustment(product, event, old_quantity, old_price, "PAUSE_PRODUCT", "关联客房日期已变化，与产品入住日期不一致", replacement_id)
         if not room:
             product.sale_quantity = 0
             product.status = "PAUSED"
@@ -287,13 +303,14 @@ class ProductService:
                 if not crowd_supported(service.suitable_crowds, product.target_crowd):
                     invalid_reason = f"酒店服务{row.resource_name}不适合当前客群"
                     break
-                if any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
+                if blocks_schedule(service) and any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
                     invalid_reason = f"酒店服务{row.resource_name}与套餐内其他活动时间冲突"
                     break
                 capacity_inputs.append(CapacityInput(service.service_name, service.available_quantity, row.quantity_per_package))
                 unit_cost += service.unit_cost * row.quantity_per_package
                 row.unit_cost = service.unit_cost
-                schedule_slots.append((service.start_time, service.end_time, service.service_name))
+                if blocks_schedule(service):
+                    schedule_slots.append((service.start_time, service.end_time, service.service_name))
             elif row.resource_type == "PARTNER_RESOURCE":
                 partner_row = row
                 partner = self.db.get(PartnerResource, row.resource_id)
@@ -398,7 +415,7 @@ class ProductService:
             if any(
                 intervals_overlap(candidate.start_time, candidate.end_time, source.start_time, source.end_time)
                 for source in [self.db.get(HotelService, existing.resource_id) if existing.resource_type == "HOTEL_SERVICE" else self.db.get(PartnerResource, existing.resource_id) for existing in product.resources if existing.id != row.id and existing.resource_type in {"HOTEL_SERVICE", "PARTNER_RESOURCE"}]
-                if source is not None
+                if source is not None and (not isinstance(source, HotelService) or blocks_schedule(source))
             ):
                 continue
             try:
