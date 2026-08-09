@@ -88,6 +88,15 @@ class MockAgent:
         poster_room = safe(room.get("room_type", "舒适客房"))
         poster_partner = safe(partner_name[:18])
         poster_price = safe(payload.get("preferred_price", "599"))
+        scene_text = f"{theme} {partner_name} {partner_description} {crowd}".lower()
+        if any(word in scene_text for word in ("非遗", "手作", "工坊", "craft")):
+            scene_art = '<g><rect x="130" y="535" width="430" height="55" rx="12" fill="#d19b5d"/><rect x="180" y="455" width="320" height="86" rx="14" fill="#f6e8ce"/><circle cx="250" cy="496" r="28" fill="#e9a56e"/><circle cx="410" cy="496" r="28" fill="#7db5a8"/><path d="M305 465 l55 60 M360 465 l-55 60" stroke="#174d46" stroke-width="10" stroke-linecap="round"/><path d="M190 415 q120 -74 240 0" fill="none" stroke="#f7d48e" stroke-width="18"/><circle cx="190" cy="415" r="12" fill="#d45c53"/><circle cx="430" cy="415" r="12" fill="#d45c53"/><text x="150" y="630" fill="#174d46" font-size="27" font-weight="700" font-family="Microsoft YaHei, sans-serif">亲子一起做一件杭州手作</text></g>'
+        elif any(word in scene_text for word in ("茶", "点茶", "tea")):
+            scene_art = '<g><ellipse cx="420" cy="570" rx="270" ry="52" fill="#c38f55"/><path d="M275 520 q0 -90 100 -90 q100 0 100 90 v32 H275Z" fill="#f5e5c6" stroke="#174d46" stroke-width="8"/><path d="M475 475 q85 -12 85 48 q0 58 -85 36" fill="none" stroke="#174d46" stroke-width="12"/><path d="M370 430 q-12 -70 28 -95 M430 430 q20 -72 -8 -106" fill="none" stroke="#fff8e7" stroke-width="9" stroke-linecap="round"/><circle cx="220" cy="525" r="28" fill="#78a66f"/><path d="M200 540 q45 -75 80 -8" fill="none" stroke="#174d46" stroke-width="8"/><text x="170" y="630" fill="#174d46" font-size="27" font-weight="700" font-family="Microsoft YaHei, sans-serif">一席茶，慢下来认识杭州</text></g>'
+        elif any(word in scene_text for word in ("情侣", "旅拍", "运河", "西湖", "couple")):
+            scene_art = '<g><path d="M80 520 Q260 420 470 520 T1010 500 V658 H80Z" fill="#2c716b" opacity=".85"/><path d="M70 568 Q300 510 560 580 T1010 555" fill="none" stroke="#f8e1aa" stroke-width="12"/><path d="M180 540 Q420 360 660 540" fill="none" stroke="#174d46" stroke-width="18"/><circle cx="290" cy="450" r="17" fill="#f2bc87"/><circle cx="372" cy="450" r="17" fill="#f2bc87"/><path d="M290 468 l-18 72 M372 468 l18 72 M275 490 l95 0" stroke="#d45c53" stroke-width="16" stroke-linecap="round"/><path d="M770 280 v300 M850 320 v260" stroke="#174d46" stroke-width="14"/><path d="M730 290 q40 -58 80 0 q-40 58 -80 0 M810 330 q40 -58 80 0 q-40 58 -80 0" fill="#f2c777"/><text x="170" y="630" fill="#174d46" font-size="27" font-weight="700" font-family="Microsoft YaHei, sans-serif">把湖光与夜色留在相册里</text></g>'
+        else:
+            scene_art = '<g><rect x="690" y="285" width="250" height="230" rx="15" fill="#f8efe0" opacity=".96"/><rect x="725" y="325" width="75" height="100" rx="5" fill="#87bbb0"/><rect x="835" y="325" width="75" height="100" rx="5" fill="#87bbb0"/><path d="M675 285 L815 205 L955 285Z" fill="#174d46"/><rect x="785" y="425" width="68" height="90" fill="#d6ad68"/><circle cx="820" cy="470" r="5" fill="#174d46"/><path d="M180 525 q0 -80 60 -80 t60 80" fill="#d45c53"/><circle cx="240" cy="430" r="25" fill="#f0bd87"/><path d="M185 535 q55 -30 110 0" fill="none" stroke="#174d46" stroke-width="11"/><text x="120" y="630" fill="#174d46" font-size="27" font-weight="700" font-family="Microsoft YaHei, sans-serif">住进一晚，把杭州玩得更具体</text></g>'
         poster_svg = (
             '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" viewBox="0 0 1080 1440">'
             '<defs><linearGradient id="paper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f9f4e8"/><stop offset="1" stop-color="#e8f4ee"/></linearGradient><linearGradient id="scene" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#8fc9c0"/><stop offset="1" stop-color="#e8c77a"/></linearGradient><filter id="shadow"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#174d46" flood-opacity=".18"/></filter></defs>'
@@ -109,6 +118,13 @@ class MockAgent:
             '<text x="72" y="1330" fill="#5b756e" font-size="21" font-family="Microsoft YaHei, sans-serif">#杭州亲子游  #临期主题房  #住进文化现场</text>'
             '</svg>'
         )
+        # Keep the existing poster layout/data contract, but replace the old
+        # generic mountain scene with an illustration tied to the selected
+        # culture, tea, city or family theme.
+        scene_start = poster_svg.find('<path d="M60 470')
+        scene_end = poster_svg.find('</g>', scene_start)
+        if scene_start >= 0 and scene_end >= 0:
+            poster_svg = poster_svg[:scene_start] + scene_art + poster_svg[scene_end + 4:]
         social_post = (
             f"{weather_label}的杭州，也值得住一晚 🌿\n\n"
             f"不是把房间打折，而是把{room.get('room_type', '舒适客房')}、{service_names}和{partner_name}排成一段刚刚好的旅程。\n"
@@ -144,7 +160,16 @@ class MockAgent:
         allergy = payload.get("allergy_information", "")
         natural_language = str(payload.get("natural_language", "")).strip()
         needs_hint = f"已理解你的需求：{natural_language}。" if natural_language else ""
+        question = str(payload.get("question", "")).strip()
+        if question:
+            answer = f"{needs_hint}关于“{question}”，我会优先依据当前产品的真实场次、库存、天气和适龄范围回答；最终预约以前台与商户确认结果为准。"
+        elif target_ids:
+            answer = f"{needs_hint}当前有{len(target_ids)}个套餐通过了预算、人数、天气和库存校验，可以继续查看时间安排并提交预约意向。"
+        else:
+            answer = f"{needs_hint}暂时没有同时满足这些条件的可售套餐；可以放宽日期、预算或体验偏好，我会继续帮你匹配。"
         return {
+            "answer": answer,
+            "safety_notes": "过敏、儿童安全和体验场次需要酒店与商户在确认前再次人工核对。",
             "selected_product_ids": target_ids,
             "reasons": {str(item["id"]): f"{needs_hint}预算、天气、同行客群和实时库存均通过规则校验，适合直接提交预约意向。" for item in products if item["id"] in target_ids},
             "schedule_notes": {str(item["id"]): [{"time": "15:00", "title": "办理入住", "description": "酒店前台办理入住并领取体验提示"}, {"time": "16:00", "title": "室内文化体验", "description": "按预约场次参加合作体验"}] for item in products if item["id"] in target_ids},

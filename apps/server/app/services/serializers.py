@@ -24,6 +24,9 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
         "suggested_price": product.suggested_price,
         "gross_profit": product.gross_profit,
         "gross_margin": product.gross_margin,
+        "minimum_gross_margin_requirement": product.minimum_gross_margin_requirement,
+        "visitor_budget_limit": product.visitor_budget_limit,
+        "price_anchor": product.price_anchor,
         "bottleneck_resource": product.bottleneck_resource,
         "marketing_title": product.marketing_title,
         "marketing_content": product.marketing_content,
@@ -80,13 +83,15 @@ def _resource_object(item: ProductResource):
     if product:
         # Product resources intentionally keep only IDs so the deterministic engine
         # owns the source of truth. Lazy loading is safe for the request-scoped DB.
-        for service in getattr(product.hotel, "services", []) if product.hotel else []:
-            if isinstance(service, HotelService) and service.id == item.resource_id:
-                return service
-        for merchant in getattr(product.hotel, "merchants", []) if product.hotel else []:
-            for resource in getattr(merchant, "resources", []):
-                if isinstance(resource, PartnerResource) and resource.id == item.resource_id:
-                    return resource
+        if item.resource_type == "HOTEL_SERVICE":
+            for service in getattr(product.hotel, "services", []) if product.hotel else []:
+                if isinstance(service, HotelService) and service.id == item.resource_id:
+                    return service
+        elif item.resource_type == "PARTNER_RESOURCE":
+            for merchant in getattr(product.hotel, "merchants", []) if product.hotel else []:
+                for resource in getattr(merchant, "resources", []):
+                    if isinstance(resource, PartnerResource) and resource.id == item.resource_id:
+                        return resource
     return None
 
 

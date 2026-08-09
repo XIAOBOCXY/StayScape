@@ -1,8 +1,10 @@
 from datetime import date
 from decimal import Decimal
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Body, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ...core.exceptions import AppError
@@ -12,8 +14,10 @@ from ...repositories.product_repository import get_product, list_products
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
 from ...schemas.products import AdjustmentRead, GenerateProductRequest, ProductDetailResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
+from ...schemas.visitor import VisitorIntentStatusUpdate
 from ...schemas.resources import MerchantRead, PackageToggleRequest, PartnerResourceRead, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
+from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
 from ..deps import get_hotel_user, resolve_hotel_id
 from ..websocket_manager import manager
@@ -61,13 +65,15 @@ def service_snapshot(service: HotelService) -> dict:
 @router.get("/dashboard", response_model=DashboardResponse)
 def dashboard(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     hotel_id = hotel_id_for(db, user)
+    sweep_expired_intents(db, hotel_id)
+    db.commit()
     hotel = db.get(Hotel, hotel_id)
     target = date.today() + __import__("datetime").timedelta(days=1)
     rooms = list_rooms(db, hotel_id)
     resources = list_partner_resources(db, hotel_id)
     products = list_products(db, hotel_id)
     intents = db.scalar(select(func.count(VisitorIntent.id)).join(TravelProduct).where(TravelProduct.hotel_id == hotel_id)) or 0
-    changes = list(db.scalars(select(ResourceChangeEvent).order_by(ResourceChangeEvent.created_at.desc()).limit(6)).all())
+    changes = list(db.scalars(select(ResourceChangeEvent).where(ResourceChangeEvent.hotel_id == hotel_id).order_by(ResourceChangeEvent.created_at.desc()).limit(6)).all())
     return {
         "hotel_id": hotel_id,
         "hotel_name": hotel.name if hotel else "StayScape",
@@ -120,7 +126,7 @@ async def update_room(room_id: int, request: RoomUpdate, db: Session = Depends(g
     if room.available_count < 0 or room.accounting_cost <= 0:
         raise AppError("VALIDATION_ERROR", "库存和核算成本必须合法")
     room.status = room_status(room.available_count, request.status or room.status)
-    event = ResourceChangeEvent(event_type="ROOM_INVENTORY_CHANGED", resource_type="ROOM", resource_id=room.id, old_value=old, new_value=room_snapshot(room), reason=request.reason, operator_role=user.role, operator_id=user.id)
+    event = ResourceChangeEvent(event_type="ROOM_INVENTORY_CHANGED", resource_type="ROOM", resource_id=room.id, hotel_id=hotel_id, old_value=old, new_value=room_snapshot(room), reason=request.reason, operator_role=user.role, operator_id=user.id)
     db.add(event)
     db.flush()
     affected = ProductService(db, hotel_id).recalculate_for_event(event)
@@ -163,7 +169,7 @@ async def update_service(service_id: int, request: ServiceUpdate, db: Session = 
         raise AppError("TIME_INVALID", "服务开始时间必须早于结束时间")
     service.status = service_status(service.available_quantity, service.status)
     event_type = "HOTEL_SERVICE_STATUS_CHANGED" if old["status"] != service.status else "HOTEL_SERVICE_QUANTITY_CHANGED"
-    event = ResourceChangeEvent(event_type=event_type, resource_type="HOTEL_SERVICE", resource_id=service.id, old_value=old, new_value=service_snapshot(service), reason=request.reason, operator_role=user.role, operator_id=user.id)
+    event = ResourceChangeEvent(event_type=event_type, resource_type="HOTEL_SERVICE", resource_id=service.id, hotel_id=hotel_id, old_value=old, new_value=service_snapshot(service), reason=request.reason, operator_role=user.role, operator_id=user.id)
     db.add(event)
     db.flush()
     affected = ProductService(db, hotel_id).recalculate_for_event(event)
@@ -208,7 +214,7 @@ async def toggle_package(
         raise AppError("NOT_FOUND", "合作资源不存在", status_code=404)
     old = {"package_enabled": resource.package_enabled, "status": resource.status}
     resource.package_enabled = enabled
-    event = ResourceChangeEvent(event_type="PARTNER_RESOURCE_STATUS_CHANGED", resource_type="PARTNER_RESOURCE", resource_id=resource.id, old_value=old, new_value={"package_enabled": resource.package_enabled, "status": resource.status}, reason="酒店调整组包许可", operator_role=user.role, operator_id=user.id)
+    event = ResourceChangeEvent(event_type="PARTNER_RESOURCE_STATUS_CHANGED", resource_type="PARTNER_RESOURCE", resource_id=resource.id, hotel_id=hotel_id, old_value=old, new_value={"package_enabled": resource.package_enabled, "status": resource.status}, reason="酒店调整组包许可", operator_role=user.role, operator_id=user.id)
     db.add(event)
     db.flush()
     affected = ProductService(db, hotel_id).recalculate_for_event(event)
@@ -294,6 +300,7 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
     service = ProductService(db, hotel_id)
     if weather_or_context_changed:
         service.recalculate_product(product)
+        reconcile_published_capacity(db, hotel_id, priority_product_id=product.id if product.status in {"ON_SALE", "LOW_STOCK"} else None)
     if request.regenerate_marketing or any(key in changed for key in ("theme", "weather", "target_crowd")):
         service.regenerate_marketing(product)
     db.commit()
@@ -332,9 +339,13 @@ def product_status(product_id: int, request: ProductStatusRequest, db: Session =
     product = get_product(db, product_id)
     if not product or product.hotel_id != hotel_id_for(db, user):
         raise AppError("NOT_FOUND", "产品不存在", status_code=404)
-    if request.status == "ON_SALE" and product.sale_quantity <= 0:
-        raise AppError("CAPACITY_INSUFFICIENT", "库存为0的产品不能发布", field="status")
-    product.status = request.status
+    if request.status == "ON_SALE":
+        ProductService(db, hotel_id_for(db, user)).ensure_publish_capacity(product)
+        if product.sale_quantity <= 0:
+            raise AppError("CAPACITY_INSUFFICIENT", "库存为0的产品不能发布", field="status")
+        product.status = "LOW_STOCK" if product.sale_quantity <= 2 else "ON_SALE"
+    else:
+        product.status = request.status
     db.commit()
     return product_to_dict(product)
 
@@ -351,13 +362,15 @@ def product_adjustments(product_id: int, db: Session = Depends(get_db), user: Us
 def changes(db: Session = Depends(get_db), user: User = Depends(get_hotel_user), limit: int = Query(default=50, ge=1, le=200)):
     hotel_id = hotel_id_for(db, user)
     resource_ids = [item.id for item in list_partner_resources(db, hotel_id)]
-    items = list(db.scalars(select(ResourceChangeEvent).where(or_(ResourceChangeEvent.resource_type.in_(["ROOM", "HOTEL_SERVICE"]), (ResourceChangeEvent.resource_type == "PARTNER_RESOURCE") & ResourceChangeEvent.resource_id.in_(resource_ids))).order_by(ResourceChangeEvent.created_at.desc()).limit(limit)).all())
+    items = list(db.scalars(select(ResourceChangeEvent).where(ResourceChangeEvent.hotel_id == hotel_id).order_by(ResourceChangeEvent.created_at.desc()).limit(limit)).all())
     return [{"id": item.id, "event_type": item.event_type, "resource_type": item.resource_type, "resource_id": item.resource_id, "old_value": item.old_value, "new_value": item.new_value, "reason": item.reason, "processed": item.processed, "processing_result": item.processing_result, "created_at": item.created_at} for item in items]
 
 
 @router.get("/intents")
 def intents(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     hotel_id = hotel_id_for(db, user)
+    sweep_expired_intents(db, hotel_id)
+    db.commit()
     items = list(
         db.scalars(
             select(VisitorIntent)
@@ -389,6 +402,10 @@ def intents(db: Session = Depends(get_db), user: User = Depends(get_hotel_user))
             "other_requirements": item.other_requirements,
             "recommendation_result": item.recommendation_result,
             "intent_status": item.intent_status,
+            "reservation_status": item.reservation_status,
+            "reserved_until": item.reserved_until,
+            "released_at": item.released_at,
+            "confirmed_at": item.confirmed_at,
             "contact_name": item.contact_name,
             "contact_phone": item.contact_phone,
             "created_at": item.created_at,
@@ -397,7 +414,39 @@ def intents(db: Session = Depends(get_db), user: User = Depends(get_hotel_user))
     ]
 
 
+@router.patch("/intents/{intent_id}")
+async def update_intent_status(intent_id: int, request: VisitorIntentStatusUpdate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    sweep_expired_intents(db, hotel_id)
+    intent = db.scalar(
+        select(VisitorIntent)
+        .join(TravelProduct)
+        .options(selectinload(VisitorIntent.product))
+        .where(VisitorIntent.id == intent_id, TravelProduct.hotel_id == hotel_id)
+        .with_for_update()
+    )
+    if not intent:
+        raise AppError("NOT_FOUND", "预约意向不存在", status_code=404)
+    if request.status == "CONFIRMED":
+        if intent.reservation_status not in {"HELD", "CONFIRMED"}:
+            raise AppError("INTENT_NOT_ACTIVE", "该预约意向已释放或过期，不能确认")
+        intent.reservation_status = "CONFIRMED"
+        intent.intent_status = "CONFIRMED"
+        intent.confirmed_at = datetime.now(timezone.utc)
+        message = "预约意向已确认，底层资源继续保持占用"
+    else:
+        if intent.reservation_status in {"HELD", "CONFIRMED"}:
+            release_intent_inventory(db, intent)
+        intent.reservation_status = "RELEASED"
+        intent.intent_status = "CANCELLED"
+        message = "预约意向已取消，底层房量、服务和合作名额已释放"
+    db.commit()
+    await manager.broadcast(hotel_id, {"type": "VISITOR_INTENT_UPDATED", "title": "预约意向状态更新", "message": message, "affectedProducts": [{"product_id": intent.product_id, "new_quantity": intent.product.sale_quantity if intent.product else None}]})
+    return {"id": intent.id, "intent_status": intent.intent_status, "reservation_status": intent.reservation_status, "message": message}
+
+
 @router.get("/skill-logs")
 def skill_logs(db: Session = Depends(get_db), user: User = Depends(get_hotel_user), limit: int = Query(default=50, ge=1, le=200)):
-    items = list(db.scalars(select(SkillCallLog).order_by(SkillCallLog.created_at.desc()).limit(limit)).all())
+    hotel_id = hotel_id_for(db, user)
+    items = list(db.scalars(select(SkillCallLog).where(SkillCallLog.hotel_id == hotel_id).order_by(SkillCallLog.created_at.desc()).limit(limit)).all())
     return items

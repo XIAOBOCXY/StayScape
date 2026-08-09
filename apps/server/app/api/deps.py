@@ -42,6 +42,11 @@ def resolve_hotel_id(db: Session, user: User) -> int:
         if not merchant:
             raise AppError("HOTEL_NOT_FOUND", "当前商户未绑定酒店", status_code=404)
         return merchant.hotel_id
+    if user.hotel_id:
+        hotel = db.get(Hotel, user.hotel_id)
+        if hotel and hotel.status == "ACTIVE":
+            return hotel.id
+        raise AppError("HOTEL_NOT_FOUND", "当前账号绑定的酒店不存在或已停用", status_code=404)
     hotel = db.scalar(select(Hotel).order_by(Hotel.id))
     if not hotel:
         raise AppError("HOTEL_NOT_FOUND", "尚未初始化演示酒店", status_code=404)
@@ -54,4 +59,3 @@ def get_hotel_user(user: User = Depends(require_roles("HOTEL"))) -> User:
 
 def get_merchant_user(user: User = Depends(require_roles("MERCHANT"))) -> User:
     return user
-

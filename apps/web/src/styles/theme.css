@@ -21,6 +21,23 @@
 .section-title h2 { position: relative; }
 .section-title h2::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 8px 3px 0; border-radius: 50%; background: var(--gold); }
 .visitor-hero { box-shadow: 0 22px 60px rgba(30,72,64,.1); }
+
+/* Shared modal and submit surface: one visual language across hotel, merchant and visitor flows. */
+.el-overlay { background: rgba(16,47,45,.48); backdrop-filter: blur(7px); }
+.el-dialog, .el-drawer { background: #fffdf8; border: 1px solid rgba(15,118,110,.14); border-radius: 22px; box-shadow: 0 28px 90px rgba(16,47,45,.22); overflow: hidden; }
+.el-dialog__header, .el-drawer__header { margin: 0; padding: 23px 26px 15px; border-bottom: 1px solid #e8eee9; }
+.el-dialog__title, .el-drawer__title { color: var(--ink); font: 600 20px Georgia, "Songti SC", serif; }
+.el-dialog__body, .el-drawer__body { padding: 22px 26px; color: var(--ink); }
+.el-dialog__footer { padding: 14px 26px 22px; border-top: 1px solid #e8eee9; }
+.el-form-item__label { color: #526b63; font-size: 13px; font-weight: 650; }
+.el-input__wrapper, .el-textarea__inner, .el-select__wrapper, .el-date-editor.el-input__wrapper { background: #fbf8f1; border-radius: 12px; box-shadow: 0 0 0 1px #dce9e3 inset; }
+.el-input__wrapper:hover, .el-textarea__inner:hover, .el-select__wrapper:hover, .el-date-editor.el-input__wrapper:hover { box-shadow: 0 0 0 1px #9fcdbd inset; }
+.el-button { border-radius: 999px; }
+.el-button--primary { background: var(--teal-dark); border-color: var(--teal-dark); }
+.el-button--primary:hover, .el-button--primary:focus { background: #0f766e; border-color: #0f766e; }
+.el-message-box { border: 1px solid rgba(15,118,110,.14); border-radius: 18px; background: #fffdf8; box-shadow: 0 24px 80px rgba(16,47,45,.2); }
+.el-message-box__title { font: 600 18px Georgia, "Songti SC", serif; color: var(--ink); }
+.el-popover.el-popper { border: 1px solid #dce9e3; border-radius: 14px; box-shadow: 0 16px 45px rgba(30,72,64,.14); }
 .visitor-hero-actions .el-button, .visitor-hero-actions .van-button { border-radius: 12px; }
 .el-button { min-height: 36px; border-radius: 10px; font-weight: 600; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; }
 .el-button:hover:not(.is-disabled) { transform: translateY(-1px); }

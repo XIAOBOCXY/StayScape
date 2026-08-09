@@ -25,6 +25,7 @@ export const hotelApi = {
   productStatus: (id: number, status: string) => api.patch<TravelProduct>(`/hotel/products/${id}/status`, { status }),
   changes: () => api.get<Array<Record<string, unknown>>>('/hotel/changes'),
   intents: () => api.get<Array<Record<string, unknown>>>('/hotel/intents'),
+  updateIntent: (id: number, status: 'CONFIRMED' | 'CANCELLED') => api.patch<Record<string, unknown>>(`/hotel/intents/${id}`, { status }),
   skillLogs: () => api.get<Array<Record<string, unknown>>>('/hotel/skill-logs')
 }
 

@@ -18,6 +18,7 @@ from ..rules.product_validation_rule import PackageValidation, validate_package
 from ..rules.time_rule import intervals_overlap, validate_interval
 from ..rules.weather_rule import is_weather_supported
 from ..schemas.products import GenerateProductRequest
+from .inventory_service import ensure_publish_capacity, reconcile_published_capacity
 
 
 DEFAULT_QUANTITIES = {"BREAKFAST": 3, "LATE_CHECKOUT": 1}
@@ -48,7 +49,10 @@ class ProductService:
     def __init__(self, db: Session, hotel_id: int, orchestrator: AgentOrchestrator | None = None) -> None:
         self.db = db
         self.hotel_id = hotel_id
-        self.orchestrator = orchestrator or AgentOrchestrator(db)
+        self.orchestrator = orchestrator or AgentOrchestrator(db, hotel_id=hotel_id)
+
+    def ensure_publish_capacity(self, product: TravelProduct) -> list[dict[str, Any]]:
+        return ensure_publish_capacity(self.db, product)
 
     def _room(self, request: GenerateProductRequest) -> RoomInventory:
         query = select(RoomInventory).where(RoomInventory.hotel_id == self.hotel_id, RoomInventory.available_date == request.target_date)
@@ -97,6 +101,7 @@ class ProductService:
         services = list(self.db.scalars(select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.available_date == request.target_date)).all())
         partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date)).unique().all())
         return {
+            "hotel_id": self.hotel_id,
             "target_date": request.target_date.isoformat(),
             "weather": request.weather,
             "target_crowd": request.target_crowd,
@@ -178,6 +183,9 @@ class ProductService:
             suggested_price=validation.pricing.suggested_price,
             gross_profit=validation.pricing.gross_profit,
             gross_margin=validation.pricing.gross_margin,
+            minimum_gross_margin_requirement=request.minimum_gross_margin,
+            visitor_budget_limit=request.visitor_budget,
+            price_anchor=request.preferred_price,
             bottleneck_resource=validation.capacity.bottleneck_resource,
             marketing_title=output.marketing_title,
             marketing_content=output.marketing_content,
@@ -210,8 +218,9 @@ class ProductService:
             theme=product.theme,
             room_inventory_id=product.room_inventory_id,
             resource_selections=selections,
-            preferred_price=product.suggested_price,
-            visitor_budget=max(Decimal("700"), product.suggested_price),
+            preferred_price=product.price_anchor,
+            visitor_budget=product.visitor_budget_limit,
+            minimum_gross_margin=product.minimum_gross_margin_requirement,
             variant_count=1,
             creative_direction=creative_direction,
         )
@@ -254,16 +263,17 @@ class ProductService:
     def recalculate_for_event(self, event: ResourceChangeEvent) -> list[dict[str, Any]]:
         references: list[TravelProduct] = []
         if event.resource_type == "PARTNER_RESOURCE":
-            references = products_referencing(self.db, "PARTNER_RESOURCE", event.resource_id)
+            references = [item for item in products_referencing(self.db, "PARTNER_RESOURCE", event.resource_id) if item.hotel_id == self.hotel_id]
         elif event.resource_type == "HOTEL_SERVICE":
-            references = products_referencing(self.db, "HOTEL_SERVICE", event.resource_id)
+            references = [item for item in products_referencing(self.db, "HOTEL_SERVICE", event.resource_id) if item.hotel_id == self.hotel_id]
         elif event.resource_type == "ROOM":
-            references = list(self.db.scalars(select(TravelProduct).options(selectinload(TravelProduct.resources), selectinload(TravelProduct.adjustments)).where(TravelProduct.room_inventory_id == event.resource_id)).unique().all())
+            references = list(self.db.scalars(select(TravelProduct).options(selectinload(TravelProduct.resources), selectinload(TravelProduct.adjustments)).where(TravelProduct.room_inventory_id == event.resource_id, TravelProduct.hotel_id == self.hotel_id)).unique().all())
         results = []
         for product in references:
             result = self.recalculate_product(product, event)
             results.append(result)
         event.processed = True
+        results.extend(reconcile_published_capacity(self.db, self.hotel_id, event=event))
         event.processing_result = {"affectedProducts": json_safe(results)}
         return results
 
@@ -378,7 +388,14 @@ class ProductService:
                 reason = replacement_message
             return self._record_adjustment(product, event, old_quantity, old_price, "PAUSE_PRODUCT", reason, replacement_id)
         try:
-            validation = validate_package(capacity_inputs=capacity_inputs, unit_cost=unit_cost, room_minimum_price=room.minimum_price, minimum_gross_margin=Decimal("0.20"), visitor_budget=max(Decimal("700"), old_price), preferred_price=old_price)
+            validation = validate_package(
+                capacity_inputs=capacity_inputs,
+                unit_cost=unit_cost,
+                room_minimum_price=room.minimum_price,
+                minimum_gross_margin=product.minimum_gross_margin_requirement,
+                visitor_budget=product.visitor_budget_limit,
+                preferred_price=product.price_anchor,
+            )
         except AppError as exc:
             product.sale_quantity = 0
             product.status = "PAUSED"
@@ -420,7 +437,14 @@ class ProductService:
                 continue
             try:
                 validate_interval(candidate.start_time, candidate.end_time, candidate.resource_name)
-                validate = validate_package(capacity_inputs=existing_capacity + [CapacityInput(candidate.resource_name, candidate.remaining_capacity, row.quantity_per_package)], unit_cost=existing_cost + candidate.settlement_price * row.quantity_per_package, room_minimum_price=room.minimum_price, minimum_gross_margin=Decimal("0.20"), visitor_budget=max(Decimal("700"), product.suggested_price), preferred_price=product.suggested_price)
+                validate = validate_package(
+                    capacity_inputs=existing_capacity + [CapacityInput(candidate.resource_name, candidate.remaining_capacity, row.quantity_per_package)],
+                    unit_cost=existing_cost + candidate.settlement_price * row.quantity_per_package,
+                    room_minimum_price=room.minimum_price,
+                    minimum_gross_margin=product.minimum_gross_margin_requirement,
+                    visitor_budget=product.visitor_budget_limit,
+                    preferred_price=product.price_anchor,
+                )
                 if validate.capacity.sale_quantity > 0:
                     return candidate
             except AppError:

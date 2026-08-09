@@ -261,3 +261,88 @@ def test_natural_language_interpretation_returns_confirmable_requirement_card(cl
     assert data["interpreted_needs"]["child_ages"] == [6, 9]
     assert "西湖" in data["interpreted_needs"]["requested_places"]
     assert "花生" in data["interpreted_needs"]["allergy_information"]
+
+
+def test_intent_reserves_and_cancellation_releases_physical_inventory(client, hotel_token):
+    request, craft = generate_request(client, hotel_token)
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    product = generated.json()["product"]
+    client.patch(f"/api/v1/hotel/products/{product['id']}/status", headers=auth(hotel_token), json={"status": "ON_SALE"})
+    rooms_before = client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()
+    services_before = client.get("/api/v1/hotel/services", headers=auth(hotel_token)).json()
+    resources_before = client.get("/api/v1/hotel/resources", headers=auth(hotel_token)).json()
+    room = next(item for item in rooms_before if item["id"] == request["room_inventory_id"])
+    breakfast = next(item for item in services_before if item["service_type"] == "BREAKFAST")
+    late = next(item for item in services_before if item["service_type"] == "LATE_CHECKOUT")
+    partner = next(item for item in resources_before if item["id"] == craft["id"])
+    intent = client.post("/api/v1/visitor/intents", json={"product_id": product["id"], "adult_count": 2, "child_count": 1, "child_ages": [6], "budget": "700", "interests": ["手工"], "contact_name": "李四", "contact_phone": "13900139000"})
+    assert intent.status_code == 200, intent.text
+    assert intent.json()["reservation_status"] == "HELD"
+    assert next(item for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json() if item["id"] == room["id"])["available_count"] == room["available_count"] - 1
+    assert next(item for item in client.get("/api/v1/hotel/services", headers=auth(hotel_token)).json() if item["id"] == breakfast["id"])["available_quantity"] == breakfast["available_quantity"] - 3
+    assert next(item for item in client.get("/api/v1/hotel/services", headers=auth(hotel_token)).json() if item["id"] == late["id"])["available_quantity"] == late["available_quantity"] - 1
+    assert next(item for item in client.get("/api/v1/hotel/resources", headers=auth(hotel_token)).json() if item["id"] == partner["id"])["remaining_capacity"] == partner["remaining_capacity"] - 3
+    cancelled = client.post(f"/api/v1/visitor/intents/{intent.json()['id']}/cancel", json={"contact_phone": "13900139000"})
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["reservation_status"] == "RELEASED"
+    assert next(item for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json() if item["id"] == room["id"])["available_count"] == room["available_count"]
+    assert next(item for item in client.get("/api/v1/hotel/resources", headers=auth(hotel_token)).json() if item["id"] == partner["id"])["remaining_capacity"] == partner["remaining_capacity"]
+
+
+def test_recalculation_uses_original_margin_policy(client, hotel_token, merchant_token):
+    request, craft = generate_request(client, hotel_token)
+    request["minimum_gross_margin"] = "0.30"
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    assert generated.status_code == 200, generated.text
+    product = generated.json()["product"]
+    assert float(product["minimum_gross_margin_requirement"]) == 0.30
+    changed = client.patch(f"/api/v1/merchant/resources/{craft['id']}", headers=auth(merchant_token), json={"remaining_capacity": 4, "reason": "验证原始毛利策略"})
+    assert changed.status_code == 200, changed.text
+    refreshed = client.get(f"/api/v1/hotel/products/{product['id']}", headers=auth(hotel_token)).json()
+    assert refreshed["sale_quantity"] == 1
+    assert refreshed["minimum_allowed_price"] == "650.00"
+    assert float(refreshed["gross_margin"]) >= 0.30
+
+
+def test_publishing_shared_candidates_cannot_overcommit_source_inventory(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    request["variant_count"] = 2
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    assert generated.status_code == 200, generated.text
+    products = generated.json()["products"]
+    first = client.patch(f"/api/v1/hotel/products/{products[0]['id']}/status", headers=auth(hotel_token), json={"status": "ON_SALE"})
+    assert first.status_code == 200, first.text
+    second = client.patch(f"/api/v1/hotel/products/{products[1]['id']}/status", headers=auth(hotel_token), json={"status": "ON_SALE"})
+    assert second.status_code == 400, second.text
+    assert second.json()["error"]["code"] == "CAPACITY_INSUFFICIENT"
+
+
+def test_recommendation_enforces_room_capacity_arrival_and_score_ceiling(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    product = generated.json()["product"]
+    client.patch(f"/api/v1/hotel/products/{product['id']}/status", headers=auth(hotel_token), json={"status": "ON_SALE"})
+    over_capacity = client.post("/api/v1/visitor/recommend", json={"target_date": request["target_date"], "weather": "RAIN", "adult_count": 3, "child_count": 1, "child_ages": [6], "budget": "700", "interests": ["手工"]})
+    assert over_capacity.status_code == 200 and over_capacity.json()["results"] == []
+    too_late = client.post("/api/v1/visitor/recommend", json={"target_date": request["target_date"], "weather": "RAIN", "adult_count": 2, "child_count": 1, "child_ages": [6], "budget": "700", "interests": ["手工"], "arrival_time": "17:00"})
+    assert too_late.status_code == 200 and too_late.json()["results"] == []
+    valid = client.post("/api/v1/visitor/recommend", json={"target_date": request["target_date"], "weather": "RAIN", "adult_count": 2, "child_count": 1, "child_ages": [6], "budget": "700", "interests": ["手工"], "arrival_time": "15:00"})
+    assert valid.status_code == 200 and valid.json()["results"]
+    assert all(item["score"] <= 100 for item in valid.json()["results"])
+
+
+def test_confirmed_intent_cancellation_releases_reserved_inventory(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    product = generated.json()["product"]
+    client.patch(f"/api/v1/hotel/products/{product['id']}/status", headers=auth(hotel_token), json={"status": "ON_SALE"})
+    room_before = next(item for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json() if item["id"] == request["room_inventory_id"])
+    intent = client.post("/api/v1/visitor/intents", json={"product_id": product["id"], "adult_count": 2, "child_count": 1, "child_ages": [6], "budget": "700", "contact_name": "Confirmed Guest", "contact_phone": "13700137000"})
+    assert intent.status_code == 200, intent.text
+    confirmed = client.patch(f"/api/v1/hotel/intents/{intent.json()['id']}", headers=auth(hotel_token), json={"status": "CONFIRMED"})
+    assert confirmed.status_code == 200, confirmed.text
+    cancelled = client.post(f"/api/v1/visitor/intents/{intent.json()['id']}/cancel", json={"contact_phone": "13700137000"})
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["reservation_status"] == "RELEASED"
+    room_after = next(item for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json() if item["id"] == room_before["id"])
+    assert room_after["available_count"] == room_before["available_count"]

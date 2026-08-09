@@ -5,12 +5,13 @@ from ...config import settings
 from ...core.exceptions import AppError
 from ...db import get_db
 from ...seed import seed_demo
+from ..deps import get_hotel_user
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
 
 @router.post("/reset")
-def reset_demo(db: Session = Depends(get_db)):
+def reset_demo(db: Session = Depends(get_db), _user=Depends(get_hotel_user)):
     if settings.app_env.lower() == "production":
         raise AppError("FORBIDDEN", "生产环境不允许重置演示数据", status_code=403)
     result = seed_demo(db, reset=True)
@@ -18,9 +19,8 @@ def reset_demo(db: Session = Depends(get_db)):
 
 
 @router.post("/seed")
-def seed(db: Session = Depends(get_db)):
+def seed(db: Session = Depends(get_db), _user=Depends(get_hotel_user)):
     if settings.app_env.lower() == "production":
         raise AppError("FORBIDDEN", "生产环境不允许写入演示数据", status_code=403)
     result = seed_demo(db, reset=False)
     return {"message": "演示数据已准备", **result}
-

@@ -29,6 +29,8 @@ class ProductAgentOutput(BaseModel):
 
 
 class VisitorAgentOutput(BaseModel):
+    answer: str = ""
+    safety_notes: str = ""
     selected_product_ids: list[int] = Field(default_factory=list)
     reasons: dict[str, str] = Field(default_factory=dict)
     schedule_notes: dict[str, list[dict[str, str]]] = Field(default_factory=dict)

@@ -117,6 +117,9 @@ export interface TravelProduct {
   suggested_price: string
   gross_profit: string
   gross_margin: string
+  minimum_gross_margin_requirement?: string
+  visitor_budget_limit?: string
+  price_anchor?: string
   bottleneck_resource?: string
   marketing_title: string
   marketing_content: string

@@ -48,6 +48,9 @@ def seed_demo(db: Session, *, reset: bool = False) -> dict:
     if reset:
         clear_all(db)
         db.commit()
+        # Bulk deletes bypass the identity map; clear loaded auth entities
+        # before inserting demo rows with the same primary keys.
+        db.expunge_all()
     existing = db.query(Hotel).first()
     if existing:
         target_date = db.query(RoomInventory).order_by(RoomInventory.available_date).first().available_date
@@ -64,7 +67,7 @@ def seed_demo(db: Session, *, reset: bool = False) -> dict:
     db.add(hotel)
     db.flush()
 
-    hotel_user = User(username="hotel_demo", password_hash=hash_password(DEMO_PASSWORD), role="HOTEL")
+    hotel_user = User(username="hotel_demo", password_hash=hash_password(DEMO_PASSWORD), role="HOTEL", hotel_id=hotel.id)
     db.add(hotel_user)
     merchants_data = [
         ("merchant_craft", "杭州室内非遗工坊", "INTANGIBLE_CULTURE", "周老师"),
@@ -120,4 +123,3 @@ def seed_demo(db: Session, *, reset: bool = False) -> dict:
     )
     db.commit()
     return {"hotel_id": hotel.id, "target_date": target_date.isoformat(), "created": True}
-

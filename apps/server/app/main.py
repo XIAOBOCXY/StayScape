@@ -10,9 +10,11 @@ from .api.v1.router import api_router
 from .api.websocket_manager import manager
 from .config import settings
 from .core.exceptions import AppError
+from .core.security import decode_access_token
 from .db import SessionLocal, engine
-from .models import Base
+from .models import Base, User
 from .seed import seed_demo
+from .api.deps import resolve_hotel_id
 
 
 @asynccontextmanager
@@ -55,6 +57,22 @@ def create_app() -> FastAPI:
 
     @application.websocket("/ws/hotel/{hotel_id}")
     async def hotel_websocket(websocket: WebSocket, hotel_id: int):
+        token = websocket.query_params.get("token")
+        db = SessionLocal()
+        try:
+            if not token:
+                await websocket.close(code=1008)
+                return
+            payload = decode_access_token(token)
+            user = db.get(User, int(payload.get("user_id")))
+            if not user or user.status != "ACTIVE" or user.role != "HOTEL" or resolve_hotel_id(db, user) != hotel_id:
+                await websocket.close(code=1008)
+                return
+        except Exception:
+            await websocket.close(code=1008)
+            return
+        finally:
+            db.close()
         await manager.connect(hotel_id, websocket)
         try:
             while True:
@@ -68,4 +86,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

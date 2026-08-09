@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     openclaw_base_url: str = ""
     openclaw_api_key: str = ""
     openclaw_model: str = "openclaw/default"
+    openclaw_transport: str = "gateway_tools"
+    openclaw_invoke_path: str = "/tools/invoke"
+    openclaw_tool_name: str = "skill_invoke"
+    openclaw_session_key: str = "main"
+    openclaw_agent_id: str = ""
+    openclaw_legacy_fallback: bool = True
+    visitor_intent_hold_minutes: int = 30
 
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
     vite_api_base_url: str = "/api/v1"

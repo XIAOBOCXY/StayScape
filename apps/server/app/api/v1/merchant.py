@@ -94,7 +94,7 @@ async def update_resource(resource_id: int, request: PartnerResourceUpdate, db: 
         event_type = "PARTNER_PRICE_CHANGED"
     else:
         event_type = "PARTNER_RESOURCE_STATUS_CHANGED"
-    event = ResourceChangeEvent(event_type=event_type, resource_type="PARTNER_RESOURCE", resource_id=resource.id, old_value=old, new_value=snapshot(resource), reason=request.reason, operator_role=user.role, operator_id=user.id)
+    event = ResourceChangeEvent(event_type=event_type, resource_type="PARTNER_RESOURCE", resource_id=resource.id, hotel_id=merchant.hotel_id, old_value=old, new_value=snapshot(resource), reason=request.reason, operator_role=user.role, operator_id=user.id)
     db.add(event)
     db.flush()
     affected = ProductService(db, merchant.hotel_id).recalculate_for_event(event)

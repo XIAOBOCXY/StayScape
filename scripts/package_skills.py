@@ -4,6 +4,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ["stayscape-product-generator", "stayscape-visitor-matcher"]
+SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".crt"}
+SENSITIVE_NAMES = {"credentials.json", "secrets.json", "service-account.json"}
+SECRET_ASSIGNMENT = re.compile(r"(?im)^\s*(?:api[_-]?key|secret|access[_-]?token|password)\s*[:=]\s*['\"]?(?!your[-_ ]|change[-_ ]|example|placeholder|none|null)[^\s'\"]{8,}")
 
 
 def validate_skill(path: Path) -> None:
@@ -19,6 +22,30 @@ def validate_skill(path: Path) -> None:
         raise RuntimeError(f"invalid skill name: {name}")
 
 
+def safe_files(source: Path):
+    for file in sorted(source.rglob("*")):
+        if not file.is_file():
+            continue
+        relative = file.relative_to(source)
+        parts = {part.lower() for part in relative.parts}
+        filename = file.name.lower()
+        if parts & {"__pycache__", "node_modules", ".venv", ".git", ".codex"}:
+            continue
+        if filename == ".env" or (filename.startswith(".env.") and filename != ".env.example"):
+            continue
+        if filename in SENSITIVE_NAMES or file.suffix.lower() in SENSITIVE_SUFFIXES:
+            continue
+        try:
+            text = file.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            text = ""
+        if "-----BEGIN " in text and "PRIVATE KEY-----" in text:
+            raise RuntimeError(f"private key material found in {relative}")
+        if SECRET_ASSIGNMENT.search(text):
+            raise RuntimeError(f"possible secret assignment found in {relative}; use environment variables")
+        yield file
+
+
 def package(name: str) -> Path:
     source = ROOT / "skills" / name
     validate_skill(source)
@@ -26,9 +53,7 @@ def package(name: str) -> Path:
     output_dir.mkdir(exist_ok=True)
     output = output_dir / f"{name}.zip"
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        for file in sorted(source.rglob("*")):
-            if not file.is_file() or any(part in {"__pycache__", "node_modules", ".venv"} for part in file.parts):
-                continue
+        for file in safe_files(source):
             archive.write(file, file.relative_to(source).as_posix())
     with zipfile.ZipFile(output) as archive:
         names = set(archive.namelist())
@@ -42,4 +67,3 @@ def package(name: str) -> Path:
 if __name__ == "__main__":
     for skill in SKILLS:
         print(package(skill))
-

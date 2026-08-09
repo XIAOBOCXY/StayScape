@@ -16,8 +16,10 @@ class User(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
+    hotel_id: Mapped[int | None] = mapped_column(ForeignKey("hotels.id"), nullable=True, index=True)
 
     merchant: Mapped["Merchant | None"] = relationship(back_populates="user", uselist=False)
+    hotel: Mapped["Hotel | None"] = relationship(back_populates="users", foreign_keys=[hotel_id])
 
 
 class Hotel(TimestampMixin, Base):
@@ -35,6 +37,7 @@ class Hotel(TimestampMixin, Base):
     services: Mapped[list["HotelService"]] = relationship(back_populates="hotel", cascade="all, delete-orphan")
     merchants: Mapped[list["Merchant"]] = relationship(back_populates="hotel", cascade="all, delete-orphan")
     products: Mapped[list["TravelProduct"]] = relationship(back_populates="hotel", cascade="all, delete-orphan")
+    users: Mapped[list[User]] = relationship(back_populates="hotel", foreign_keys="User.hotel_id")
 
 
 class Merchant(TimestampMixin, Base):
@@ -154,6 +157,9 @@ class TravelProduct(TimestampMixin, Base):
     suggested_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
     gross_profit: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
     gross_margin: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, default=Decimal("0"))
+    minimum_gross_margin_requirement: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, default=Decimal("0.20"))
+    visitor_budget_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("700"))
+    price_anchor: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("599"))
     bottleneck_resource: Mapped[str | None] = mapped_column(String(160), nullable=True)
     marketing_title: Mapped[str] = mapped_column(String(220), default="", nullable=False)
     marketing_content: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -202,6 +208,11 @@ class VisitorIntent(TimestampMixin, Base):
     other_requirements: Mapped[str] = mapped_column(Text, default="", nullable=False)
     recommendation_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     intent_status: Mapped[str] = mapped_column(String(20), default="NEW", nullable=False)
+    reservation_status: Mapped[str] = mapped_column(String(20), default="HELD", nullable=False)
+    reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    allocation_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     contact_name: Mapped[str] = mapped_column(String(80), nullable=False)
     contact_phone: Mapped[str] = mapped_column(String(40), nullable=False)
 
@@ -220,6 +231,7 @@ class ResourceChangeEvent(TimestampMixin, Base):
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     operator_role: Mapped[str] = mapped_column(String(20), nullable=False)
     operator_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hotel_id: Mapped[int | None] = mapped_column(ForeignKey("hotels.id"), nullable=True, index=True)
     processed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     processing_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
@@ -257,3 +269,4 @@ class SkillCallLog(TimestampMixin, Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    hotel_id: Mapped[int | None] = mapped_column(ForeignKey("hotels.id"), nullable=True, index=True)

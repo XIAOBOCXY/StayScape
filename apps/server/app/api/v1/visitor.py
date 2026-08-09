@@ -1,5 +1,5 @@
 import re
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -8,12 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ...agent import AgentOrchestrator
+from ...config import settings
 from ...core.exceptions import AppError
 from ...db import get_db
-from ...models import HotelService, PartnerResource, ProductAdjustmentRecord, ProductResource, PublicResource, TravelProduct, VisitorIntent
+from ...models import HotelService, PartnerResource, ProductAdjustmentRecord, ProductResource, PublicResource, ResourceChangeEvent, RoomInventory, TravelProduct, VisitorIntent
 from ...repositories.product_repository import get_product, list_products
 from ...schemas.products import ProductRead
-from ...schemas.visitor import VisitorIntentCreate, VisitorInterpretRequest, VisitorInterpretResponse, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
+from ...schemas.visitor import VisitorIntentCancelRequest, VisitorIntentCreate, VisitorInterpretRequest, VisitorInterpretResponse, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
+from ...services.inventory_service import reconcile_published_capacity, release_intent_inventory, reserve_product_inventory, sweep_expired_intents
 from ...services.serializers import product_to_dict
 from ...rules.availability_rule import tokens
 from ...rules.crowd_rule import crowd_supported
@@ -102,6 +104,12 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     places = [word for word in ("西湖", "运河", "拱宸桥", "茶园", "博物馆", "宋城", "灵隐寺") if word in text]
     if places:
         updates["requested_places"] = list(dict.fromkeys([*request.requested_places, *places]))
+    arrival_match = re.search(r"(?:下午|晚上|早上|上午)?\s*([一二两三四五六七八九十\d]{1,2})\s*点", text)
+    if arrival_match and request.arrival_time is None:
+        hour = number_value(arrival_match.group(1), 15)
+        if "下午" in text or "晚上" in text:
+            hour = hour + 12 if hour < 12 else hour
+        updates["arrival_time"] = time(min(hour, 23), 0)
     effective = request.model_copy(update=updates)
     interpreted = {
         "natural_language": text,
@@ -159,12 +167,17 @@ def product_partner_rows(db: Session, product: TravelProduct) -> list[tuple[Prod
 def matches_conditions(db: Session, product: TravelProduct, request: VisitorRecommendRequest) -> tuple[bool, bool, bool, int]:
     children_match = True
     weather_match = True
+    room = db.get(RoomInventory, product.room_inventory_id)
+    if not room or request.adult_count + request.child_count > room.max_guests:
+        children_match = False
     for row, resource in product_partner_rows(db, product):
         if not is_weather_supported(resource.weather_tags, request.weather):
             weather_match = False
+        if request.arrival_time and resource.start_time and resource.start_time < request.arrival_time:
+            children_match = False
         if not crowd_supported(resource.suitable_crowds, product.target_crowd, request.child_ages, resource.minimum_age, resource.maximum_age):
             children_match = False
-    if request.child_count and request.child_ages and len(request.child_ages) != request.child_count:
+    if request.child_count and len(request.child_ages) != request.child_count:
         children_match = False
     searchable = f"{product.product_name} {product.theme} {product.marketing_content}"
     for row, resource in product_partner_rows(db, product):
@@ -177,15 +190,16 @@ def matches_conditions(db: Session, product: TravelProduct, request: VisitorReco
 
 
 def build_schedule(db: Session, product: TravelProduct, arrival: time | None = None, preferred: time | None = None) -> list[dict[str, str]]:
-    schedule = [{"time": "15:00", "title": "办理入住", "description": "酒店前台办理入住，领取套餐时间卡"}]
+    check_in = max(time(15, 0), arrival or time(15, 0))
+    schedule = [{"time": check_in.strftime("%H:%M"), "title": "办理入住", "description": "酒店前台办理入住，领取套餐时间卡"}]
     for row in product.resources:
         if row.resource_type == "HOTEL_SERVICE":
             service = db.get(HotelService, row.resource_id)
-            if service and service.start_time:
+            if service and service.start_time and (not arrival or service.start_time >= arrival):
                 schedule.append({"time": service.start_time.strftime("%H:%M"), "title": service.service_name, "description": f"每套使用{row.quantity_per_package}份"})
         elif row.resource_type == "PARTNER_RESOURCE":
             resource = db.get(PartnerResource, row.resource_id)
-            if resource and resource.start_time:
+            if resource and resource.start_time and (not arrival or resource.start_time >= arrival):
                 schedule.append({"time": resource.start_time.strftime("%H:%M"), "title": resource.resource_name, "description": f"地址：{resource.address}"})
     schedule.sort(key=lambda item: item["time"])
     if preferred:
@@ -195,11 +209,15 @@ def build_schedule(db: Session, product: TravelProduct, arrival: time | None = N
 
 @router.get("/products", response_model=list[ProductRead])
 def products(query: VisitorProductQuery = Depends(), db: Session = Depends(get_db)):
+    if sweep_expired_intents(db):
+        db.commit()
     return [product_to_dict(item) for item in public_items(db, query)]
 
 
 @router.get("/products/{product_id}", response_model=ProductRead)
 def product_detail(product_id: int, db: Session = Depends(get_db)):
+    if sweep_expired_intents(db):
+        db.commit()
     product = get_product(db, product_id)
     if not product or product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0:
         raise AppError("NOT_FOUND", "当前套餐不存在或已下架", status_code=404)
@@ -213,28 +231,30 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
         product = None
     payload = {
         "question": request.question,
+        "natural_language": request.natural_language,
         "weather": request.weather,
         "products": [{"id": product.id, "product_name": product.product_name, "sale_quantity": product.sale_quantity}] if product else [],
         "allergy_information": "",
     }
-    result = AgentOrchestrator(db).match_visitor(payload)
-    question = request.question
-    if "雨" in question or "天气" in question:
-        answer = "可以优先选择支持当前天气的室内体验；具体场次以商户实时名额和天气标签为准。"
-    elif "儿童" in question or "岁" in question:
-        answer = "系统会校验儿童年龄与体验的最低、最高年龄。若年龄不匹配，不会把该体验作为正式推荐。"
-    elif "早餐" in question:
-        answer = "套餐中的酒店服务会显示每套消耗量和时间，家庭早餐示例为每套3份。"
-    elif "过敏" in question or "花生" in question:
-        answer = "过敏信息只作为风险提示，请在预约意向中填写，并由酒店与商户在确认前再次人工核对。"
-    elif any(word in question for word in ("还有", "其他", "推荐", "别的")):
-        answer = "有的，我会优先给你展示当前同日期、真实库存仍可售的其他套餐；如果你补充预算、人数、想去的地方或天气，我还能进一步缩小范围。"
-    else:
-        answer = "我会结合当前可售库存、预算、客群、天气和体验时间给出推荐；最终库存与价格以系统实时计算为准。"
+    result = AgentOrchestrator(db, hotel_id=product.hotel_id if product else None).match_visitor(payload)
+    answer = getattr(result.value, "answer", "") or "我会结合当前可售库存、预算、客群、天气和体验时间给出推荐；最终库存与价格以系统实时计算为准。"
     suggestions = []
     if any(word in question for word in ("还有", "其他", "推荐", "别的")):
-        suggestions = [product_to_dict(item) for item in list_products(db, public_only=True) if not product or item.id != product.id][:3]
-    return {"trace_id": result.trace_id, "answer": answer, "safety_notes": "AI建议不替代商户对过敏、儿童安全和场次的最终确认。", "product": product_to_dict(product) if product else None, "suggestions": suggestions, "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河还是室内文化体验？", "预算上限和可接受场次是什么？"], "fallback_used": result.fallback_used}
+        effective = VisitorRecommendRequest(natural_language=request.question, weather=request.weather, budget=product.visitor_budget_limit if product else Decimal("700"), target_date=product.target_date if product else None)
+        effective, _ = enrich_recommend_request(effective)
+        candidates = []
+        for item in list_products(db, public_only=True):
+            if product and item.id == product.id:
+                continue
+            if effective.target_date and item.target_date != effective.target_date:
+                continue
+            if item.suggested_price > effective.budget:
+                continue
+            child_ok, weather_ok, interest_ok, _ = matches_conditions(db, item, effective)
+            if child_ok and weather_ok and (interest_ok or not effective.interests):
+                candidates.append(item)
+        suggestions = [product_to_dict(item) for item in candidates[:3]]
+    return {"trace_id": result.trace_id, "answer": answer, "safety_notes": getattr(result.value, "safety_notes", "") or "AI建议不替代商户对过敏、儿童安全和场次的最终确认。", "product": product_to_dict(product) if product else None, "suggestions": suggestions, "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河还是室内文化体验？", "预算上限和可接受场次是什么？"], "fallback_used": result.fallback_used}
 
 
 @router.post("/interpret", response_model=VisitorInterpretResponse)
@@ -272,7 +292,8 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         "allergy_information": request.allergy_information,
         "products": [{"id": item.id, "product_name": item.product_name, "sale_quantity": item.sale_quantity} for item in valid_candidates],
     }
-    agent_result = AgentOrchestrator(db).match_visitor(payload)
+    hotel_ids = {item.hotel_id for item in valid_candidates}
+    agent_result = AgentOrchestrator(db, hotel_id=next(iter(hotel_ids)) if len(hotel_ids) == 1 else None).match_visitor(payload)
     output = agent_result.value
     output_ids = set(output.selected_product_ids)
     results = []
@@ -281,13 +302,13 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         reason = output.reasons.get(str(item.id), item.recommendation_reason)
         results.append({
             "product": product_to_dict(item),
-            "score": score + (3 if item.id in output_ids else 0),
+            "score": min(100, score + (3 if item.id in output_ids else 0)),
             "recommendation_reason": reason,
             "budget_match": item.suggested_price <= request.budget,
             "children_match": children_match,
             "weather_match": weather_match,
             "interest_match": interest_match,
-            "schedule": output.schedule_notes.get(str(item.id)) or build_schedule(db, item, request.arrival_time, request.preferred_experience_time),
+            "schedule": build_schedule(db, item, request.arrival_time, request.preferred_experience_time),
             "limited_adjustments": output.limited_adjustments.get(str(item.id)) or ["预约意向中可备注希望的体验场次", "实时名额变化后以酒店与商户确认结果为准"],
             "allergy_warning": output.allergy_warning or None,
         })
@@ -296,6 +317,8 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
 
 @router.post("/intents")
 async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
+    if sweep_expired_intents(db):
+        db.commit()
     product = db.scalar(
         select(TravelProduct)
         .options(selectinload(TravelProduct.resources), selectinload(TravelProduct.adjustments))
@@ -306,6 +329,8 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         raise AppError("PRODUCT_UNAVAILABLE", "当前套餐已无法提交预约意向", retryable=True)
     effective = VisitorRecommendRequest(
         natural_language=request.natural_language,
+        target_date=product.target_date,
+        weather=product.weather,
         adult_count=request.adult_count,
         child_count=request.child_count,
         child_ages=request.child_ages,
@@ -319,15 +344,22 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
     )
     if request.natural_language.strip():
         effective, _ = enrich_recommend_request(effective)
-    if effective.child_count and effective.child_ages and effective.child_count != len(effective.child_ages):
+    if effective.child_count and len(effective.child_ages) != effective.child_count:
         raise AppError("VALIDATION_ERROR", "儿童人数与儿童年龄数量不一致", field="child_ages")
+    children_match, weather_match, _, _ = matches_conditions(db, product, effective)
+    if not children_match:
+        raise AppError("VISITOR_CONSTRAINT_NOT_MET", "同行人数、儿童年龄或到店时间不符合该套餐约束", field="adult_count", retryable=True)
+    if not weather_match:
+        raise AppError("WEATHER_NOT_SUPPORTED", "该套餐内体验不支持游客填写的天气场景", field="weather", retryable=True)
+    if product.suggested_price > effective.budget:
+        raise AppError("BUDGET_EXCEEDED", "套餐价格超过游客预算上限", field="budget", retryable=True)
+
     previous_quantity = product.sale_quantity
     previous_status = product.status
+    allocation_snapshot = reserve_product_inventory(db, product)
+    allocation_snapshot.update({"product_quantity_before": previous_quantity, "product_status_before": previous_status})
     product.sale_quantity -= 1
-    if product.sale_quantity <= 0:
-        product.status = "SOLD_OUT"
-    elif product.sale_quantity <= 2:
-        product.status = "LOW_STOCK"
+    product.status = "SOLD_OUT" if product.sale_quantity <= 0 else ("LOW_STOCK" if product.sale_quantity <= 2 else product.status)
     result = {
         "product_id": product.id,
         "product_name": product.product_name,
@@ -348,8 +380,16 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         "allergy_information": effective.allergy_information,
         "other_requirements": effective.other_requirements or request.natural_language,
     })
-    intent = VisitorIntent(**intent_data, recommendation_result=result, intent_status="NEW")
+    intent = VisitorIntent(
+        **intent_data,
+        recommendation_result=result,
+        intent_status="NEW",
+        reservation_status="HELD",
+        reserved_until=datetime.now(timezone.utc) + timedelta(minutes=settings.visitor_intent_hold_minutes),
+        allocation_snapshot=allocation_snapshot,
+    )
     db.add(intent)
+    db.flush()
     db.add(
         ProductAdjustmentRecord(
             product_id=product.id,
@@ -358,9 +398,25 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
             old_price=product.suggested_price,
             new_price=product.suggested_price,
             action="VISITOR_INTENT_RESERVE",
-            reason="游客提交预约意向，暂占用1套套餐库存",
+            reason="游客提交预约意向，事务性占用客房、酒店服务和合作体验名额",
         )
     )
+    for allocation in allocation_snapshot.get("allocations", []):
+        db.add(
+            ResourceChangeEvent(
+                event_type="VISITOR_INTENT_RESERVED",
+                resource_type=allocation["resource_type"],
+                resource_id=allocation["resource_id"],
+                hotel_id=product.hotel_id,
+                old_value={"available": allocation["before"]},
+                new_value={"available": allocation["after"], "intent_id": intent.id, "product_id": product.id},
+                reason="游客预约意向暂占用套餐底层库存",
+                operator_role="VISITOR",
+                processed=True,
+                processing_result={"product_id": product.id, "intent_id": intent.id},
+            )
+        )
+    reconcile_published_capacity(db, product.hotel_id, priority_product_id=product.id)
     db.commit()
     db.refresh(intent)
     phone = intent.contact_phone
@@ -389,12 +445,29 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         "product_id": intent.product_id,
         "product_name": product.product_name,
         "intent_status": intent.intent_status,
+        "reservation_status": intent.reservation_status,
+        "reserved_until": intent.reserved_until,
         "submitted_quantity": previous_quantity,
         "remaining_quantity": product.sale_quantity,
         "product_status": product.status,
         "contact_phone_masked": masked,
-        "message": "预约意向已提交，已暂占用1套套餐库存，酒店会根据资源实时状态联系确认。",
+        "message": "预约意向已提交，已暂占用房量、酒店服务和合作体验名额；酒店会在保留时间内联系确认。",
     }
+
+
+@router.post("/intents/{intent_id}/cancel")
+def cancel_intent(intent_id: int, request: VisitorIntentCancelRequest, db: Session = Depends(get_db)):
+    if sweep_expired_intents(db):
+        db.commit()
+    intent = db.scalar(select(VisitorIntent).where(VisitorIntent.id == intent_id).with_for_update())
+    if not intent or intent.contact_phone != request.contact_phone:
+        raise AppError("NOT_FOUND", "预约意向不存在或联系方式不匹配", status_code=404)
+    if intent.reservation_status not in {"HELD", "CONFIRMED"}:
+        return {"id": intent.id, "reservation_status": intent.reservation_status, "message": "该预约意向已经结束，无需重复释放"}
+    result = release_intent_inventory(db, intent)
+    reconcile_published_capacity(db, intent.product.hotel_id if intent.product else 0)
+    db.commit()
+    return {"id": intent.id, "reservation_status": intent.reservation_status, "intent_status": intent.intent_status, "message": "预约意向已取消，库存已释放", "inventory": result}
 
 
 @router.get("/public-resources")

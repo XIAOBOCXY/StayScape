@@ -79,6 +79,9 @@ class ProductRead(BaseModel):
     suggested_price: Decimal
     gross_profit: Decimal
     gross_margin: Decimal
+    minimum_gross_margin_requirement: Decimal = Decimal("0.20")
+    visitor_budget_limit: Decimal = Decimal("700")
+    price_anchor: Decimal = Decimal("599")
     bottleneck_resource: str | None
     marketing_title: str
     marketing_content: str
