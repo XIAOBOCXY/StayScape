@@ -4,9 +4,30 @@ import { visitorApi } from '../../api'
 import { errorMessage } from '../../api/client'
 import ProductCard from '../../components/ProductCard.vue'
 import type { TravelProduct } from '../../types'
-const items = ref<TravelProduct[]>([]); const loading = ref(false); const error = ref(''); const form = reactive({ target_date: '', budget: '', interest: '', weather: 'RAIN' })
-async function load() { loading.value = true; error.value = ''; try { const response = await visitorApi.products({ target_date: form.target_date || undefined, budget: form.budget || undefined, interest: form.interest || undefined, weather: form.weather }); items.value = response.data } catch (e) { error.value = errorMessage(e) } finally { loading.value = false } }
+
+const items = ref<TravelProduct[]>([])
+const loading = ref(false)
+const error = ref('')
+const form = reactive({ target_date: '', budget: '', interest: '', weather: '' })
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  try {
+    const response = await visitorApi.products({ target_date: form.target_date || undefined, budget: form.budget || undefined, interest: form.interest || undefined, weather: form.weather || undefined })
+    items.value = response.data
+  } catch (e) { error.value = errorMessage(e) }
+  finally { loading.value = false }
+}
+
 onMounted(load)
 </script>
-<template><div class="page-head"><div><div class="eyebrow">AVAILABLE EXPERIENCES</div><h1>当前可售套餐</h1><p>价格和余量来自酒店端确定性规则计算，库存紧张时会显示提醒。</p></div></div><div class="panel" style="margin-bottom:20px"><div class="form-grid"><el-form-item label="入住日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" type="date" placeholder="不限日期" style="width:100%" /></el-form-item><el-form-item label="天气偏好"><el-select v-model="form.weather" style="width:100%"><el-option label="雨天可用" value="RAIN" /><el-option label="晴天可用" value="SUNNY" /><el-option label="多云可用" value="CLOUDY" /></el-select></el-form-item><el-form-item label="预算上限"><el-input v-model="form.budget" placeholder="例如 700" /></el-form-item><el-form-item label="兴趣关键词"><el-input v-model="form.interest" placeholder="亲子 / 手工 / 茶文化" @keyup.enter="load" /></el-form-item></div><div class="form-actions"><el-button type="primary" @click="load">筛选套餐</el-button></div></div><el-alert v-if="error" :title="error" type="error" show-icon /><div v-if="loading" class="panel empty-state">正在匹配可售套餐…</div><div v-else-if="items.length" class="product-grid"><ProductCard v-for="product in items" :key="product.id" :product="product" public-view /></div><div v-else class="panel empty-state">没有符合条件的可售套餐，试试提高预算或放宽日期。</div></template>
 
+<template>
+  <div class="page-head visitor-list-head"><div><div class="eyebrow">LIVE HANGZHOU STAYS</div><h1>今天，住进一段杭州</h1><p>每一套都包含住宿、酒店服务和一段真实可用的文化体验。库存变化会同步到这里。</p></div><div class="editorial-page-mark">SCROLL<br /><span>↓</span></div></div>
+  <div class="experience-filter"><div class="filter-intro"><span class="eyebrow">FIND YOUR MOMENT</span><strong>筛选今晚的心情</strong></div><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" type="date" placeholder="入住日期" /><el-select v-model="form.weather" placeholder="天气偏好" clearable><el-option label="雨天室内" value="RAIN" /><el-option label="晴天漫游" value="SUNNY" /><el-option label="多云轻旅" value="CLOUDY" /></el-select><el-input v-model="form.budget" placeholder="预算上限 ¥700" /><el-input v-model="form.interest" placeholder="想玩什么？如非遗、茶文化" @keyup.enter="load" /><el-button type="primary" @click="load">寻找体验</el-button></div>
+  <el-alert v-if="error" :title="error" type="error" show-icon />
+  <div v-if="loading" class="home-loading"><span /> 正在匹配真实可售套餐…</div>
+  <div v-else-if="items.length" class="product-grid product-grid--editorial product-grid--wide"><ProductCard v-for="product in items" :key="product.id" :product="product" public-view /></div>
+  <div v-else class="home-empty"><div class="empty-mark">S</div><h3>还没有完全符合筛选条件的体验</h3><p>试试放宽日期或预算，也可以用自然语言告诉我们你想怎么度过今晚。</p><div><el-button type="primary" @click="$router.push('/visitor/recommend')">让旅居助手帮你找</el-button><el-button plain @click="form.target_date=''; form.budget=''; form.interest=''; form.weather=''; load()">清除筛选</el-button></div></div>
+</template>

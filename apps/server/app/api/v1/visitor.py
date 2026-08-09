@@ -5,12 +5,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ...agent import AgentOrchestrator
 from ...core.exceptions import AppError
 from ...db import get_db
-from ...models import HotelService, PartnerResource, ProductResource, PublicResource, TravelProduct, VisitorIntent
+from ...models import HotelService, PartnerResource, ProductAdjustmentRecord, ProductResource, PublicResource, TravelProduct, VisitorIntent
 from ...repositories.product_repository import get_product, list_products
 from ...schemas.products import ProductRead
 from ...schemas.visitor import VisitorIntentCreate, VisitorInterpretRequest, VisitorInterpretResponse, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
@@ -19,6 +19,7 @@ from ...rules.availability_rule import tokens
 from ...rules.crowd_rule import crowd_supported
 from ...rules.time_rule import intervals_overlap
 from ...rules.weather_rule import is_weather_supported
+from ..websocket_manager import manager
 
 router = APIRouter(prefix="/visitor", tags=["visitor"])
 
@@ -294,8 +295,13 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/intents")
-def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
-    product = get_product(db, request.product_id)
+async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
+    product = db.scalar(
+        select(TravelProduct)
+        .options(selectinload(TravelProduct.resources), selectinload(TravelProduct.adjustments))
+        .where(TravelProduct.id == request.product_id)
+        .with_for_update()
+    )
     if not product or product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0:
         raise AppError("PRODUCT_UNAVAILABLE", "当前套餐已无法提交预约意向", retryable=True)
     effective = VisitorRecommendRequest(
@@ -315,11 +321,20 @@ def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
         effective, _ = enrich_recommend_request(effective)
     if effective.child_count and effective.child_ages and effective.child_count != len(effective.child_ages):
         raise AppError("VALIDATION_ERROR", "儿童人数与儿童年龄数量不一致", field="child_ages")
+    previous_quantity = product.sale_quantity
+    previous_status = product.status
+    product.sale_quantity -= 1
+    if product.sale_quantity <= 0:
+        product.status = "SOLD_OUT"
+    elif product.sale_quantity <= 2:
+        product.status = "LOW_STOCK"
     result = {
         "product_id": product.id,
         "product_name": product.product_name,
         "submitted_price": str(product.suggested_price),
-        "submitted_quantity": product.sale_quantity,
+        "submitted_quantity": previous_quantity,
+        "remaining_quantity": product.sale_quantity,
+        "status_after_submission": product.status,
         "allergy_information": effective.allergy_information,
     }
     intent_data = request.model_dump(exclude={"natural_language"})
@@ -335,11 +350,51 @@ def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
     })
     intent = VisitorIntent(**intent_data, recommendation_result=result, intent_status="NEW")
     db.add(intent)
+    db.add(
+        ProductAdjustmentRecord(
+            product_id=product.id,
+            old_quantity=previous_quantity,
+            new_quantity=product.sale_quantity,
+            old_price=product.suggested_price,
+            new_price=product.suggested_price,
+            action="VISITOR_INTENT_RESERVE",
+            reason="游客提交预约意向，暂占用1套套餐库存",
+        )
+    )
     db.commit()
     db.refresh(intent)
     phone = intent.contact_phone
     masked = phone[:3] + "****" + phone[-4:] if len(phone) >= 7 else "***"
-    return {"id": intent.id, "product_id": intent.product_id, "intent_status": intent.intent_status, "contact_phone_masked": masked, "message": "预约意向已提交，酒店会根据资源实时状态联系确认。"}
+    await manager.broadcast(
+        product.hotel_id,
+        {
+            "type": "VISITOR_INTENT_CREATED",
+            "title": "收到新的游客预约意向",
+            "message": f"{product.product_name} 剩余 {product.sale_quantity} 套",
+            "affectedProducts": [
+                {
+                    "product_id": product.id,
+                    "product_name": product.product_name,
+                    "old_quantity": previous_quantity,
+                    "new_quantity": product.sale_quantity,
+                    "old_status": previous_status,
+                    "status": product.status,
+                    "action": "VISITOR_INTENT_RESERVE",
+                }
+            ],
+        },
+    )
+    return {
+        "id": intent.id,
+        "product_id": intent.product_id,
+        "product_name": product.product_name,
+        "intent_status": intent.intent_status,
+        "submitted_quantity": previous_quantity,
+        "remaining_quantity": product.sale_quantity,
+        "product_status": product.status,
+        "contact_phone_masked": masked,
+        "message": "预约意向已提交，已暂占用1套套餐库存，酒店会根据资源实时状态联系确认。",
+    }
 
 
 @router.get("/public-resources")

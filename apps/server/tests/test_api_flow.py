@@ -76,9 +76,18 @@ def test_visitor_recommendation_and_intent(client, hotel_token):
     assert data["results"]
     assert data["results"][0]["product"]["id"] == product["id"]
     assert "过敏" in data["results"][0]["allergy_warning"]
-    intent = client.post("/api/v1/visitor/intents", json={"product_id": product["id"], "adult_count": 2, "child_count": 1, "child_ages": [6], "budget": "700", "interests": ["手工"], "allergy_information": "花生过敏", "contact_name": "张三", "contact_phone": "13800138000"})
+    assert any(item["id"] == product["id"] for item in client.get("/api/v1/visitor/products").json())
+    intent = client.post("/api/v1/visitor/intents", json={"product_id": product["id"], "natural_language": "一家三口带一个6岁孩子，下午四点体验，孩子花生过敏。", "adult_count": 2, "child_count": 1, "child_ages": [6], "budget": "700", "interests": ["手工"], "allergy_information": "花生过敏", "contact_name": "张三", "contact_phone": "13800138000"})
     assert intent.status_code == 200, intent.text
     assert intent.json()["contact_phone_masked"] == "138****8000"
+    assert intent.json()["remaining_quantity"] == 3
+    public_product = next(item for item in client.get("/api/v1/visitor/products").json() if item["id"] == product["id"])
+    assert public_product["sale_quantity"] == 3
+    hotel_intent = client.get("/api/v1/hotel/intents", headers=auth(hotel_token)).json()[0]
+    assert hotel_intent["product_name"] == product["product_name"]
+    assert hotel_intent["contact_name"] == "张三"
+    assert "花生过敏" in hotel_intent["other_requirements"]
+    assert hotel_intent["remaining_quantity"] == 3
 
 
 def test_agent_format_repair_is_logged(client, hotel_token):

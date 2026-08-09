@@ -358,8 +358,43 @@ def changes(db: Session = Depends(get_db), user: User = Depends(get_hotel_user),
 @router.get("/intents")
 def intents(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     hotel_id = hotel_id_for(db, user)
-    items = list(db.scalars(select(VisitorIntent).join(TravelProduct).where(TravelProduct.hotel_id == hotel_id).order_by(VisitorIntent.created_at.desc())).all())
-    return [{"id": item.id, "product_id": item.product_id, "adult_count": item.adult_count, "child_count": item.child_count, "child_ages": item.child_ages, "budget": item.budget, "interests": item.interests, "dietary_restrictions": item.dietary_restrictions, "allergy_information": item.allergy_information, "arrival_time": item.arrival_time, "preferred_experience_time": item.preferred_experience_time, "intent_status": item.intent_status, "contact_name": item.contact_name, "contact_phone": item.contact_phone, "created_at": item.created_at} for item in items]
+    items = list(
+        db.scalars(
+            select(VisitorIntent)
+            .join(TravelProduct)
+            .options(selectinload(VisitorIntent.product))
+            .where(TravelProduct.hotel_id == hotel_id)
+            .order_by(VisitorIntent.created_at.desc())
+        ).all()
+    )
+    return [
+        {
+            "id": item.id,
+            "product_id": item.product_id,
+            "product_name": item.product.product_name if item.product else "已归档产品",
+            "product_code": item.product.product_code if item.product else None,
+            "target_date": item.product.target_date if item.product else None,
+            "product_status": item.product.status if item.product else None,
+            "remaining_quantity": item.product.sale_quantity if item.product else 0,
+            "submitted_price": (item.recommendation_result or {}).get("submitted_price") if item.recommendation_result else None,
+            "adult_count": item.adult_count,
+            "child_count": item.child_count,
+            "child_ages": item.child_ages,
+            "budget": item.budget,
+            "interests": item.interests,
+            "dietary_restrictions": item.dietary_restrictions,
+            "allergy_information": item.allergy_information,
+            "arrival_time": item.arrival_time,
+            "preferred_experience_time": item.preferred_experience_time,
+            "other_requirements": item.other_requirements,
+            "recommendation_result": item.recommendation_result,
+            "intent_status": item.intent_status,
+            "contact_name": item.contact_name,
+            "contact_phone": item.contact_phone,
+            "created_at": item.created_at,
+        }
+        for item in items
+    ]
 
 
 @router.get("/skill-logs")

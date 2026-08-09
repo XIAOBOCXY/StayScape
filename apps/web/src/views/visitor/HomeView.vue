@@ -1,10 +1,69 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { visitorApi } from '../../api'
 import { errorMessage } from '../../api/client'
 import ProductCard from '../../components/ProductCard.vue'
+import MediaImage from '../../components/MediaImage.vue'
 import type { TravelProduct } from '../../types'
-const products = ref<TravelProduct[]>([]); const loading = ref(true); const error = ref('')
-onMounted(async () => { try { products.value = (await visitorApi.products()).data.slice(0, 3) } catch (e) { error.value = errorMessage(e) } finally { loading.value = false } })
+import { heroMedia } from '../../utils/productMedia'
+
+const products = ref<TravelProduct[]>([])
+const loading = ref(true)
+const error = ref('')
+const hero = computed(() => heroMedia(products.value[0]))
+const todayLabel = computed(() => new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date()))
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  try { products.value = (await visitorApi.products()).data.slice(0, 6) }
+  catch (e) { error.value = errorMessage(e) }
+  finally { loading.value = false }
+}
+
+onMounted(load)
 </script>
-<template><section class="visitor-hero"><div><div class="eyebrow">STAYSCAPE · HANGZHOU</div><h1>把一间余房，变成一段杭州体验</h1><p>不只是清库存。我们把临期客房、酒店服务和城市文化，重新组合成一套会随天气与名额变化而自我调整的主题住宿产品。</p><div class="visitor-hero-actions"><van-button type="primary" size="large" @click="$router.push('/visitor/recommend')">获取个性化推荐</van-button><el-button size="large" plain @click="$router.push('/visitor/products')">浏览全部套餐</el-button></div></div></section><div class="section-title"><h2>此刻值得住</h2><span>真实库存 · 实时毛利校验</span></div><div v-if="loading" class="panel empty-state">正在读取当前可售套餐…</div><el-alert v-else-if="error" :title="error" type="error" /><div v-else-if="products.length" class="product-grid"><ProductCard v-for="product in products" :key="product.id" :product="product" public-view /></div><div v-else class="panel empty-state">当前暂无可售套餐，稍后再来看看。</div><div class="section-title"><h2>StayScape怎么工作</h2></div><div class="metric-grid"><div class="panel"><div class="eyebrow">01 · INVENTORY</div><h3>从一间临期客房开始</h3><p class="muted">酒店维护真实房量、服务和最低毛利率。</p></div><div class="panel"><div class="eyebrow">02 · EXPERIENCE</div><h3>加入一段杭州文化</h3><p class="muted">合作商户提供日期、场次和实时可用名额。</p></div><div class="panel"><div class="eyebrow">03 · DYNAMIC</div><h3>资源变化自动重算</h3><p class="muted">名额从12变4，产品就从4套变1套。</p></div><div class="panel"><div class="eyebrow">04 · INTENT</div><h3>先提交预约意向</h3><p class="muted">比赛版本不支付，给酒店一个真实可跟进的线索。</p></div></div></template>
+
+<template>
+  <div class="visitor-home">
+    <section class="home-hero">
+      <MediaImage :media="hero" aspect="hero" />
+      <div class="home-hero__veil" />
+      <div class="home-hero__content">
+        <div class="eyebrow home-eyebrow">STAYSCAPE · HANGZHOU / {{ todayLabel }}</div>
+        <h1>把一间未被预订的房，<br /><em>变成今晚值得发生的杭州故事。</em></h1>
+        <p>住下来，吃一顿早餐，走进一段城市文化。每套体验都根据今天的天气、时间和真实余量重新组合。</p>
+        <div class="visitor-hero-actions">
+          <van-button type="primary" size="large" @click="$router.push('/visitor/products')">探索今晚 <span>→</span></van-button>
+          <el-button size="large" plain @click="$router.push('/visitor/recommend')">告诉我想怎么玩</el-button>
+        </div>
+      </div>
+      <div class="home-hero__aside"><span>01</span><i /><span>STAY<br />SCAPE</span></div>
+    </section>
+
+    <section class="tonight-strip">
+      <div class="tonight-title"><div class="eyebrow">TONIGHT IN HANGZHOU</div><h2>今晚的杭州</h2><p>不赶景点，先找到适合此刻的那一套。</p></div>
+      <div class="tonight-fact"><span class="fact-icon">☂</span><div><small>WEATHER MOOD</small><strong>雨天也值得出发</strong></div></div>
+      <div class="tonight-fact"><span class="fact-icon">✦</span><div><small>LIVE EXPERIENCES</small><strong>{{ products.length || '—' }} 个可售体验</strong></div></div>
+      <div class="tonight-audiences"><span>FAMILY</span><span>COUPLE</span><span>LOCAL WEEKEND</span></div>
+    </section>
+
+    <section class="home-section">
+      <div class="editorial-heading"><div><div class="eyebrow">CURATED FOR THIS MOMENT</div><h2>今晚住哪一段杭州？</h2></div><router-link to="/visitor/products">查看全部 <span>↗</span></router-link></div>
+      <div v-if="loading" class="home-loading"><span /> 正在寻找今天仍然可用的体验…</div>
+      <el-alert v-else-if="error" :title="error" type="error" show-icon />
+      <div v-else-if="products.length" class="product-grid product-grid--editorial"><ProductCard v-for="product in products.slice(0, 3)" :key="product.id" :product="product" public-view /></div>
+      <div v-else class="home-empty"><div class="empty-mark">S</div><h3>今晚的公开套餐正在更新</h3><p>酒店确认发布后，体验会立即出现在这里。你也可以先告诉我们想怎么玩。</p><el-button type="primary" plain @click="$router.push('/visitor/recommend')">先获取个性化推荐</el-button></div>
+    </section>
+
+    <section class="story-band">
+      <div><div class="eyebrow">THE STAYSCAPE IDEA</div><h2>不把雨天当作<br /><em>行程的暂停键。</em></h2></div>
+      <p>StayScape 把临期房、酒店服务和杭州的文化体验放在同一张实时地图上。你看到的不是一间空房，而是一段已经为今天准备好的生活提案。</p>
+    </section>
+
+    <section class="home-section home-section--small">
+      <div class="editorial-heading"><div><div class="eyebrow">HOW IT FEELS</div><h2>一晚，三个瞬间</h2></div></div>
+      <div class="moment-row"><div><span>01</span><strong>入住</strong><p>先把行李放下，让节奏慢下来。</p></div><div><span>02</span><strong>体验</strong><p>在一张桌子旁，认识杭州的手艺。</p></div><div><span>03</span><strong>回到房间</strong><p>带着一件自己完成的东西入睡。</p></div></div>
+    </section>
+  </div>
+</template>

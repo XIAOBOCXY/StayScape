@@ -16,8 +16,8 @@ from app.seed import seed_demo  # noqa: E402
 
 
 @pytest.fixture()
-def client(tmp_path):
-    configure_database(f"sqlite:///{tmp_path / 'test.db'}")
+def client():
+    configure_database("sqlite:///:memory:")
     Base.metadata.create_all(bind=db_module.engine)
     db = db_module.SessionLocal()
     seed_demo(db, reset=True)
