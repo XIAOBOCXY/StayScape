@@ -24,6 +24,9 @@ status. Your response is a candidate JSON document only.
 - Propose a coherent theme, reason, risk message, marketing copy, and
   multi-channel material such as a poster brief, social post, store card, and
   short-video script.
+- Return semantic `creative_angle`, `poster_style`, and `visual_brief` hints
+  only. The FastAPI poster renderer selects curated media and owns SVG layout;
+  never return an internet image URL as if it were a supplied asset.
 - Make `variant_index` candidates visibly different in theme angle, selected
   resource (when alternatives are supplied), title, visual brief, and social
   copy. Do not return “方案A/方案B” with the same story.

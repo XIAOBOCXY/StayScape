@@ -36,3 +36,5 @@ docker-up:
 docker-down:
 	docker compose down
 
+deploy-linux:
+	bash scripts/deploy_aliyun.sh

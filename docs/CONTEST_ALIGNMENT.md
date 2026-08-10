@@ -18,7 +18,7 @@ StayScape 聚焦两个可落地的核心场景：
 - 场景适配性：覆盖酒店临期房、早餐、延迟退房、合作文旅体验、商户场次和游客预约意向。
 - 功能实用性：酒店、商户、游客三端均有真实 API 与数据库状态，不使用前端写死库存或价格。
 - 部署便捷性：工作区独立 `.venv`、SQLite 本地演示、PostgreSQL + Docker Compose 部署、演示数据一键重置。
-- 代码规范性：FastAPI 分层、SQLAlchemy 模型、确定性规则引擎、Skill JSON 契约、OpenClaw 适配层和 trace 日志。
+- 代码规范性：FastAPI 分层、SQLAlchemy 模型、确定性规则引擎、Skill JSON 契约、ClawHive Agent bridge 适配层和 trace 日志。
 - 异常处理：Agent 超时、JSON 格式错误、资源不存在、日期/天气/时间/年龄/容量/毛利不满足时均返回结构化错误或降级。
 - 文档完整性：README、架构、API、演示、测试报告、Skill ZIP 和本对齐说明。
 
@@ -28,4 +28,4 @@ AI/Skill 只负责主题创意、资源候选、自然语言解释和营销素�
 
 ## 部署与数据安全
 
-支持本地部署、Mock Agent 离线演示、OpenClaw 环境变量切换；敏感密钥只从环境变量读取，导出演示数据不包含真实密钥。项目不包含学校名称或学校识别信息。
+支持本地部署、Mock Agent 离线演示、ClawHive Agent bridge 环境变量切换；敏感密钥只从环境变量读取，导出演示数据不包含真实密钥。项目不包含学校名称或学校识别信息。

@@ -102,6 +102,8 @@ export interface MarketingAsset {
   visual_brief: string
   call_to_action: string
   poster_svg?: string
+  creative_angle?: string
+  poster_style?: string
 }
 
 export interface TravelProduct {
@@ -177,4 +179,7 @@ export interface Recommendation {
   schedule: Array<{ time: string; title: string; description: string }>
   limited_adjustments: string[]
   allergy_warning?: string
+  provider?: string
+  skill_name?: string
+  fallback_used?: boolean
 }

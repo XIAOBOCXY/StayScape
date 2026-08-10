@@ -10,7 +10,7 @@ from pydantic import BaseModel, ValidationError
 from ..config import settings
 from ..models import SkillCallLog
 from .mock_agent import MockAgent
-from .openclaw import OpenClawAgent
+from .openclaw import ClawHiveAgent, OpenClawAgent
 from .schemas import ProductAgentOutput, VisitorAgentOutput
 
 T = TypeVar("T", bound=BaseModel)
@@ -26,6 +26,11 @@ class AgentCallResult:
     validation_result: dict[str, Any]
     retry_count: int
     fallback_used: bool
+    provider: str = "MOCK"
+    transport: str = "mock"
+    agent_id: str = ""
+    model: str = ""
+    skill_version: str = ""
 
 
 class AgentOrchestrator:
@@ -34,17 +39,32 @@ class AgentOrchestrator:
         self.hotel_id = hotel_id
         if provider is not None:
             self.provider = provider
-        elif settings.agent_provider.lower() == "openclaw" and settings.openclaw_base_url:
-            self.provider = OpenClawAgent(
-                settings.openclaw_base_url,
-                settings.openclaw_api_key,
-                settings.openclaw_model,
+        elif settings.agent_provider.lower() in {"openclaw", "clawhive"}:
+            provider_name = settings.agent_provider.lower()
+            is_clawhive = provider_name == "clawhive"
+            base_url = (settings.clawhive_base_url or settings.openclaw_base_url) if is_clawhive else settings.openclaw_base_url
+            api_key = (settings.clawhive_gateway_token or settings.clawhive_api_key or settings.openclaw_gateway_token or settings.openclaw_api_key) if is_clawhive else (settings.openclaw_gateway_token or settings.openclaw_api_key)
+            model = (settings.clawhive_model or settings.openclaw_model) if is_clawhive else settings.openclaw_model
+            transport = (settings.clawhive_transport or settings.openclaw_transport) if is_clawhive else settings.openclaw_transport
+            responses_path = (settings.clawhive_responses_path or settings.openclaw_responses_path) if is_clawhive else settings.openclaw_responses_path
+            agent_id = (settings.clawhive_agent_id or settings.openclaw_agent_id) if is_clawhive else settings.openclaw_agent_id
+            skill_version = (settings.clawhive_skill_version or settings.openclaw_skill_version) if is_clawhive else settings.openclaw_skill_version
+            agent_class = ClawHiveAgent if is_clawhive else OpenClawAgent
+            if not base_url:
+                self.provider = MockAgent(settings.mock_agent_mode)
+                return
+            self.provider = agent_class(
+                base_url,
+                api_key,
+                model,
                 settings.agent_timeout_seconds,
-                transport=settings.openclaw_transport,
+                transport=transport,
+                responses_path=responses_path,
                 invoke_path=settings.openclaw_invoke_path,
                 tool_name=settings.openclaw_tool_name,
                 session_key=settings.openclaw_session_key,
-                agent_id=settings.openclaw_agent_id,
+                agent_id=agent_id,
+                skill_version=skill_version,
                 legacy_fallback=settings.openclaw_legacy_fallback,
             )
         else:
@@ -85,6 +105,11 @@ class AgentOrchestrator:
         error_code = None
         error_message = None
         fallback_used = False
+        provider = getattr(self.provider, "provider_name", "MOCK")
+        transport = getattr(self.provider, "transport", "mock")
+        agent_id = getattr(self.provider, "agent_id", "")
+        model = getattr(self.provider, "model", "")
+        skill_version = getattr(self.provider, "skill_version", settings.openclaw_skill_version if provider == "OPENCLAW" else "")
         try:
             raw, request_retries = self._request_with_retries(lambda: self._provider_generate(skill_name, payload, trace_id))
             retry_count += request_retries
@@ -143,9 +168,15 @@ class AgentOrchestrator:
                 error_message=error_message,
                 duration_ms=duration_ms,
                 retry_count=retry_count,
+                provider=provider,
+                transport=transport,
+                agent_id=agent_id,
+                model=model,
+                skill_version=skill_version,
+                fallback_used=fallback_used,
             )
         )
-        return AgentCallResult(trace_id, final_value, raw, status, validation, retry_count, fallback_used)
+        return AgentCallResult(trace_id, final_value, raw, status, validation, retry_count, fallback_used, provider, transport, agent_id, model, skill_version)
 
     def generate_product(self, payload: dict[str, Any]) -> AgentCallResult:
         def fallback() -> dict[str, Any]:

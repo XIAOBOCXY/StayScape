@@ -17,7 +17,7 @@ StayScape 不把临期房简单降价清仓，而是根据房型库存、酒店�
 - 前端：Vue 3、TypeScript、Vite、Vue Router、Pinia、Axios、Element Plus、Vant、ECharts依赖。
 - 后端：Python 3.11、FastAPI、SQLAlchemy 2.x、Pydantic 2.x、Alembic、Pytest、WebSocket。
 - 数据库：本地 SQLite；Docker 使用 PostgreSQL 16。
-- Agent：Mock Agent 离线可运行；OpenClaw HTTP 适配器支持环境变量切换，并带超时、重试、JSON修复、Schema校验和降级。
+- Agent：默认 Mock Agent 离线可运行；ClawHive Skill 包可上传到帝王蟹并安装到龙虾实例，后端保留可配置 Agent bridge 适配器，支持超时、重试、JSON修复、Schema校验和降级。
 - 部署：Docker Compose + Nginx。
 
 ## 本地启动（Windows）
@@ -58,6 +58,16 @@ docker compose up -d --build
 docker compose down
 ```
 
+## 阿里云公网部署
+
+如果要让评委或游客直接通过网址访问，推荐将 StayScape 和 OpenClaw Gateway 一起部署到 Linux ECS：Nginx 只暴露网站 80/443，FastAPI 在服务端通过 Token 调用同机 OpenClaw，浏览器不接触 Agent 密钥。
+
+```bash
+bash scripts/deploy_aliyun.sh
+```
+
+完整的 ECS 购买、安全组、OpenClaw 安装、Skill 安装、Windows Hub SSH 隧道和赛题演示步骤见 [docs/DEPLOY_ALIYUN.md](docs/DEPLOY_ALIYUN.md)。
+
 ## 测试与打包
 
 ```powershell
@@ -70,16 +80,20 @@ npm.cmd --prefix apps/web run build
 
 ## Agent配置
 
-默认 `AGENT_PROVIDER=mock`，无需外部服务即可完成完整演示。接入OpenClaw时通过 `.env`设置：
+默认 `AGENT_PROVIDER=mock`，无需外部服务即可完成完整演示。正式使用 ClawHive 时，先将两个 ZIP 上传并安装到目标龙虾，再由后端通过 ClawHive 管理的 Agent bridge 调用：
 
 ```env
-AGENT_PROVIDER=openclaw
-OPENCLAW_BASE_URL=https://your-openclaw-endpoint
-OPENCLAW_API_KEY=从环境变量注入
-OPENCLAW_MODEL=openclaw/default
+AGENT_PROVIDER=clawhive
+CLAWHIVE_BASE_URL=https://your-clawhive-agent-bridge
+CLAWHIVE_API_KEY=从服务端环境变量注入
+CLAWHIVE_MODEL=your-configured-model
+CLAWHIVE_TRANSPORT=responses
+CLAWHIVE_RESPONSES_PATH=/v1/responses
+CLAWHIVE_AGENT_ID=your-agent-id
+CLAWHIVE_SKILL_VERSION=1.0.0
 ```
 
-真实密钥只放在本地环境或部署平台密钥管理中，不提交仓库。无论使用哪种Agent，最终数字和数据状态都由后端规则引擎决定。
+真实密钥只放在本地环境或部署平台密钥管理中，不提交仓库。没有可供后端调用的 bridge 时保持 Mock；页面和日志会明确显示 `MOCK` / `Mock Fallback`，不会冒充 ClawHive 实时调用。旧 `OPENCLAW_*` 配置仍作为兼容迁移入口。无论使用哪种 Agent，最终数字和数据状态都由后端规则引擎决定。详见 [docs/CLAWHIVE.md](docs/CLAWHIVE.md)。
 
 ## 演示数据重置
 

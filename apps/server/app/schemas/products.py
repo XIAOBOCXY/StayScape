@@ -51,6 +51,8 @@ class MarketingAsset(BaseModel):
     visual_brief: str = ""
     call_to_action: str = ""
     poster_svg: str = ""
+    creative_angle: str = ""
+    poster_style: str = ""
 
 
 class Financials(BaseModel):
@@ -125,6 +127,11 @@ class ProductGenerateResponse(BaseModel):
     trace_ids: list[str] = Field(default_factory=list)
     validation: dict[str, Any]
     fallback_used: bool = False
+    provider: str = "MOCK"
+    transport: str = "mock"
+    agent_id: str = ""
+    skill_name: str = "stayscape-product-generator"
+    skill_version: str = ""
 
 
 class ProductListResponse(BaseModel):

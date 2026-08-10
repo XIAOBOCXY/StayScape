@@ -10,7 +10,7 @@
        ┌──────┴────────┐
        │               │
   确定性规则引擎      Agent 适配层
-  capacity/pricing    Mock/OpenClaw
+  capacity/pricing    Mock/ClawHive Agent bridge
   availability/time   JSON Schema + trace_id
   weather/crowd       fallback
        │               │
@@ -31,4 +31,3 @@ Agent 只能输出主题、资源候选、自然语言理由、文案和推荐�
 ## 资源与套餐关系
 
 `product_resources` 保存组包时的资源快照和每套消耗量，但重算时永远按 `resource_id` 读取实时资源。这样可以保留产品历史组成，同时保证容量和状态跟随商户实时变化。
-

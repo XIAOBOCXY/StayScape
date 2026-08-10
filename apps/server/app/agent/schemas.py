@@ -10,7 +10,9 @@ class MarketingAssetOutput(BaseModel):
     content: str = Field(default="", max_length=4000)
     visual_brief: str = Field(default="", max_length=500)
     call_to_action: str = Field(default="", max_length=180)
-    poster_svg: str = Field(default="", max_length=30000)
+    poster_svg: str = Field(default="", max_length=300000)
+    creative_angle: str = Field(default="", max_length=260)
+    poster_style: str = Field(default="", max_length=80)
 
 
 class ProductAgentOutput(BaseModel):

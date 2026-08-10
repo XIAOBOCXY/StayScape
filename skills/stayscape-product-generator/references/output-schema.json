@@ -24,7 +24,9 @@
           "content": {"type": "string"},
           "visual_brief": {"type": "string"},
           "call_to_action": {"type": "string"},
-          "poster_svg": {"type": "string"}
+          "poster_svg": {"type": "string"},
+          "creative_angle": {"type": "string"},
+          "poster_style": {"type": "string"}
         },
         "additionalProperties": false
       }

@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ...core.exceptions import AppError
+from ...config import settings
 from ...db import get_db
 from ...models import Hotel, HotelService, Merchant, PartnerResource, ProductResource, ResourceChangeEvent, RoomInventory, SkillCallLog, TravelProduct, User, VisitorIntent
 from ...repositories.product_repository import get_product, list_products
@@ -19,6 +20,7 @@ from ...schemas.resources import MerchantRead, PackageToggleRequest, PartnerReso
 from ...services.product_service import ProductService
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
+from ...agent.openclaw import ClawHiveAgent, OpenClawAgent
 from ..deps import get_hotel_user, resolve_hotel_id
 from ..websocket_manager import manager
 
@@ -240,13 +242,20 @@ def generate_product(request: GenerateProductRequest, db: Session = Depends(get_
     generated = ProductService(db, hotel_id_for(db, user)).generate_many(request)
     db.commit()
     products = [item[0] for item in generated]
+    trace_ids = [item[2] for item in generated]
+    log = db.scalar(select(SkillCallLog).where(SkillCallLog.trace_id == trace_ids[0])) if trace_ids else None
     return {
         "product": product_to_dict(products[0]),
         "products": [product_to_dict(item) for item in products],
         "trace_id": generated[0][2],
-        "trace_ids": [item[2] for item in generated],
+        "trace_ids": trace_ids,
         "validation": generated[0][1],
         "fallback_used": any(item[3] for item in generated),
+        "provider": log.provider if log else "MOCK",
+        "transport": log.transport if log else "mock",
+        "agent_id": log.agent_id if log else "",
+        "skill_name": log.skill_name if log else "stayscape-product-generator",
+        "skill_version": log.skill_version if log else "",
     }
 
 
@@ -395,8 +404,11 @@ def intents(db: Session = Depends(get_db), user: User = Depends(get_hotel_user))
             "adult_count": item.adult_count,
             "child_count": item.child_count,
             "child_ages": item.child_ages,
+            "natural_language": item.natural_language,
             "budget": item.budget,
             "interests": item.interests,
+            "negative_interests": item.negative_interests,
+            "activity_level": item.activity_level,
             "dietary_restrictions": item.dietary_restrictions,
             "allergy_information": item.allergy_information,
             "arrival_time": item.arrival_time,
@@ -452,3 +464,54 @@ def skill_logs(db: Session = Depends(get_db), user: User = Depends(get_hotel_use
     hotel_id = hotel_id_for(db, user)
     items = list(db.scalars(select(SkillCallLog).where(SkillCallLog.hotel_id == hotel_id).order_by(SkillCallLog.created_at.desc()).limit(limit)).all())
     return items
+
+
+@router.get("/agent-diagnostics")
+def agent_diagnostics(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Expose safe Agent wiring details to hotel operators, never credentials."""
+    provider_name = settings.agent_provider.lower()
+    is_clawhive = provider_name == "clawhive"
+    is_remote = provider_name in {"openclaw", "clawhive"}
+    base_url = (settings.clawhive_base_url or settings.openclaw_base_url) if is_clawhive else settings.openclaw_base_url
+    api_key = (settings.clawhive_gateway_token or settings.clawhive_api_key or settings.openclaw_gateway_token or settings.openclaw_api_key) if is_clawhive else (settings.openclaw_gateway_token or settings.openclaw_api_key)
+    model = (settings.clawhive_model or settings.openclaw_model) if is_clawhive else settings.openclaw_model
+    transport = (settings.clawhive_transport or settings.openclaw_transport) if is_clawhive else settings.openclaw_transport
+    responses_path = (settings.clawhive_responses_path or settings.openclaw_responses_path) if is_clawhive else settings.openclaw_responses_path
+    agent_id = (settings.clawhive_agent_id or settings.openclaw_agent_id) if is_clawhive else settings.openclaw_agent_id
+    skill_version = (settings.clawhive_skill_version or settings.openclaw_skill_version) if is_clawhive else settings.openclaw_skill_version
+    agent_class = ClawHiveAgent if is_clawhive else OpenClawAgent
+    configured = is_remote and bool(base_url)
+    gateway = {
+        "configured": configured,
+        "reachable": False,
+        "status_code": None,
+        "error": "ClawHive agent bridge not configured" if is_clawhive else "Agent runtime not configured",
+    }
+    if configured:
+        agent = agent_class(
+            base_url,
+            api_key,
+            model,
+            settings.agent_timeout_seconds,
+            transport=transport,
+            responses_path=responses_path,
+            invoke_path=settings.openclaw_invoke_path,
+            tool_name=settings.openclaw_tool_name,
+            session_key=settings.openclaw_session_key,
+            agent_id=agent_id,
+            skill_version=skill_version,
+            legacy_fallback=settings.openclaw_legacy_fallback,
+        )
+        gateway = agent.diagnostics()
+    provider = "CLAWHIVE" if is_clawhive and is_remote else "OPENCLAW" if is_remote else "MOCK"
+    return {
+        "provider": provider,
+        "transport": transport if is_remote else "mock",
+        "gateway": gateway,
+        "agent_id": agent_id if is_remote else "",
+        "model": model if is_remote else "",
+        "skills": [
+            {"name": "stayscape-product-generator", "version": skill_version, "configured": configured},
+            {"name": "stayscape-visitor-matcher", "version": skill_version, "configured": configured},
+        ],
+    }

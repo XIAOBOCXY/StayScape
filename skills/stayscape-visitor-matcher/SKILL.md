@@ -19,6 +19,9 @@ budget constraints.
 - Explain target crowd, budget, child-age, interest, weather, activity level, and schedule fit.
 - Produce a concise itinerary and limited, non-binding adjustment suggestions.
 - Repeat allergy and dietary information as a safety reminder.
+- When the request contains `structured_confirmed=true`, treat the supplied
+  structured fields as the visitor's final confirmation rather than reparsing
+  the original sentence over them.
 
 ## Safety boundaries
 

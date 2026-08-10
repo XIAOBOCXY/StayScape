@@ -26,6 +26,10 @@ class VisitorQuestion(BaseModel):
 
 class VisitorRecommendRequest(BaseModel):
     natural_language: str = Field(default="", max_length=1000)
+    # True means the visitor has reviewed the structured card.  In that mode
+    # the API must treat the explicit fields as authoritative and never let a
+    # second NLP pass overwrite a manual correction.
+    structured_confirmed: bool = False
     target_date: date | None = None
     weather: str = "RAIN"
     target_crowd: str = "FAMILY"
@@ -71,10 +75,14 @@ class VisitorRecommendResponse(BaseModel):
     trace_id: str
     fallback_used: bool = False
     interpreted_needs: dict[str, object] = Field(default_factory=dict)
+    provider: str = "MOCK"
+    skill_name: str = "stayscape-visitor-matcher"
+    skill_version: str = ""
 
 
 class VisitorIntentCreate(BaseModel):
     natural_language: str = Field(default="", max_length=1000)
+    structured_confirmed: bool = False
     product_id: int
     adult_count: int = Field(ge=1, le=20)
     child_count: int = Field(ge=0, le=20)

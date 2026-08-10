@@ -7,11 +7,19 @@ export interface ProductMediaAsset {
   source: string
   source_url: string
   kind: 'scene' | 'room' | 'culture' | 'tea' | 'city' | 'family' | 'food' | 'themePark' | 'entertainment' | 'sport' | 'nightlife' | 'nature' | 'photo' | 'performance' | 'couple' | 'kids'
+  source_type?: 'UNSPLASH_DEMO' | 'PEXELS_DEMO' | 'WIKIMEDIA_COMMONS' | 'OFFICIAL_REFERENCE' | 'HOTEL_UPLOAD' | 'PARTNER_UPLOAD' | 'PROJECT_ASSET'
+  attribution?: string
+  usage_note?: string
+  license?: string
+  tags?: string[]
+  location?: string
+  category?: string
+  orientation?: 'portrait' | 'landscape' | 'square'
 }
 
 // 固定的公开演示素材：这是杭州主题的氛围参考图，不代表酒店或合作商户真实供图。
 // 页面只消费 mediaForProduct 的结果，避免把几十个 URL 散落在组件中。
-const MEDIA_LIBRARY: Record<string, ProductMediaAsset> = {
+const MEDIA_LIBRARY_RAW: Record<string, ProductMediaAsset> = {
   hangzhou: { id: 'hangzhou-water-town', url: 'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=1800&q=85', alt: '江南水乡与山水的旅行氛围图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hangzhou-water-town', kind: 'scene' },
   rain: { id: 'hangzhou-rain-window', url: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?auto=format&fit=crop&w=1500&q=85', alt: '雨天窗边的安静旅行场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/rainy-window', kind: 'scene' },
   hotel: { id: 'boutique-hotel-room', url: 'https://images.unsplash.com/photo-1564501049412-61c2a3083791?auto=format&fit=crop&w=1400&q=85', alt: '暖色精品酒店客房与床铺', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/boutique-hotel-room', kind: 'room' },
@@ -41,8 +49,30 @@ const MEDIA_LIBRARY: Record<string, ProductMediaAsset> = {
   photo: { id: 'city-photo-walk', url: 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=1400&q=85', alt: '城市旅拍中的相机与街景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-photography', kind: 'photo' },
   performance: { id: 'city-performance', url: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=1400&q=85', alt: '城市演出现场的舞台与观众', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/theater-performance', kind: 'performance' },
   kids: { id: 'kids-indoor-play', url: 'https://images.unsplash.com/photo-1503454537195-1dcabb73ffb9?auto=format&fit=crop&w=1400&q=85', alt: '儿童在室内游乐空间探索', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/kids-indoor-play', kind: 'kids' },
-  couple: { id: 'couple-hangzhou-trip', url: 'https://images.unsplash.com/photo-1511988617509-a57c8a288659?auto=format&fit=crop&w=1400&q=85', alt: '情侣旅行中的城市漫游时刻', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/couple-travel', kind: 'couple' }
+  couple: { id: 'couple-hangzhou-trip', url: 'https://images.unsplash.com/photo-1511988617509-a57c8a288659?auto=format&fit=crop&w=1400&q=85', alt: '情侣旅行中的城市漫游时刻', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/couple-travel', kind: 'couple' },
+  themeParkLights: { id: 'theme-park-lights', url: 'https://images.pexels.com/photos/1779487/pexels-photo-1779487.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '夜间游乐园灯光与摩天轮', source: 'Pexels', source_url: 'https://www.pexels.com/photo/ferris-wheel-under-the-stars-1779487/', kind: 'themePark' },
+  kidsDiscovery: { id: 'kids-discovery', url: 'https://images.pexels.com/photos/3662667/pexels-photo-3662667.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '儿童在探索空间中动手体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/children-playing-inside-a-room-3662667/', kind: 'kids' },
+  climbing: { id: 'climbing-wall', url: 'https://images.pexels.com/photos/1699030/pexels-photo-1699030.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '室内攀岩运动体验', source: 'Pexels', source_url: 'https://www.pexels.com/search/indoor%20climbing/', kind: 'sport' },
+  warmFood: { id: 'warm-food-editorial', url: 'https://images.pexels.com/photos/262978/pexels-photo-262978.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '暖色餐桌与城市美食体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/restaurant-interior-262978/', kind: 'food' }
 }
+
+// Curated demo catalog metadata is deliberately explicit.  These are public
+// reference images, not hotel/partner supplied photos; production can replace
+// individual records with HOTEL_UPLOAD/PARTNER_UPLOAD assets after permission.
+const MEDIA_LIBRARY: Record<string, ProductMediaAsset> = Object.fromEntries(Object.entries(MEDIA_LIBRARY_RAW).map(([key, item]) => {
+  const sourceType = item.source === 'Pexels' ? 'PEXELS_DEMO' : 'UNSPLASH_DEMO'
+  return [key, {
+    ...item,
+    source_type: sourceType,
+    attribution: `${item.source} curated demo image`,
+    usage_note: '公开演示参考图，不代表酒店或合作商户真实供图；正式商用前请按来源页面核验许可。',
+    license: 'Demo reference · verify source license before production',
+    tags: [item.kind, key, 'Hangzhou travel', 'StayScape demo'],
+    location: '杭州主题 / 城市文旅氛围参考',
+    category: item.kind,
+    orientation: key.toLowerCase().includes('poster') ? 'portrait' : 'landscape'
+  }] as const
+})) as Record<string, ProductMediaAsset>
 
 function includesAny(text: string, words: string[]) { return words.some((word) => text.includes(word)) }
 
@@ -52,7 +82,7 @@ function rotate(items: ProductMediaAsset[], seed: number) {
   return [...items.slice(offset), ...items.slice(0, offset)]
 }
 
-export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null): ProductMediaAsset[] {
+function legacyMediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null): ProductMediaAsset[] {
   if (!product) return [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.tea]
   const text = [product.product_name, product.theme, product.target_crowd, product.weather, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''}`)].join(' ').toLowerCase()
   const themePark = includesAny(text, ['乐园', '游乐', '主题公园', 'theme park', 'themepark'])
@@ -74,6 +104,34 @@ export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_na
   const supportSet = family ? [MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel] : sport ? [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.sportDetail, MEDIA_LIBRARY.breakfast] : food ? [MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.city] : tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.hotel] : culture ? [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou] : [MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou]
   const contextSet = product.weather === 'RAIN' ? [MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hangzhou] : nightlife ? [MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.canal] : nature ? [MEDIA_LIBRARY.nature, MEDIA_LIBRARY.lake] : city ? [MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.city]
   return [...rotate(themeSet, seed), ...rotate(supportSet, seed + 1), ...rotate(contextSet, seed + 2)].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index).slice(0, 8)
+}
+
+/** Stable multi-dimensional catalog matching: product id varies the selected
+ * hero, while semantic text, crowd, weather and resource metadata determine
+ * which visual family is allowed. */
+export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null): ProductMediaAsset[] {
+  if (!product) return [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.tea]
+  const text = [product.product_name, product.theme, product.target_crowd, product.weather, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''} ${item.address || ''}`)].join(' ').toLowerCase()
+  const tests: Array<[string[], string[]]> = [
+    [['乐园', '游乐', '主题公园', 'theme'], ['themePark', 'themeParkDay', 'themeParkLights']],
+    [['儿童', '亲子', '孩子', 'kids'], ['kids', 'kidsDiscovery', 'family', 'familyRoom']],
+    [['攀岩', '卡丁车', '运动', 'sport'], ['sport', 'sportDetail', 'climbing', 'entertainment']],
+    [['夜游', '夜景', '音乐', 'night'], ['nightlife', 'canal', 'city', 'performance']],
+    [['旅拍', '摄影', '拍照', 'photo'], ['photo', 'couple', 'city', 'lake']],
+    [['美食', '杭帮菜', '甜品', '咖啡', '烘焙', 'food'], ['food', 'warmFood', 'breakfast', 'hotel']],
+    [['自然', '湿地', '动物', '植物', 'nature'], ['nature', 'natureDetail', 'lake', 'family']],
+    [['演出', '儿童剧', '剧场', 'performance'], ['performance', 'entertainment', 'city', 'nightlife']],
+    [['非遗', '手作', '文化', 'craft'], ['craft', 'craftTable', 'craftHands', 'hotel']],
+    [['茶', '点茶', '茶园', 'tea'], ['tea', 'teaSet', 'teaGarden', 'hangzhou']],
+  ]
+  const matched = tests.find(([words]) => words.some((word) => text.includes(word)))
+  const fallback = legacyMediaForProduct(product)
+  const keys = matched?.[1] || (product.target_crowd === 'COUPLE' ? ['couple', 'photo', 'nightlife', 'lake'] : product.target_crowd === 'FRIENDS' ? ['entertainment', 'sport', 'nightlife', 'city'] : ['hotel', 'hotelWindow', 'hangzhou', 'family'])
+  const seed = Math.abs(Number(product.id || 0) * 7)
+  const catalogItems = keys.map((key) => MEDIA_LIBRARY[key]).filter(Boolean)
+  const rotated = [...catalogItems.slice(seed % Math.max(catalogItems.length, 1)), ...catalogItems.slice(0, seed % Math.max(catalogItems.length, 1))]
+  const merged = [...rotated, ...fallback]
+  return merged.filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index).slice(0, 8)
 }
 
 export function heroMedia(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null) { return mediaForProduct(product)[0] }

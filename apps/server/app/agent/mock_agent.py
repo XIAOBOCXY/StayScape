@@ -216,7 +216,7 @@ class MockAgent:
             "marketing_title": title,
             "marketing_content": content,
             "marketing_assets": [
-                {"asset_type": "POSTER", "platform": "StayScape / 小红书封面", "title": title, "content": content, "visual_brief": f"以{profile['label']}（{profile['tag']}）为主视觉，画面包含{partner_name}、{room_name}与真实场次信息，不使用空泛纯色背景。", "call_to_action": "查看场次 · 提交预约意向", "poster_svg": poster_svg},
+                {"asset_type": "POSTER", "platform": "StayScape / 小红书封面", "title": title, "content": content, "visual_brief": f"以{profile['label']}（{profile['tag']}）为主视觉，画面包含{partner_name}、{room_name}与真实场次信息，不使用空泛纯色背景。", "creative_angle": f"{profile['label']}的具体城市体验主视觉", "poster_style": f"{profile['key']}-editorial", "call_to_action": "查看场次 · 提交预约意向", "poster_svg": poster_svg},
                 {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": f"{weather_label}杭州：{profile['label']}值得住一晚", "content": social_post, "visual_brief": f"首图突出{partner_name}具体体验，后续展示房间、城市场景、时间卡和余量。", "call_to_action": "收藏这段杭州行程"},
                 {"asset_type": "SHORT_VIDEO_SCRIPT", "platform": "短视频 30 秒", "title": f"30秒讲清{profile['label']}主题宿", "content": short_video, "visual_brief": "镜头必须出现房间、服务、体验现场和时间地点四类具体画面。", "call_to_action": "立即查看可售套餐"},
                 {"asset_type": "STORE_CARD", "platform": "OTA / 酒店前台", "title": f"{profile['label']}产品卖点卡", "content": f"{weather_label}友好 · {room_name} · {service_names} · {partner_name}\n场次 {partner_time} · {partner_address}\n适合 {audience} · ¥{payload.get('preferred_price', '599')} / 套 · 余 {capacity} 个名额", "visual_brief": "用房间、服务、体验、场次四块信息替代大段宣传语。", "call_to_action": "查看详情"},

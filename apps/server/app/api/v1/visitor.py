@@ -67,6 +67,36 @@ def number_value(value: str, default: int = 0) -> int:
     return int(value) if value.isdigit() else CN_NUMBERS.get(value, default)
 
 
+def parse_clock(prefix: str | None, value: str, default: int = 15) -> time:
+    hour = number_value(value, default)
+    if prefix and prefix in {"下午", "晚上"} and hour < 12:
+        hour += 12
+    return time(min(hour, 23), 0)
+
+
+def interpreted_needs(request: VisitorRecommendRequest, text: str | None = None) -> dict[str, object]:
+    """Serialize the exact deterministic request used by matching."""
+    return {
+        "natural_language": text if text is not None else request.natural_language.strip(),
+        "target_date": request.target_date.isoformat() if request.target_date else None,
+        "weather": request.weather,
+        "target_crowd": request.target_crowd,
+        "budget": str(request.budget),
+        "adult_count": request.adult_count,
+        "child_count": request.child_count,
+        "child_ages": request.child_ages,
+        "interests": request.interests,
+        "negative_interests": request.negative_interests,
+        "activity_level": request.activity_level,
+        "requested_places": request.requested_places,
+        "dietary_restrictions": request.dietary_restrictions,
+        "allergy_information": request.allergy_information,
+        "arrival_time": request.arrival_time.strftime("%H:%M") if request.arrival_time else None,
+        "preferred_experience_time": request.preferred_experience_time.strftime("%H:%M") if request.preferred_experience_time else None,
+        "other_requirements": request.other_requirements or (text or request.natural_language.strip()),
+    }
+
+
 def parse_weekday(text: str) -> date | None:
     if "周末" in text:
         days = (5 - date.today().weekday()) % 7 or 7
@@ -154,29 +184,20 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     places = [word for word in ("西湖", "运河", "拱宸桥", "茶园", "博物馆", "宋城", "灵隐寺") if word in text]
     if places:
         updates["requested_places"] = list(dict.fromkeys([*request.requested_places, *places]))
-    arrival_match = re.search(r"(?:下午|晚上|早上|上午)?\s*([一二两三四五六七八九十\d]{1,2})\s*点", text)
+    arrival_match = re.search(r"(?:到店|抵达|入住|到达|到杭州)[^，。；,;]{0,10}?(上午|下午|晚上|早上)?\s*([一二两三四五六七八九十\d]{1,2})\s*点", text)
+    if not arrival_match:
+        arrival_match = re.search(r"(上午|下午|晚上|早上)?\s*([一二两三四五六七八九十\d]{1,2})\s*点[^，。；,;]{0,6}?(?:到店|抵达|入住|到达|到杭州)", text)
+    preferred_match = re.search(r"(?:(?:体验|活动|场次|玩|出发)[^，。；,;]{0,8}?(上午|下午|晚上|早上)?\s*([一二两三四五六七八九十\d]{1,2})\s*点|(上午|下午|晚上|早上)?\s*([一二两三四五六七八九十\d]{1,2})\s*点[^，。；,;]{0,4}?(?:体验|活动|场次|玩))", text)
+    generic_match = re.search(r"(上午|下午|晚上|早上)?\s*([一二两三四五六七八九十\d]{1,2})\s*点", text)
     if arrival_match and request.arrival_time is None:
-        hour = number_value(arrival_match.group(1), 15)
-        if "下午" in text or "晚上" in text:
-            hour = hour + 12 if hour < 12 else hour
-        updates["arrival_time"] = time(min(hour, 23), 0)
+        updates["arrival_time"] = parse_clock(arrival_match.group(1), arrival_match.group(2))
+    elif generic_match and request.arrival_time is None and not preferred_match:
+        updates["arrival_time"] = parse_clock(generic_match.group(1), generic_match.group(2))
+    if preferred_match and request.preferred_experience_time is None:
+        prefix, value = (preferred_match.group(1), preferred_match.group(2)) if preferred_match.group(2) else (preferred_match.group(3), preferred_match.group(4))
+        updates["preferred_experience_time"] = parse_clock(prefix, value)
     effective = request.model_copy(update=updates)
-    interpreted = {
-        "natural_language": text,
-        "weather": effective.weather,
-        "target_crowd": effective.target_crowd,
-        "budget": str(effective.budget),
-        "adult_count": effective.adult_count,
-        "child_count": effective.child_count,
-        "child_ages": effective.child_ages,
-        "interests": effective.interests,
-        "negative_interests": effective.negative_interests,
-        "activity_level": effective.activity_level,
-        "requested_places": effective.requested_places,
-        "dietary_restrictions": effective.dietary_restrictions,
-        "allergy_information": effective.allergy_information,
-        "other_requirements": effective.other_requirements or text,
-    }
+    interpreted = interpreted_needs(effective, text)
     return effective, interpreted
 
 
@@ -337,7 +358,10 @@ def interpret(request: VisitorInterpretRequest):
 
 @router.post("/recommend")
 def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
-    request, interpreted_needs = enrich_recommend_request(request)
+    if request.structured_confirmed:
+        interpreted = interpreted_needs(request)
+    else:
+        request, interpreted = enrich_recommend_request(request)
     candidates = list_products(db, public_only=True)
     if request.target_date:
         candidates = [item for item in candidates if item.target_date == request.target_date]
@@ -391,7 +415,7 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
             "limited_adjustments": output.limited_adjustments.get(str(item.id)) or ["预约意向中可备注希望的体验场次", "实时名额变化后以酒店与商户确认结果为准"],
             "allergy_warning": output.allergy_warning or None,
         })
-    return {"results": results, "trace_id": agent_result.trace_id, "fallback_used": agent_result.fallback_used, "interpreted_needs": interpreted_needs}
+    return {"results": results, "trace_id": agent_result.trace_id, "fallback_used": agent_result.fallback_used, "interpreted_needs": interpreted, "provider": getattr(agent_result, "provider", "MOCK"), "skill_name": "stayscape-visitor-matcher", "skill_version": getattr(agent_result, "skill_version", "")}
 
 
 @router.post("/intents")
@@ -424,7 +448,7 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         preferred_experience_time=request.preferred_experience_time,
         other_requirements=request.other_requirements,
     )
-    if request.natural_language.strip():
+    if request.natural_language.strip() and not request.structured_confirmed:
         effective, _ = enrich_recommend_request(effective)
     if effective.child_count and len(effective.child_ages) != effective.child_count:
         raise AppError("VALIDATION_ERROR", "儿童人数与儿童年龄数量不一致", field="child_ages")
@@ -451,17 +475,24 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         "status_after_submission": product.status,
         "allergy_information": effective.allergy_information,
     }
-    intent_data = request.model_dump(exclude={"natural_language", "negative_interests", "activity_level"})
-    intent_data.update({
+    intent_data = {
+        "product_id": request.product_id,
+        "natural_language": request.natural_language,
         "adult_count": effective.adult_count,
         "child_count": effective.child_count,
         "child_ages": effective.child_ages,
         "budget": effective.budget,
         "interests": effective.interests,
+        "negative_interests": effective.negative_interests,
+        "activity_level": effective.activity_level,
         "dietary_restrictions": effective.dietary_restrictions,
         "allergy_information": effective.allergy_information,
+        "arrival_time": effective.arrival_time,
+        "preferred_experience_time": effective.preferred_experience_time,
         "other_requirements": effective.other_requirements or request.natural_language,
-    })
+        "contact_name": request.contact_name,
+        "contact_phone": request.contact_phone,
+    }
     intent = VisitorIntent(
         **intent_data,
         recommendation_result=result,

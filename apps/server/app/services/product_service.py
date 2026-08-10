@@ -19,6 +19,7 @@ from ..rules.time_rule import intervals_overlap, validate_interval
 from ..rules.weather_rule import is_weather_supported
 from ..schemas.products import GenerateProductRequest
 from .inventory_service import ensure_publish_capacity, reconcile_published_capacity
+from .poster_service import poster_asset
 
 
 DEFAULT_QUANTITIES = {"BREAKFAST": 3, "LATE_CHECKOUT": 1}
@@ -149,6 +150,26 @@ class ProductService:
             "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
         }
 
+    def _marketing_assets(self, assets, *, product_name: str, theme: str, target_crowd: str, weather: str, price: Decimal | str, room: RoomInventory, resources: list[ProductResource], variant_index: int = 0) -> list[dict[str, Any]]:
+        """Replace only the poster visual with the server-owned media renderer."""
+        partner_name = "杭州城市体验"
+        address = "杭州体验场地"
+        for row in resources:
+            if row.resource_type != "PARTNER_RESOURCE":
+                continue
+            partner = self.db.get(PartnerResource, row.resource_id)
+            if partner:
+                partner_name, address = partner.resource_name, partner.address or address
+                break
+        rendered: list[dict[str, Any]] = []
+        for asset in assets:
+            data = asset.model_dump(mode="json") if hasattr(asset, "model_dump") else dict(asset)
+            if data.get("asset_type") == "POSTER":
+                creative_angle = str(data.get("creative_angle") or data.get("visual_brief") or "")
+                data.update(poster_asset(title=data.get("title") or product_name, content=data.get("content") or theme, partner_name=partner_name, room_name=room.room_type, address=address, price=str(price), target_crowd=target_crowd, theme=theme, weather=weather, variant_index=variant_index, creative_angle=creative_angle))
+            rendered.append(data)
+        return rendered
+
     def generate(self, request: GenerateProductRequest, *, variant_index: int = 0) -> tuple[TravelProduct, dict[str, Any], str, bool]:
         room = self._room(request)
         selections = [item.model_dump() for item in request.resource_selections] or self._default_selections(request, room)
@@ -221,7 +242,7 @@ class ProductService:
             bottleneck_resource=validation.capacity.bottleneck_resource,
             marketing_title=output.marketing_title,
             marketing_content=output.marketing_content,
-            marketing_assets=[item.model_dump(mode="json") for item in output.marketing_assets],
+            marketing_assets=self._marketing_assets(output.marketing_assets, product_name=output.product_name, theme=output.theme, target_crowd=request.target_crowd, weather=request.weather, price=validation.pricing.suggested_price, room=room, resources=resource_rows, variant_index=variant_index),
             recommendation_reason=output.recommendation_reason,
             risk_message=output.risk_message,
             status="DRAFT",
@@ -261,11 +282,14 @@ class ProductService:
     def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "") -> tuple[str, bool]:
         result = self.orchestrator.generate_product(self._marketing_payload(product, creative_direction))
         output: ProductAgentOutput = result.value  # type: ignore[assignment]
+        room = self.db.get(RoomInventory, product.room_inventory_id)
+        if room is None:
+            raise AppError("ROOM_NOT_FOUND", "产品关联客房不存在，无法重新生成营销素材")
         product.marketing_title = output.marketing_title
         product.marketing_content = output.marketing_content
         product.recommendation_reason = output.recommendation_reason
         product.risk_message = output.risk_message
-        product.marketing_assets = [item.model_dump(mode="json") for item in output.marketing_assets]
+        product.marketing_assets = self._marketing_assets(output.marketing_assets, product_name=product.product_name, theme=product.theme, target_crowd=product.target_crowd, weather=product.weather, price=product.suggested_price, room=room, resources=list(product.resources), variant_index=0)
         self.db.flush()
         return result.trace_id, result.fallback_used
 
