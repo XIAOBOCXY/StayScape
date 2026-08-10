@@ -17,6 +17,8 @@ class RoomRead(BaseModel):
     accounting_cost: Decimal
     max_guests: int
     features: str
+    suitable_crowds: str
+    tags: str
     status: str
     updated_at: object
 
@@ -30,6 +32,8 @@ class RoomCreate(BaseModel):
     accounting_cost: Decimal = Field(gt=0)
     max_guests: int = Field(ge=1, le=20)
     features: str = ""
+    suitable_crowds: str = "ALL"
+    tags: str = ""
 
 
 class RoomUpdate(BaseModel):
@@ -41,6 +45,8 @@ class RoomUpdate(BaseModel):
     accounting_cost: Decimal | None = Field(default=None, gt=0)
     max_guests: int | None = Field(default=None, ge=1, le=20)
     features: str | None = None
+    suitable_crowds: str | None = None
+    tags: str | None = None
     status: str | None = None
     reason: str = "经营库存调整"
 
@@ -122,6 +128,7 @@ class PartnerResourceRead(BaseModel):
     booking_notice: str
     cancellation_rule: str
     package_enabled: bool
+    source_type: str
     status: str
     updated_at: object
     merchant_name: str | None = None
@@ -147,6 +154,7 @@ class PartnerResourceCreate(BaseModel):
     booking_notice: str = ""
     cancellation_rule: str = ""
     package_enabled: bool = False
+    source_type: str = "PARTNER"
 
     @field_validator("maximum_age")
     @classmethod
@@ -176,6 +184,7 @@ class PartnerResourceUpdate(BaseModel):
     address: str | None = None
     booking_notice: str | None = None
     cancellation_rule: str | None = None
+    source_type: str | None = None
     status: str | None = None
     reason: str = "合作资源更新"
 

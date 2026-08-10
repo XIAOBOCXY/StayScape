@@ -70,6 +70,8 @@ class RoomInventory(TimestampMixin, Base):
     accounting_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     max_guests: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     features: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    suitable_crowds: Mapped[str] = mapped_column(String(120), default="ALL", nullable=False)
+    tags: Mapped[str] = mapped_column(String(240), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="AVAILABLE", nullable=False)
 
     hotel: Mapped[Hotel] = relationship(back_populates="rooms")
@@ -118,6 +120,7 @@ class PartnerResource(TimestampMixin, Base):
     booking_notice: Mapped[str] = mapped_column(Text, default="", nullable=False)
     cancellation_rule: Mapped[str] = mapped_column(Text, default="", nullable=False)
     package_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(30), default="PARTNER", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="DRAFT", nullable=False)
 
     merchant: Mapped[Merchant] = relationship(back_populates="resources")

@@ -12,11 +12,12 @@ const loading = ref(true)
 const error = ref('')
 const hero = computed(() => heroMedia(products.value[0]))
 const todayLabel = computed(() => new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date()))
+const weatherMood = computed(() => ({ RAIN: '雨天也值得出发', SUNNY: '杭州晴日正好', CLOUDY: '多云，适合灵活组合' }[products.value[0]?.weather || 'RAIN'] || '杭州，今晚见'))
 
 async function load() {
   loading.value = true
   error.value = ''
-  try { products.value = (await visitorApi.products()).data.slice(0, 6) }
+  try { products.value = (await visitorApi.products()).data }
   catch (e) { error.value = errorMessage(e) }
   finally { loading.value = false }
 }
@@ -43,7 +44,7 @@ onMounted(load)
 
     <section class="tonight-strip">
       <div class="tonight-title"><div class="eyebrow">TONIGHT IN HANGZHOU</div><h2>今晚的杭州</h2><p>不赶景点，先找到适合此刻的那一套。</p></div>
-      <div class="tonight-fact"><span class="fact-icon">☂</span><div><small>WEATHER MOOD</small><strong>雨天也值得出发</strong></div></div>
+      <div class="tonight-fact"><span class="fact-icon">☂</span><div><small>WEATHER MOOD</small><strong>{{ weatherMood }}</strong></div></div>
       <div class="tonight-fact"><span class="fact-icon">✦</span><div><small>LIVE EXPERIENCES</small><strong>{{ products.length || '—' }} 个可售体验</strong></div></div>
       <div class="tonight-audiences"><span>FAMILY</span><span>COUPLE</span><span>LOCAL WEEKEND</span></div>
     </section>
@@ -52,7 +53,7 @@ onMounted(load)
       <div class="editorial-heading"><div><div class="eyebrow">CURATED FOR THIS MOMENT</div><h2>今晚住哪一段杭州？</h2></div><router-link to="/visitor/products">查看全部 <span>↗</span></router-link></div>
       <div v-if="loading" class="home-loading"><span /> 正在寻找今天仍然可用的体验…</div>
       <el-alert v-else-if="error" :title="error" type="error" show-icon />
-      <div v-else-if="products.length" class="product-grid product-grid--editorial"><ProductCard v-for="product in products.slice(0, 3)" :key="product.id" :product="product" public-view /></div>
+      <div v-else-if="products.length" class="product-grid product-grid--editorial"><ProductCard v-for="product in products.slice(0, 12)" :key="product.id" :product="product" public-view /></div>
       <div v-else class="home-empty"><div class="empty-mark">S</div><h3>今晚的公开套餐正在更新</h3><p>酒店确认发布后，体验会立即出现在这里。你也可以先告诉我们想怎么玩。</p><el-button type="primary" plain @click="$router.push('/visitor/recommend')">先获取个性化推荐</el-button></div>
     </section>
 

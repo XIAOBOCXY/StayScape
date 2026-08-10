@@ -28,6 +28,40 @@ router = APIRouter(prefix="/visitor", tags=["visitor"])
 
 CN_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
+PREFERENCE_ALIASES: dict[str, tuple[str, ...]] = {
+    "THEME_PARK": ("乐园", "主题公园", "游乐园", "theme park"),
+    "KIDS": ("儿童乐园", "儿童探索", "kids"),
+    "CULTURE": ("非遗", "手作", "手工", "文化", "博物馆", "museum"),
+    "TEA": ("茶", "点茶", "茶文化", "tea"),
+    "SPORT": ("运动", "攀岩", "卡丁车", "射箭", "刺激", "sport"),
+    "NIGHTLIFE": ("夜游", "夜景", "音乐现场", "夜生活", "nightlife"),
+    "PHOTO": ("旅拍", "摄影", "拍照", "photo"),
+    "FOOD": ("美食", "杭帮菜", "甜品", "咖啡", "烘焙", "food"),
+    "NATURE": ("自然", "湿地", "动物", "植物", "nature"),
+    "PERFORMANCE": ("演出", "儿童剧", "剧场", "performance"),
+    "CITY_WALK": ("漫游", "散步", "骑行", "街巷", "city walk"),
+    "SLOW": ("慢游", "休息", "安静", "放松", "slow"),
+}
+NEGATIVE_MARKERS = ("不想", "不要", "不喜欢", "不爱", "避开", "别安排", "不考虑")
+
+
+def preference_categories(text: str) -> set[str]:
+    lowered = text.lower()
+    return {category for category, aliases in PREFERENCE_ALIASES.items() if any(alias.lower() in lowered for alias in aliases)}
+
+
+def negative_preference_categories(text: str) -> set[str]:
+    lowered = text.lower()
+    found: set[str] = set()
+    for category, aliases in PREFERENCE_ALIASES.items():
+        for alias in aliases:
+            if any(re.search(rf"{re.escape(marker.lower())}.{{0,4}}{re.escape(alias.lower())}", lowered) for marker in NEGATIVE_MARKERS):
+                found.add(category)
+                break
+    if any(phrase in lowered for phrase in ("不想走太多路", "少走路", "不想徒步", "不想太累")):
+        found.update({"CITY_WALK", "NATURE", "SPORT"})
+    return found
+
 
 def number_value(value: str, default: int = 0) -> int:
     return int(value) if value.isdigit() else CN_NUMBERS.get(value, default)
@@ -56,6 +90,19 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     if not text:
         return request, {}
     updates: dict[str, object] = {}
+    categories = preference_categories(text)
+    negative_categories = negative_preference_categories(text)
+    if any(word in text for word in ("情侣", "夫妻", "约会", "两个人", "两人")) and not any(word in text for word in ("孩子", "儿童", "小孩", "小朋友", "岁")):
+        updates["target_crowd"] = "COUPLE"
+    elif any(word in text for word in ("朋友", "同学", "室友", "大学生", "兄弟", "闺蜜")):
+        updates["target_crowd"] = "FRIENDS"
+    elif any(word in text for word in ("一个人", "独自", "solo", "自己旅行")):
+        updates["target_crowd"] = "SOLO"
+    elif any(word in text for word in ("本地", "周末微度假", "周末放松")):
+        updates["target_crowd"] = "LOCAL_WEEKEND"
+    activity_level = "HIGH" if any(word in text for word in ("刺激", "挑战", "运动", "攀岩", "卡丁车")) else "LOW" if any(word in text for word in ("不想走太多路", "少走路", "轻松", "休息", "慢一点")) else None
+    if activity_level:
+        updates["activity_level"] = activity_level
     if "明天" in text:
         updates["target_date"] = date.today() + timedelta(days=1)
     elif "今天" in text:
@@ -92,9 +139,12 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     if any(word in text for word in ("情侣", "夫妻", "两个人", "两人")) and not any(word in text for word in ("孩子", "儿童", "小孩", "小朋友", "岁")):
         updates["child_count"] = 0
         updates["child_ages"] = []
-    interests = [word for word in ("亲子", "手工", "非遗", "茶", "点茶", "博物馆", "摄影", "旅拍", "美食", "慢游") if word in text]
+    interests = [word for word in ("亲子", "手工", "非遗", "茶", "点茶", "博物馆", "摄影", "旅拍", "美食", "慢游", "乐园", "运动", "夜游", "演出", "自然", "咖啡") if word in text]
+    interests.extend(sorted(categories - negative_categories))
     if interests:
         updates["interests"] = list(dict.fromkeys([*request.interests, *interests]))
+    if negative_categories:
+        updates["negative_interests"] = list(dict.fromkeys([*request.negative_interests, *sorted(negative_categories)]))
     dietary_terms = [word for word in ("不吃辣", "素食", "清真", "不吃海鲜", "不吃牛肉") if word in text]
     allergy_terms = [word for word in ("花生", "坚果", "牛奶", "乳制品", "海鲜", "鸡蛋") if word in text and ("过敏" in text or "忌" in text)]
     if dietary_terms or allergy_terms:
@@ -114,11 +164,14 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     interpreted = {
         "natural_language": text,
         "weather": effective.weather,
+        "target_crowd": effective.target_crowd,
         "budget": str(effective.budget),
         "adult_count": effective.adult_count,
         "child_count": effective.child_count,
         "child_ages": effective.child_ages,
         "interests": effective.interests,
+        "negative_interests": effective.negative_interests,
+        "activity_level": effective.activity_level,
         "requested_places": effective.requested_places,
         "dietary_restrictions": effective.dietary_restrictions,
         "allergy_information": effective.allergy_information,
@@ -180,10 +233,25 @@ def matches_conditions(db: Session, product: TravelProduct, request: VisitorReco
     if request.child_count and len(request.child_ages) != request.child_count:
         children_match = False
     searchable = f"{product.product_name} {product.theme} {product.marketing_content}"
+    resource_categories: set[str] = set()
     for row, resource in product_partner_rows(db, product):
         searchable += f" {resource.resource_name} {resource.address} {resource.description}"
+        resource_categories.add(str(resource.category).upper())
     interest_terms = [*request.interests, *request.requested_places]
-    interest_match = not interest_terms or any(item.lower() in searchable.lower() for item in interest_terms)
+    semantic_categories = preference_categories(searchable)
+    requested_categories = {item.upper() for item in request.interests if str(item).upper() in PREFERENCE_ALIASES}
+    requested_categories.update(preference_categories(" ".join(str(item) for item in request.interests)))
+    negative_categories = {item.upper() for item in request.negative_interests}
+    negative_categories.update(preference_categories(request.natural_language) & negative_preference_categories(request.natural_language))
+    negative_hit = bool(negative_categories & semantic_categories) or bool(negative_categories & resource_categories)
+    persona_match = product.target_crowd in {request.target_crowd, "ALL"} if request.target_crowd else True
+    activity_match = True
+    if request.activity_level == "LOW" and any(category in resource_categories for category in {"SPORT", "NATURE", "CITY_WALK"}):
+        activity_match = False
+    if request.activity_level == "HIGH" and not any(category in resource_categories for category in {"SPORT", "THEME_PARK", "ENTERTAINMENT", "NIGHTLIFE"}):
+        activity_match = False
+    positive_match = not interest_terms or any(item.lower() in searchable.lower() for item in interest_terms) or bool(requested_categories & semantic_categories)
+    interest_match = persona_match and activity_match and not negative_hit and positive_match
     budget_match = product.suggested_price <= request.budget
     score = (35 if budget_match else 0) + (25 if children_match else 0) + (20 if weather_match else 0) + (20 if interest_match else 0)
     return children_match, weather_match, interest_match, score
@@ -229,10 +297,14 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
     product = get_product(db, request.product_id) if request.product_id else None
     if product and (product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0):
         product = None
+    interpreted_request, _ = enrich_recommend_request(VisitorRecommendRequest(natural_language=request.natural_language or request.question, weather=request.weather, target_crowd=product.target_crowd if product else "FAMILY"))
     payload = {
         "question": request.question,
-        "natural_language": request.natural_language,
+        "natural_language": request.natural_language or request.question,
         "weather": request.weather,
+        "target_crowd": interpreted_request.target_crowd,
+        "negative_interests": interpreted_request.negative_interests,
+        "activity_level": interpreted_request.activity_level,
         "products": [{"id": product.id, "product_name": product.product_name, "sale_quantity": product.sale_quantity}] if product else [],
         "allergy_information": "",
     }
@@ -240,7 +312,7 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
     answer = getattr(result.value, "answer", "") or "我会结合当前可售库存、预算、客群、天气和体验时间给出推荐；最终库存与价格以系统实时计算为准。"
     suggestions = []
     if any(word in question for word in ("还有", "其他", "推荐", "别的")):
-        effective = VisitorRecommendRequest(natural_language=request.question, weather=request.weather, budget=product.visitor_budget_limit if product else Decimal("700"), target_date=product.target_date if product else None)
+        effective = VisitorRecommendRequest(natural_language=request.question, weather=request.weather, budget=product.visitor_budget_limit if product else Decimal("700"), target_date=product.target_date if product else None, target_crowd=product.target_crowd if product else "FAMILY")
         effective, _ = enrich_recommend_request(effective)
         candidates = []
         for item in list_products(db, public_only=True):
@@ -251,7 +323,7 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
             if item.suggested_price > effective.budget:
                 continue
             child_ok, weather_ok, interest_ok, _ = matches_conditions(db, item, effective)
-            if child_ok and weather_ok and (interest_ok or not effective.interests):
+            if child_ok and weather_ok and interest_ok and not effective.negative_interests:
                 candidates.append(item)
         suggestions = [product_to_dict(item) for item in candidates[:3]]
     return {"trace_id": result.trace_id, "answer": answer, "safety_notes": getattr(result.value, "safety_notes", "") or "AI建议不替代商户对过敏、儿童安全和场次的最终确认。", "product": product_to_dict(product) if product else None, "suggestions": suggestions, "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河还是室内文化体验？", "预算上限和可接受场次是什么？"], "fallback_used": result.fallback_used}
@@ -277,6 +349,10 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         children_match, weather_match, interest_match, score = matches_conditions(db, item, request)
         if not children_match or not weather_match:
             continue
+        if request.target_crowd and item.target_crowd not in {request.target_crowd, "ALL"}:
+            continue
+        if (request.negative_interests or request.activity_level != "MEDIUM") and not interest_match:
+            continue
         valid_candidates.append(item)
         match_meta[item.id] = (children_match, weather_match, interest_match, score)
     payload = {
@@ -285,7 +361,10 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         "child_ages": request.child_ages,
         "budget": str(request.budget),
         "weather": request.weather,
+        "target_crowd": request.target_crowd,
         "interests": request.interests,
+        "negative_interests": request.negative_interests,
+        "activity_level": request.activity_level,
         "requested_places": request.requested_places,
         "natural_language": request.natural_language,
         "dietary_restrictions": request.dietary_restrictions,
@@ -331,11 +410,14 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         natural_language=request.natural_language,
         target_date=product.target_date,
         weather=product.weather,
+        target_crowd=product.target_crowd,
         adult_count=request.adult_count,
         child_count=request.child_count,
         child_ages=request.child_ages,
         budget=request.budget,
         interests=request.interests,
+        negative_interests=request.negative_interests,
+        activity_level=request.activity_level,
         dietary_restrictions=request.dietary_restrictions,
         allergy_information=request.allergy_information,
         arrival_time=request.arrival_time,
@@ -369,7 +451,7 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         "status_after_submission": product.status,
         "allergy_information": effective.allergy_information,
     }
-    intent_data = request.model_dump(exclude={"natural_language"})
+    intent_data = request.model_dump(exclude={"natural_language", "negative_interests", "activity_level"})
     intent_data.update({
         "adult_count": effective.adult_count,
         "child_count": effective.child_count,

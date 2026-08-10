@@ -6,7 +6,7 @@ export interface ProductMediaAsset {
   alt: string
   source: string
   source_url: string
-  kind: 'scene' | 'room' | 'culture' | 'tea' | 'city' | 'family' | 'food'
+  kind: 'scene' | 'room' | 'culture' | 'tea' | 'city' | 'family' | 'food' | 'themePark' | 'entertainment' | 'sport' | 'nightlife' | 'nature' | 'photo' | 'performance' | 'couple' | 'kids'
 }
 
 // 固定的公开演示素材：这是杭州主题的氛围参考图，不代表酒店或合作商户真实供图。
@@ -28,7 +28,20 @@ const MEDIA_LIBRARY: Record<string, ProductMediaAsset> = {
   lake: { id: 'lake-walk', url: 'https://images.unsplash.com/photo-1500534623283-312aade485b7?auto=format&fit=crop&w=1400&q=85', alt: '湖边散步与江南风景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/lake-walk', kind: 'scene' },
   family: { id: 'family-travel', url: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?auto=format&fit=crop&w=1400&q=85', alt: '家庭旅行中的亲密陪伴场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-travel', kind: 'family' },
   familyRoom: { id: 'family-hotel-room', url: 'https://images.unsplash.com/photo-1595576508898-0ad5c879a061?auto=format&fit=crop&w=1400&q=85', alt: '适合家庭入住的明亮客房', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-hotel-room', kind: 'family' },
-  familyTable: { id: 'family-table', url: 'https://images.unsplash.com/photo-1472162072942-cd5147eb3902?auto=format&fit=crop&w=1400&q=85', alt: '家人围坐分享旅行时光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-dinner-travel', kind: 'family' }
+  familyTable: { id: 'family-table', url: 'https://images.unsplash.com/photo-1472162072942-cd5147eb3902?auto=format&fit=crop&w=1400&q=85', alt: '家人围坐分享旅行时光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-dinner-travel', kind: 'family' },
+  themePark: { id: 'hangzhou-theme-park', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=1400&q=85', alt: '夜色中的游乐园摩天轮与灯光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/theme-park', kind: 'themePark' },
+  themeParkDay: { id: 'theme-park-day', url: 'https://images.unsplash.com/photo-1513889961551-628c1efc99d7?auto=format&fit=crop&w=1400&q=85', alt: '白天游乐园的家庭旅行场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/amusement-park', kind: 'themePark' },
+  entertainment: { id: 'city-entertainment', url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1400&q=85', alt: '城市音乐现场与年轻人娱乐氛围', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/live-music', kind: 'entertainment' },
+  sport: { id: 'indoor-sport', url: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=1400&q=85', alt: '室内运动馆的运动体验场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/indoor-sports', kind: 'sport' },
+  sportDetail: { id: 'sport-detail', url: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1400&q=85', alt: '朋友一起完成运动挑战的细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/sports-friends', kind: 'sport' },
+  nightlife: { id: 'hangzhou-nightlife', url: 'https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=1400&q=85', alt: '城市夜色与灯光组成的夜游场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-night', kind: 'nightlife' },
+  food: { id: 'jiangnan-food', url: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1400&q=85', alt: '餐桌与江南美食体验氛围', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/restaurant-table', kind: 'food' },
+  nature: { id: 'xixi-nature', url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=1400&q=85', alt: '湿地与树木组成的自然探索场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/wetland-nature', kind: 'nature' },
+  natureDetail: { id: 'nature-detail', url: 'https://images.unsplash.com/photo-1473445361085-b9a07f55608b?auto=format&fit=crop&w=1400&q=85', alt: '亲子自然观察与植物细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/nature-walk', kind: 'nature' },
+  photo: { id: 'city-photo-walk', url: 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=1400&q=85', alt: '城市旅拍中的相机与街景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-photography', kind: 'photo' },
+  performance: { id: 'city-performance', url: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=1400&q=85', alt: '城市演出现场的舞台与观众', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/theater-performance', kind: 'performance' },
+  kids: { id: 'kids-indoor-play', url: 'https://images.unsplash.com/photo-1503454537195-1dcabb73ffb9?auto=format&fit=crop&w=1400&q=85', alt: '儿童在室内游乐空间探索', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/kids-indoor-play', kind: 'kids' },
+  couple: { id: 'couple-hangzhou-trip', url: 'https://images.unsplash.com/photo-1511988617509-a57c8a288659?auto=format&fit=crop&w=1400&q=85', alt: '情侣旅行中的城市漫游时刻', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/couple-travel', kind: 'couple' }
 }
 
 function includesAny(text: string, words: string[]) { return words.some((word) => text.includes(word)) }
@@ -42,15 +55,24 @@ function rotate(items: ProductMediaAsset[], seed: number) {
 export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null): ProductMediaAsset[] {
   if (!product) return [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.tea]
   const text = [product.product_name, product.theme, product.target_crowd, product.weather, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''}`)].join(' ').toLowerCase()
+  const themePark = includesAny(text, ['乐园', '游乐', '主题公园', 'theme park', 'themepark'])
+  const kids = includesAny(text, ['儿童', '孩子', '亲子乐园', 'kids'])
+  const sport = includesAny(text, ['运动', '攀岩', '卡丁车', '射箭', 'sport'])
+  const nightlife = includesAny(text, ['夜游', '夜景', '夜生活', '音乐现场', 'nightlife'])
+  const food = includesAny(text, ['美食', '杭帮菜', '甜品', '咖啡', '烘焙', 'food'])
+  const nature = includesAny(text, ['自然', '湿地', '动物', '植物', 'nature'])
+  const photo = includesAny(text, ['旅拍', '摄影', '拍照', 'photo'])
+  const performance = includesAny(text, ['演出', '儿童剧', '剧场', 'performance'])
+  const entertainment = includesAny(text, ['娱乐', '陶艺', '桌游', '电玩', 'entertainment'])
   const culture = includesAny(text, ['非遗', '手作', '文化', '工坊', 'craft'])
   const tea = includesAny(text, ['茶', '点茶', '茶器', '茶园', 'tea'])
   const family = includesAny(text, ['亲子', '家庭', 'family']) || product.target_crowd === 'FAMILY'
   const couple = includesAny(text, ['情侣', '夫妻', '旅拍', 'couple']) || product.target_crowd === 'COUPLE'
   const city = includesAny(text, ['西湖', '运河', '城市', '漫游', '摄影', 'city']) || couple
   const seed = Number(product.id || 0)
-  const themeSet = tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.teaSet, MEDIA_LIBRARY.teaGarden] : culture ? [MEDIA_LIBRARY.craft, MEDIA_LIBRARY.craftTable, MEDIA_LIBRARY.craftHands] : city ? [MEDIA_LIBRARY.city, MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : family ? [MEDIA_LIBRARY.family, MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.familyTable] : [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.hangzhou]
-  const supportSet = family ? [MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel] : tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.hotel] : culture ? [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou] : [MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou]
-  const contextSet = product.weather === 'RAIN' ? [MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hangzhou] : city ? [MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.city]
+  const themeSet = themePark ? [MEDIA_LIBRARY.themePark, MEDIA_LIBRARY.themeParkDay, MEDIA_LIBRARY.family] : kids ? [MEDIA_LIBRARY.kids, MEDIA_LIBRARY.family, MEDIA_LIBRARY.familyRoom] : sport ? [MEDIA_LIBRARY.sport, MEDIA_LIBRARY.sportDetail, MEDIA_LIBRARY.hotel] : nightlife ? [MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.canal, MEDIA_LIBRARY.city] : food ? [MEDIA_LIBRARY.food, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel] : nature ? [MEDIA_LIBRARY.nature, MEDIA_LIBRARY.natureDetail, MEDIA_LIBRARY.family] : photo ? [MEDIA_LIBRARY.photo, MEDIA_LIBRARY.city, MEDIA_LIBRARY.couple] : performance ? [MEDIA_LIBRARY.performance, MEDIA_LIBRARY.entertainment, MEDIA_LIBRARY.city] : entertainment ? [MEDIA_LIBRARY.entertainment, MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.hotel] : tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.teaSet, MEDIA_LIBRARY.teaGarden] : culture ? [MEDIA_LIBRARY.craft, MEDIA_LIBRARY.craftTable, MEDIA_LIBRARY.craftHands] : city ? [MEDIA_LIBRARY.city, MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : family ? [MEDIA_LIBRARY.family, MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.familyTable] : [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.hangzhou]
+  const supportSet = family ? [MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel] : sport ? [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.sportDetail, MEDIA_LIBRARY.breakfast] : food ? [MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.city] : tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.hotel] : culture ? [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou] : [MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou]
+  const contextSet = product.weather === 'RAIN' ? [MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hangzhou] : nightlife ? [MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.canal] : nature ? [MEDIA_LIBRARY.nature, MEDIA_LIBRARY.lake] : city ? [MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.city]
   return [...rotate(themeSet, seed), ...rotate(supportSet, seed + 1), ...rotate(contextSet, seed + 2)].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index).slice(0, 8)
 }
 

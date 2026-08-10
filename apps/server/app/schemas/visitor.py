@@ -19,6 +19,7 @@ class VisitorProductQuery(BaseModel):
 class VisitorQuestion(BaseModel):
     product_id: int | None = None
     question: str = Field(min_length=1, max_length=500)
+    natural_language: str = Field(default="", max_length=1000)
     child_age: int | None = Field(default=None, ge=0, le=120)
     weather: str = "RAIN"
 
@@ -27,12 +28,14 @@ class VisitorRecommendRequest(BaseModel):
     natural_language: str = Field(default="", max_length=1000)
     target_date: date | None = None
     weather: str = "RAIN"
-    natural_language: str = Field(default="", max_length=1000)
+    target_crowd: str = "FAMILY"
     adult_count: int = Field(default=2, ge=1, le=20)
     child_count: int = Field(default=0, ge=0, le=20)
     child_ages: list[int] = Field(default_factory=list)
     budget: Decimal = Field(default=Decimal("700"), gt=0)
     interests: list[str] = Field(default_factory=list)
+    negative_interests: list[str] = Field(default_factory=list)
+    activity_level: str = "MEDIUM"
     requested_places: list[str] = Field(default_factory=list)
     dietary_restrictions: list[str] = Field(default_factory=list)
     allergy_information: str = ""
@@ -78,6 +81,8 @@ class VisitorIntentCreate(BaseModel):
     child_ages: list[int] = Field(default_factory=list)
     budget: Decimal = Field(gt=0)
     interests: list[str] = Field(default_factory=list)
+    negative_interests: list[str] = Field(default_factory=list)
+    activity_level: str = "MEDIUM"
     dietary_restrictions: list[str] = Field(default_factory=list)
     allergy_information: str = ""
     arrival_time: time | None = None

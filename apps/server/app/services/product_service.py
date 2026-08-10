@@ -76,12 +76,44 @@ class ProductService:
             selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": late_checkout.id, "quantity_per_package": 1})
         partners = list(self.db.scalars(select(PartnerResource).join(Merchant).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date).order_by(PartnerResource.id)).all())
         eligible = [item for item in partners if self._partner_candidate(item, request)]
-        if request.weather == "RAIN":
-            eligible.sort(key=lambda item: (not item.indoor, item.settlement_price, item.id))
-        elif request.weather == "SUNNY":
-            eligible.sort(key=lambda item: (item.indoor, item.settlement_price, item.id))
+        theme_text = f"{request.theme} {request.target_crowd}".lower()
+        preferred_categories: set[str] = set()
+        if any(word in theme_text for word in ("乐园", "游乐", "theme park")):
+            preferred_categories.update({"THEME_PARK", "KIDS"})
+        elif any(word in theme_text for word in ("运动", "攀岩", "卡丁车", "刺激", "sport")):
+            preferred_categories.update({"SPORT", "ENTERTAINMENT"})
+        elif any(word in theme_text for word in ("夜游", "夜景", "夜生活", "night")):
+            preferred_categories.update({"NIGHTLIFE", "ENTERTAINMENT", "PHOTO"})
+        elif any(word in theme_text for word in ("旅拍", "摄影", "photo")):
+            preferred_categories.add("PHOTO")
+        elif any(word in theme_text for word in ("美食", "咖啡", "甜品", "food")):
+            preferred_categories.add("FOOD")
+        elif any(word in theme_text for word in ("自然", "湿地", "动物", "nature")):
+            preferred_categories.add("NATURE")
+        elif any(word in theme_text for word in ("演出", "剧场", "performance")):
+            preferred_categories.add("PERFORMANCE")
+        elif any(word in theme_text for word in ("漫游", "城市", "city")):
+            preferred_categories.update({"CITY_WALK", "PHOTO", "FOOD"})
+        elif any(word in theme_text for word in ("茶", "点茶", "tea")):
+            preferred_categories.update({"TEA", "CULTURE"})
+        elif any(word in theme_text for word in ("非遗", "手作", "文化", "craft")):
+            preferred_categories.add("CULTURE")
+        elif request.target_crowd == "FAMILY":
+            preferred_categories.update({"KIDS", "THEME_PARK", "NATURE", "CULTURE"})
+        elif request.target_crowd == "COUPLE":
+            preferred_categories.update({"PHOTO", "NIGHTLIFE", "FOOD", "ENTERTAINMENT"})
+        elif request.target_crowd == "FRIENDS":
+            preferred_categories.update({"SPORT", "ENTERTAINMENT", "NIGHTLIFE"})
+        elif request.target_crowd == "SOLO":
+            preferred_categories.update({"FOOD", "CITY_WALK", "CULTURE"})
         else:
-            eligible.sort(key=lambda item: (not item.indoor, item.settlement_price, item.id))
+            preferred_categories.update({"FOOD", "CITY_WALK", "NIGHTLIFE"})
+        if request.weather == "RAIN":
+            eligible.sort(key=lambda item: (item.category not in preferred_categories, not item.indoor, item.settlement_price, item.id))
+        elif request.weather == "SUNNY":
+            eligible.sort(key=lambda item: (item.category not in preferred_categories, item.indoor, item.settlement_price, item.id))
+        else:
+            eligible.sort(key=lambda item: (item.category not in preferred_categories, not item.indoor, item.settlement_price, item.id))
         selected = eligible[0] if eligible else None
         if selected:
             selections.append({"resource_type": "PARTNER_RESOURCE", "resource_id": selected.id, "quantity_per_package": 3 if selected.category == "CULTURE" else 1})
@@ -92,7 +124,7 @@ class ProductService:
         return bool(
             merchant
             and resource.available_date == request.target_date
-            and resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=resource.package_enabled, resource_status=resource.status, capacity=resource.remaining_capacity)
+            and resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=resource.package_enabled, resource_status=resource.status, capacity=resource.remaining_capacity, source_type=resource.source_type)
             and crowd_supported(resource.suitable_crowds, request.target_crowd, minimum_age=resource.minimum_age, maximum_age=resource.maximum_age)
             and is_weather_supported(resource.weather_tags, request.weather)
         )
@@ -111,10 +143,10 @@ class ProductService:
             "variant_total": request.variant_count,
             "visitor_budget": str(request.visitor_budget),
             "preferred_price": str(request.preferred_price),
-            "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests, "features": room.features, "available_count": room.available_count},
+            "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests, "features": room.features, "suitable_crowds": room.suitable_crowds, "tags": room.tags, "available_count": room.available_count},
             "requested_selections": selections,
             "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE"],
-            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and item.merchant.cooperation_status == "ACTIVE" and item.package_enabled and item.status == "AVAILABLE"],
+            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
         }
 
     def generate(self, request: GenerateProductRequest, *, variant_index: int = 0) -> tuple[TravelProduct, dict[str, Any], str, bool]:
@@ -250,7 +282,7 @@ class ProductService:
         if quantity <= 0:
             raise AppError("VALIDATION_ERROR", "每套体验消耗量必须大于0", field=f"resource_{partner.id}")
         merchant = partner.merchant
-        if not merchant or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity):
+        if not merchant or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity, source_type=partner.source_type):
             raise AppError("PARTNER_RESOURCE_UNAVAILABLE", f"合作资源{partner.resource_name}当前不可组包", field="resource_selections", retryable=True)
         if partner.available_date != request.target_date:
             raise AppError("DATE_NOT_MATCHED", "合作资源日期与入住日期不一致", field="target_date", retryable=True)
@@ -325,7 +357,7 @@ class ProductService:
                 partner_row = row
                 partner = self.db.get(PartnerResource, row.resource_id)
                 merchant = self.db.get(Merchant, partner.merchant_id) if partner else None
-                if not partner or not merchant or partner.available_date != product.target_date or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity):
+                if not partner or not merchant or partner.available_date != product.target_date or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity, source_type=partner.source_type):
                     replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
                     if replacement:
                         replacement_id = replacement.id
@@ -421,7 +453,7 @@ class ProductService:
         old = self.db.get(PartnerResource, row.resource_id)
         if not old:
             return None
-        candidates = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.id != old.id, PartnerResource.available_date == product.target_date, PartnerResource.category == old.category, PartnerResource.package_enabled.is_(True), PartnerResource.status == "AVAILABLE", Merchant.cooperation_status == "ACTIVE").order_by(PartnerResource.settlement_price)).unique().all())
+        candidates = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.id != old.id, PartnerResource.available_date == product.target_date, PartnerResource.category == old.category, PartnerResource.package_enabled.is_(True), PartnerResource.status == "AVAILABLE", PartnerResource.source_type.in_(["PARTNER", "DEMO"]), Merchant.cooperation_status == "ACTIVE").order_by(PartnerResource.settlement_price)).unique().all())
         for candidate in candidates:
             if candidate.remaining_capacity < row.quantity_per_package:
                 continue

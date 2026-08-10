@@ -55,6 +55,8 @@ def room_snapshot(room: RoomInventory) -> dict:
         "accounting_cost": str(room.accounting_cost),
         "max_guests": room.max_guests,
         "features": room.features,
+        "suitable_crowds": room.suitable_crowds,
+        "tags": room.tags,
     }
 
 

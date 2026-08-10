@@ -19,6 +19,8 @@ from .models import (
     User,
     VisitorIntent,
 )
+from .showcase_catalog import seed_extra_catalog
+from .showcase_seed import seed_showcase_products
 
 
 DEMO_PASSWORD = "StayScape123!"
@@ -44,7 +46,7 @@ def clear_all(db: Session) -> None:
         db.query(model).delete(synchronize_session=False)
 
 
-def seed_demo(db: Session, *, reset: bool = False) -> dict:
+def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = False) -> dict:
     if reset:
         clear_all(db)
         db.commit()
@@ -54,7 +56,10 @@ def seed_demo(db: Session, *, reset: bool = False) -> dict:
     existing = db.query(Hotel).first()
     if existing:
         target_date = db.query(RoomInventory).order_by(RoomInventory.available_date).first().available_date
-        return {"hotel_id": existing.id, "target_date": target_date.isoformat(), "created": False}
+        result = {"hotel_id": existing.id, "target_date": target_date.isoformat(), "created": False}
+        if include_showcase:
+            result.update(seed_showcase_products(db, existing.id, target_date))
+        return result
 
     target_date = date.today() + timedelta(days=1)
     hotel = Hotel(
@@ -94,9 +99,9 @@ def seed_demo(db: Session, *, reset: bool = False) -> dict:
 
     db.add_all(
         [
-            RoomInventory(hotel_id=hotel.id, room_type="亲子房", available_date=target_date, available_count=6, normal_price=Decimal("499"), minimum_price=Decimal("399"), accounting_cost=Decimal("220"), max_guests=3, features="儿童用品、家庭空间、亲子主题", status="AVAILABLE"),
-            RoomInventory(hotel_id=hotel.id, room_type="大床房", available_date=target_date, available_count=4, normal_price=Decimal("459"), minimum_price=Decimal("359"), accounting_cost=Decimal("210"), max_guests=2, features="安静采光、城市景观", status="AVAILABLE"),
-            RoomInventory(hotel_id=hotel.id, room_type="双床房", available_date=target_date, available_count=3, normal_price=Decimal("479"), minimum_price=Decimal("379"), accounting_cost=Decimal("215"), max_guests=2, features="双床、亲友出行", status="AVAILABLE"),
+            RoomInventory(hotel_id=hotel.id, room_type="亲子房", available_date=target_date, available_count=6, normal_price=Decimal("499"), minimum_price=Decimal("399"), accounting_cost=Decimal("220"), max_guests=3, features="儿童用品、家庭空间、亲子主题", suitable_crowds="FAMILY", tags="家庭,儿童,雨天", status="AVAILABLE"),
+            RoomInventory(hotel_id=hotel.id, room_type="大床房", available_date=target_date, available_count=4, normal_price=Decimal("459"), minimum_price=Decimal("359"), accounting_cost=Decimal("210"), max_guests=2, features="安静采光、城市景观", suitable_crowds="COUPLE,SOLO,LOCAL_WEEKEND", tags="城市,安静,咖啡", status="AVAILABLE"),
+            RoomInventory(hotel_id=hotel.id, room_type="双床房", available_date=target_date, available_count=3, normal_price=Decimal("479"), minimum_price=Decimal("379"), accounting_cost=Decimal("215"), max_guests=2, features="双床、亲友出行", suitable_crowds="FRIENDS,LOCAL_WEEKEND", tags="朋友,双床,城市", status="AVAILABLE"),
         ]
     )
     db.add_all(
@@ -121,5 +126,9 @@ def seed_demo(db: Session, *, reset: bool = False) -> dict:
     db.add(
         PublicResource(resource_name="西湖博物馆", category="MUSEUM", description="可用于游客免费推荐，不参与正式套餐库存和收入计算。", address="西湖区孤山路", opening_hours="09:00-17:00", suitable_crowds="FAMILY,COUPLE", weather_tags="RAIN,SUNNY,CLOUDY", source="杭州市文化广电旅游局", verified_at=datetime.now(timezone.utc), status="ACTIVE")
     )
+    seed_extra_catalog(db, hotel.id, target_date, demo_password=DEMO_PASSWORD)
     db.commit()
-    return {"hotel_id": hotel.id, "target_date": target_date.isoformat(), "created": True}
+    result = {"hotel_id": hotel.id, "target_date": target_date.isoformat(), "created": True}
+    if include_showcase:
+        result.update(seed_showcase_products(db, hotel.id, target_date))
+    return result

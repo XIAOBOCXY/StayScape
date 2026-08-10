@@ -34,6 +34,15 @@ from ..rules.availability_rule import resource_is_usable
 ACTIVE_PRODUCT_STATUSES = {"ON_SALE", "LOW_STOCK"}
 
 
+def _created_sort_key(value: datetime | None) -> float:
+    """Normalize SQLite's naive datetime values before comparing rows."""
+    if value is None:
+        return 0.0
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+
+
 def _requirements(product: TravelProduct) -> dict[tuple[str, int], int]:
     requirements: dict[tuple[str, int], int] = defaultdict(int)
     requirements[("ROOM", product.room_inventory_id)] += 1
@@ -112,6 +121,7 @@ def _validate_source(product: TravelProduct, resource_type: str, source: Any) ->
             package_enabled=source.package_enabled,
             resource_status=source.status,
             capacity=source.remaining_capacity,
+            source_type=source.source_type,
         ):
             raise AppError("PARTNER_RESOURCE_UNAVAILABLE", f"合作资源{_source_name(source)}当前不可占用", retryable=True)
 
@@ -236,7 +246,7 @@ def reconcile_published_capacity(db: Session, hotel_id: int, *, priority_product
         ).unique().all()
     )
     if priority_product_id is not None:
-        products.sort(key=lambda item: (0 if item.id == priority_product_id else 1, item.created_at, item.id))
+        products.sort(key=lambda item: (0 if item.id == priority_product_id else 1, _created_sort_key(item.created_at), item.id))
     used: dict[tuple[str, int], int] = defaultdict(int)
     adjustments = []
     for product in products:

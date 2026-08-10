@@ -1,6 +1,6 @@
 ---
 name: stayscape-visitor-matcher
-description: Match a visitor's family, budget, interest, weather, schedule, dietary, and allergy context to currently available StayScape products and explain the result safely.
+description: Match a visitor's natural-language family, budget, interests, negative preferences, activity level, weather, schedule, dietary, and allergy context to currently available StayScape products and explain the result safely.
 allowed-tools: Read
 ---
 
@@ -15,7 +15,8 @@ budget constraints.
 
 - Understand both structured fields and a visitor's natural-language description,
   then map the interpreted needs to supplied product IDs.
-- Explain budget, child-age, interest, weather, and schedule fit.
+- Extract positive and negative preferences such as “不想喝茶”“不想逛博物馆”“不想走太多路” or “想刺激一点”; negative preferences must remove or lower incompatible packages.
+- Explain target crowd, budget, child-age, interest, weather, activity level, and schedule fit.
 - Produce a concise itinerary and limited, non-binding adjustment suggestions.
 - Repeat allergy and dietary information as a safety reminder.
 

@@ -10,6 +10,7 @@ const props = defineProps<{ product: TravelProduct; publicView?: boolean }>()
 const router = useRouter()
 const media = computed(() => heroMedia(props.product))
 const weather = computed(() => weatherLabel(props.product.weather))
+const crowdLabel = computed(() => ({ FAMILY: 'family', COUPLE: 'couple', FRIENDS: 'friends', SOLO: 'solo', LOCAL_WEEKEND: 'local weekend' }[props.product.target_crowd] || 'stay'))
 const visibleResources = computed(() => props.product.resources.slice(0, 3))
 function open() {
   router.push(props.publicView ? `/visitor/products/${props.product.id}` : `/hotel/products/${props.product.id}`)
@@ -34,7 +35,7 @@ function onKeydown(event: KeyboardEvent) {
         <span v-for="resource in visibleResources" :key="resource.id"><b>{{ experienceLabel(resource.resource_type) }}</b> · {{ resource.resource_name }}</span>
       </div>
       <div class="product-card__bottom">
-        <div><strong>¥{{ product.suggested_price }}</strong><span class="muted"> / family</span></div>
+        <div><strong>¥{{ product.suggested_price }}</strong><span class="muted"> / {{ crowdLabel }}</span></div>
         <span :class="product.sale_quantity <= 2 ? 'warning-text' : 'muted'">仅剩 {{ product.sale_quantity }} 套</span>
       </div>
     </div>

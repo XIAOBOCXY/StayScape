@@ -18,6 +18,8 @@ export interface Room {
   accounting_cost: string
   max_guests: number
   features: string
+  suitable_crowds: string
+  tags: string
   status: string
   updated_at: string
 }
@@ -69,6 +71,7 @@ export interface PartnerResource {
   booking_notice: string
   cancellation_rule: string
   package_enabled: boolean
+  source_type: string
   status: string
   updated_at: string
   merchant_name?: string

@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     if settings.seed_on_startup:
         db = SessionLocal()
         try:
-            seed_demo(db)
+            seed_demo(db, include_showcase=True)
         finally:
             db.close()
     yield

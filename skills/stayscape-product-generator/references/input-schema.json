@@ -7,10 +7,13 @@
     "weather": {"type": "string"},
     "target_crowd": {"type": "string"},
     "theme": {"type": "string"},
+    "variant_index": {"type": "integer", "minimum": 0},
+    "variant_total": {"type": "integer", "minimum": 1},
+    "visitor_budget": {"type": "string"},
+    "preferred_price": {"type": "string"},
     "room_inventory": {"type": "object", "required": ["id", "room_type"]},
     "requested_selections": {"type": "array"},
     "allowed_hotel_services": {"type": "array"},
-    "allowed_partner_resources": {"type": "array"}
+    "allowed_partner_resources": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer"}, "category": {"type": "string"}, "source_type": {"enum": ["PARTNER", "DEMO", "PUBLIC_REFERENCE"]}, "package_enabled": {"type": "boolean"}, "remaining_capacity": {"type": "integer"}}}}
   }
 }
-

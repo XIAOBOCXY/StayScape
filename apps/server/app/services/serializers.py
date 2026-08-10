@@ -142,6 +142,7 @@ def partner_resource_to_dict(resource: PartnerResource, referenced_product_count
         "booking_notice": resource.booking_notice,
         "cancellation_rule": resource.cancellation_rule,
         "package_enabled": resource.package_enabled,
+        "source_type": resource.source_type,
         "status": resource.status,
         "updated_at": resource.updated_at,
         "merchant_name": resource.merchant.merchant_name if resource.merchant else None,

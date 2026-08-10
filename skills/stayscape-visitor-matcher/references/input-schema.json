@@ -9,7 +9,10 @@
     "child_ages": {"type": "array", "items": {"type": "integer", "minimum": 0}},
     "budget": {"type": "string"},
     "weather": {"type": "string"},
+    "target_crowd": {"type": "string"},
     "interests": {"type": "array"},
+    "negative_interests": {"type": "array", "items": {"type": "string"}},
+    "activity_level": {"enum": ["LOW", "MEDIUM", "HIGH"]},
     "allergy_information": {"type": "string"},
     "products": {"type": "array"}
   }

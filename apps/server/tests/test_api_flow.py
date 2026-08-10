@@ -1,4 +1,5 @@
 from app.config import settings
+from app.agent.mock_agent import MockAgent
 
 
 def auth(token):
@@ -346,3 +347,73 @@ def test_confirmed_intent_cancellation_releases_reserved_inventory(client, hotel
     assert cancelled.json()["reservation_status"] == "RELEASED"
     room_after = next(item for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json() if item["id"] == room_before["id"])
     assert room_after["available_count"] == room_before["available_count"]
+
+
+def test_rich_catalog_covers_real_hangzhou_consumption_scenes(client, hotel_token):
+    rooms = client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()
+    services = client.get("/api/v1/hotel/services", headers=auth(hotel_token)).json()
+    resources = client.get("/api/v1/hotel/resources", headers=auth(hotel_token)).json()
+    assert len(rooms) >= 9
+    assert len(services) >= 20
+    assert len(resources) >= 30
+    assert {item["category"] for item in resources} >= {"CULTURE", "THEME_PARK", "SPORT", "NIGHTLIFE", "FOOD", "NATURE", "PERFORMANCE"}
+    assert {item["source_type"] for item in resources} >= {"PARTNER", "DEMO", "PUBLIC_REFERENCE"}
+    assert any(item["source_type"] == "PUBLIC_REFERENCE" and not item["package_enabled"] for item in resources)
+
+
+def test_demo_seed_builds_a_multi_persona_public_product_pool(client, hotel_token):
+    seeded = client.post("/api/v1/demo/seed", headers=auth(hotel_token))
+    assert seeded.status_code == 200, seeded.text
+    products = client.get("/api/v1/visitor/products").json()
+    assert len(products) >= 12
+    assert {item["target_crowd"] for item in products} >= {"FAMILY", "COUPLE", "FRIENDS", "SOLO", "LOCAL_WEEKEND"}
+    assert {item["weather"] for item in products} >= {"RAIN", "SUNNY", "CLOUDY"}
+    assert len({item["product_name"] for item in products}) >= 10
+
+
+def test_mock_agent_uses_resource_category_for_creative_direction():
+    agent = MockAgent()
+    base = {
+        "target_date": "2099-01-01",
+        "weather": "RAIN",
+        "target_crowd": "FRIENDS",
+        "theme": "雨天运动娱乐",
+        "preferred_price": "699",
+        "room_inventory": {"id": 1, "room_type": "影音娱乐房", "features": "投影"},
+        "requested_selections": [{"resource_type": "PARTNER_RESOURCE", "resource_id": 9, "quantity_per_package": 1}],
+        "allowed_hotel_services": [],
+        "allowed_partner_resources": [{"id": 9, "resource_name": "室内攀岩体验", "category": "SPORT", "description": "室内运动", "remaining_capacity": 12, "start_time": "16:00", "end_time": "17:30", "address": "运动馆", "settlement_price": "88", "indoor": True}],
+    }
+    output = agent._product(base)
+    assert "运动" in output["product_name"] or "挑战" in output["product_name"]
+    assert "攀岩" in output["marketing_content"]
+    assert "SPORT" in output["marketing_assets"][0]["visual_brief"]
+
+
+def test_natural_language_negative_preference_changes_persona_and_filters_category(client, hotel_token):
+    seeded = client.post("/api/v1/demo/seed", headers=auth(hotel_token))
+    assert seeded.status_code == 200, seeded.text
+    response = client.post("/api/v1/visitor/recommend", json={"natural_language": "情侣两个人，预算1000，明天下雨，不想喝茶，不想逛博物馆，想看音乐现场"})
+    assert response.status_code == 200, response.text
+    interpreted = response.json()["interpreted_needs"]
+    assert interpreted["target_crowd"] == "COUPLE"
+    assert "TEA" in interpreted["negative_interests"]
+    assert "CULTURE" in interpreted["negative_interests"]
+    assert all("茶" not in item["product"]["product_name"] and "博物馆" not in item["product"]["product_name"] for item in response.json()["results"])
+
+
+def test_public_reference_cannot_be_selected_for_formal_package(client, hotel_token):
+    resources = client.get("/api/v1/hotel/resources", headers=auth(hotel_token)).json()
+    public_reference = next(item for item in resources if item["source_type"] == "PUBLIC_REFERENCE")
+    rooms = client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()
+    response = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json={
+        "target_date": rooms[0]["available_date"],
+        "weather": "RAIN",
+        "target_crowd": "FAMILY",
+        "theme": "公共参考测试",
+        "room_inventory_id": rooms[0]["id"],
+        "resource_selections": [{"resource_type": "PARTNER_RESOURCE", "resource_id": public_reference["id"], "quantity_per_package": 1}],
+        "preferred_price": "699",
+        "visitor_budget": "900",
+    })
+    assert response.status_code == 400
