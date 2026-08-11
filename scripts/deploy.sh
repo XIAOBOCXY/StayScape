@@ -71,7 +71,7 @@ set_env STAYSCAPE_HOTEL_ID "${STAYSCAPE_HOTEL_ID:-1}"
 set_env OPENCLAW_AGENT_ID stayscape-main
 set_env OPENCLAW_TRANSPORT responses
 set_env OPENCLAW_RESPONSES_PATH /v1/responses
-set_env OPENCLAW_RUNTIME_VERSION 2026.5.29
+set_env OPENCLAW_RUNTIME_VERSION 2026.6.6
 
 secret_key="$(env_value SECRET_KEY)"
 [[ -n "$secret_key" && "$secret_key" != change-me* ]] || set_env SECRET_KEY "$(random_hex)"

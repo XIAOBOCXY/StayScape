@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     openclaw_agent_id: str = "stayscape-main"
     openclaw_skill_version: str = "1.0.0"
     openclaw_skills_ready: bool = False
-    openclaw_runtime_version: str = "2026.5.29"
+    openclaw_runtime_version: str = "2026.6.6"
     stayscape_agent_tool_token: str = ""
     feishu_enabled: bool = False
     feishu_dm_allow_from: str = ""

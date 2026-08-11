@@ -63,7 +63,7 @@ bash scripts/deploy.sh live
 2. 初始化并保护 `.env`
 3. 生成私密 Token
 4. 渲染不入 Git 的 OpenClaw 配置
-5. 构建 PostgreSQL、FastAPI、Vue、Nginx 和 `ghcr.io/openclaw/openclaw:2026.5.29`
+5. 构建 PostgreSQL、FastAPI、Vue、Nginx 和 `ghcr.io/openclaw/openclaw:2026.6.6`
 6. 启动 Alembic、幂等演示 Seed、单 Agent `stayscape-main`、两个 Skill 和 Tool Plugin
 7. 通过 `openclaw skills list --agent stayscape-main --json` 检查两个 Skill
 8. 只有发现成功后才把 FastAPI 的 Live Agent readiness 标记为 true

@@ -37,7 +37,7 @@ services:
       OPENCLAW_AGENT_ID: ${OPENCLAW_AGENT_ID:-stayscape-main}
       OPENCLAW_SKILL_VERSION: ${OPENCLAW_SKILL_VERSION:-1.0.0}
       OPENCLAW_SKILLS_READY: ${OPENCLAW_SKILLS_READY:-false}
-      OPENCLAW_RUNTIME_VERSION: ${OPENCLAW_RUNTIME_VERSION:-2026.5.29}
+      OPENCLAW_RUNTIME_VERSION: ${OPENCLAW_RUNTIME_VERSION:-2026.6.6}
       STAYSCAPE_AGENT_TOOL_TOKEN: ${STAYSCAPE_AGENT_TOOL_TOKEN:-}
       FEISHU_ENABLED: ${FEISHU_ENABLED:-false}
       FEISHU_DM_ALLOW_FROM: ${FEISHU_DM_ALLOW_FROM:-}
@@ -87,7 +87,7 @@ services:
       context: .
       dockerfile: deploy/openclaw/Dockerfile
       args:
-        OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.5.29}
+        OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.6.6}
     restart: unless-stopped
     environment:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required in live mode}
