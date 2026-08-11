@@ -12,34 +12,25 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./stayscape.db"
     postgres_database_url: str = "postgresql+psycopg://stayscape:stayscape@db:5432/stayscape"
 
+    mode: str = "demo"
     agent_provider: str = "mock"
     agent_timeout_seconds: float = 20
     agent_max_retries: int = 1
     mock_agent_mode: str = "normal"
     openclaw_base_url: str = ""
-    openclaw_api_key: str = ""
     openclaw_gateway_token: str = ""
     openclaw_model: str = "openclaw/default"
-    # ClawHive manages the lobster/Agent runtime. These OPENCLAW_* names are
-    # retained for backwards compatibility with local runtime bridges.
     openclaw_transport: str = "responses"
     openclaw_responses_path: str = "/v1/responses"
-    openclaw_invoke_path: str = "/tools/invoke"
-    openclaw_tool_name: str = "skill_invoke"
-    openclaw_session_key: str = "main"
-    openclaw_agent_id: str = ""
+    openclaw_agent_id: str = "stayscape-main"
     openclaw_skill_version: str = "1.0.0"
-    openclaw_legacy_fallback: bool = True
-    # Preferred ClawHive names. A ClawHive-managed local/cloud Agent bridge
-    # can be configured without changing the legacy OPENCLAW_* deployment.
-    clawhive_base_url: str = ""
-    clawhive_api_key: str = ""
-    clawhive_gateway_token: str = ""
-    clawhive_model: str = ""
-    clawhive_transport: str = "responses"
-    clawhive_responses_path: str = "/v1/responses"
-    clawhive_agent_id: str = ""
-    clawhive_skill_version: str = "1.0.0"
+    openclaw_skills_ready: bool = False
+    openclaw_runtime_version: str = "2026.5.29"
+    stayscape_agent_tool_token: str = ""
+    feishu_enabled: bool = False
+    feishu_dm_allow_from: str = ""
+    feishu_group_allow_from: str = ""
+    feishu_require_mention: bool = True
     poster_embed_remote_images: bool = False
     visitor_intent_hold_minutes: int = 30
 
@@ -52,6 +43,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def live_agent_required(self) -> bool:
+        return self.mode.lower() == "live" or self.agent_provider.lower() == "openclaw"
 
 
 @lru_cache

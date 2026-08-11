@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["product_name", "theme", "target_crowd", "room_inventory_id", "hotel_service_ids", "partner_resource_ids", "resource_quantities", "marketing_title", "marketing_content", "recommendation_reason", "risk_message"],
+  "required": ["product_name", "theme", "target_crowd", "room_inventory_id", "hotel_service_ids", "partner_resource_ids", "resource_quantities", "marketing_title", "marketing_content", "creative_angle", "poster_style", "recommendation_reason", "risk_message"],
   "properties": {
     "product_name": {"type": "string", "minLength": 1},
     "theme": {"type": "string"},
@@ -12,6 +12,8 @@
     "resource_quantities": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
     "marketing_title": {"type": "string"},
     "marketing_content": {"type": "string"},
+    "creative_angle": {"type": "string"},
+    "poster_style": {"type": "string"},
     "marketing_assets": {
       "type": "array",
       "items": {

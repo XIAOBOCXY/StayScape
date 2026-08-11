@@ -1,7 +1,6 @@
 ---
 name: stayscape-product-generator
 description: Generate differentiated StayScape near-expiry-room travel products across Hangzhou culture, theme parks, family discovery, food, sport, nightlife, photography, nature, performance, and city walks by selecting only supplied resource IDs and writing safe theme, replacement, and marketing suggestions.
-allowed-tools: Read
 ---
 
 # StayScape product generator
@@ -30,6 +29,11 @@ status. Your response is a candidate JSON document only.
 - Make `variant_index` candidates visibly different in theme angle, selected
   resource (when alternatives are supplied), title, visual brief, and social
   copy. Do not return “方案A/方案B” with the same story.
+- Name the product like a real travel-platform card: use a concrete scene hook
+  plus the supplied place/play and the most important supplied hotel benefit.
+  Keep `product_name` concise (about 12–26 Chinese characters) and make
+  `marketing_title` more explanatory. Do not invent landmarks, rights or
+  generic category-plus-宿 suffixes.
 - Suggest a replacement partner resource only from the allowed candidate list
   when the current resource changes.
 

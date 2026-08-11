@@ -37,4 +37,4 @@ docker-down:
 	docker compose down
 
 deploy-linux:
-	bash scripts/deploy_aliyun.sh
+	bash scripts/deploy.sh live

@@ -20,5 +20,13 @@ class SkillLogRead(BaseModel):
     error_message: str | None
     duration_ms: int
     retry_count: int
+    provider: str
+    source_channel: str
+    actor_role: str
+    transport: str
+    agent_id: str
+    model: str
+    skill_version: str
+    conversation_id: str
+    fallback_used: bool
     created_at: datetime
-

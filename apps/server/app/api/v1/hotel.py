@@ -20,7 +20,7 @@ from ...schemas.resources import MerchantRead, PackageToggleRequest, PartnerReso
 from ...services.product_service import ProductService
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
-from ...agent.openclaw import ClawHiveAgent, OpenClawAgent
+from ...agent.openclaw import OpenClawAgent
 from ..deps import get_hotel_user, resolve_hotel_id
 from ..websocket_manager import manager
 
@@ -469,49 +469,29 @@ def skill_logs(db: Session = Depends(get_db), user: User = Depends(get_hotel_use
 @router.get("/agent-diagnostics")
 def agent_diagnostics(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     """Expose safe Agent wiring details to hotel operators, never credentials."""
-    provider_name = settings.agent_provider.lower()
-    is_clawhive = provider_name == "clawhive"
-    is_remote = provider_name in {"openclaw", "clawhive"}
-    base_url = (settings.clawhive_base_url or settings.openclaw_base_url) if is_clawhive else settings.openclaw_base_url
-    api_key = (settings.clawhive_gateway_token or settings.clawhive_api_key or settings.openclaw_gateway_token or settings.openclaw_api_key) if is_clawhive else (settings.openclaw_gateway_token or settings.openclaw_api_key)
-    model = (settings.clawhive_model or settings.openclaw_model) if is_clawhive else settings.openclaw_model
-    transport = (settings.clawhive_transport or settings.openclaw_transport) if is_clawhive else settings.openclaw_transport
-    responses_path = (settings.clawhive_responses_path or settings.openclaw_responses_path) if is_clawhive else settings.openclaw_responses_path
-    agent_id = (settings.clawhive_agent_id or settings.openclaw_agent_id) if is_clawhive else settings.openclaw_agent_id
-    skill_version = (settings.clawhive_skill_version or settings.openclaw_skill_version) if is_clawhive else settings.openclaw_skill_version
-    agent_class = ClawHiveAgent if is_clawhive else OpenClawAgent
-    configured = is_remote and bool(base_url)
+    is_remote = settings.agent_provider.lower() == "openclaw"
+    configured = is_remote and bool(settings.openclaw_base_url and settings.openclaw_gateway_token and settings.openclaw_agent_id)
     gateway = {
         "configured": configured,
         "reachable": False,
         "status_code": None,
-        "error": "ClawHive agent bridge not configured" if is_clawhive else "Agent runtime not configured",
+        "error": "OpenClaw Gateway not configured" if is_remote else "Demo mode uses Mock Agent",
     }
     if configured:
-        agent = agent_class(
-            base_url,
-            api_key,
-            model,
-            settings.agent_timeout_seconds,
-            transport=transport,
-            responses_path=responses_path,
-            invoke_path=settings.openclaw_invoke_path,
-            tool_name=settings.openclaw_tool_name,
-            session_key=settings.openclaw_session_key,
-            agent_id=agent_id,
-            skill_version=skill_version,
-            legacy_fallback=settings.openclaw_legacy_fallback,
-        )
+        agent = OpenClawAgent(settings.openclaw_base_url, settings.openclaw_gateway_token, settings.openclaw_model, settings.agent_timeout_seconds, transport=settings.openclaw_transport, responses_path=settings.openclaw_responses_path, agent_id=settings.openclaw_agent_id, skill_version=settings.openclaw_skill_version)
         gateway = agent.diagnostics()
-    provider = "CLAWHIVE" if is_clawhive and is_remote else "OPENCLAW" if is_remote else "MOCK"
+    provider = "OPENCLAW" if is_remote else "MOCK"
+    skill_status = "READY" if is_remote and settings.openclaw_skills_ready else ("NOT_READY" if is_remote else "DEMO")
     return {
         "provider": provider,
-        "transport": transport if is_remote else "mock",
+        "mode": settings.mode,
+        "transport": settings.openclaw_transport if is_remote else "mock",
         "gateway": gateway,
-        "agent_id": agent_id if is_remote else "",
-        "model": model if is_remote else "",
+        "agent_id": settings.openclaw_agent_id if is_remote else "",
+        "model": settings.openclaw_model if is_remote else "",
+        "skill_status": skill_status,
         "skills": [
-            {"name": "stayscape-product-generator", "version": skill_version, "configured": configured},
-            {"name": "stayscape-visitor-matcher", "version": skill_version, "configured": configured},
+            {"name": "stayscape-product-generator", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
+            {"name": "stayscape-visitor-matcher", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
         ],
     }

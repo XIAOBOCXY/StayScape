@@ -14,7 +14,10 @@ def validate_skill(path: Path) -> None:
     if not skill_file.is_file():
         raise RuntimeError(f"missing {skill_file}")
     text = skill_file.read_text(encoding="utf-8")
-    for field in ("name:", "description:", "allowed-tools:"):
+    # OpenClaw skill frontmatter is identity metadata.  Tool permissions are
+    # enforced by the Gateway tool policy/plugin configuration, not by a
+    # non-standard `allowed-tools` line in SKILL.md.
+    for field in ("name:", "description:"):
         if field not in text.split("---", 2)[1]:
             raise RuntimeError(f"missing frontmatter field {field}")
     name = re.search(r"^name:\s*([^\n]+)", text, re.MULTILINE).group(1).strip()

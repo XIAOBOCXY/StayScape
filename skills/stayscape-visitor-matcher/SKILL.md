@@ -1,7 +1,6 @@
 ---
 name: stayscape-visitor-matcher
 description: Match a visitor's natural-language family, budget, interests, negative preferences, activity level, weather, schedule, dietary, and allergy context to currently available StayScape products and explain the result safely.
-allowed-tools: Read
 ---
 
 # StayScape visitor matcher

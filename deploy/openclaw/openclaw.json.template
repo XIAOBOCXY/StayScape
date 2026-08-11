@@ -1,0 +1,98 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "port": 18789,
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "http": {
+      "endpoints": {
+        "responses": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/home/node/.openclaw/workspace",
+      "skills": [
+        "stayscape-product-generator",
+        "stayscape-visitor-matcher"
+      ]
+    },
+    "entries": {
+      "stayscape-main": {
+        "default": true,
+        "workspace": "/home/node/.openclaw/workspace",
+        "skills": [
+          "stayscape-product-generator",
+          "stayscape-visitor-matcher"
+        ]
+      }
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "tools": {
+    "profile": "minimal",
+    "allow": [
+      "stayscape_get_hotel_context",
+      "stayscape_list_available_products",
+      "stayscape_create_product_draft"
+    ],
+    "deny": [
+      "group:runtime",
+      "group:fs",
+      "group:ui",
+      "group:nodes",
+      "group:agents",
+      "group:automation"
+    ]
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": ["stayscape-openclaw-plugin"],
+    "load": {
+      "paths": ["/opt/stayscape/openclaw-plugin"]
+    },
+    "entries": {
+      "stayscape-openclaw-plugin": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "${STAYSCAPE_API_INTERNAL_URL}",
+          "token": "${STAYSCAPE_AGENT_TOOL_TOKEN}",
+          "hotelId": "${STAYSCAPE_HOTEL_ID}",
+          "senderId": "${FEISHU_OPERATOR_OPEN_ID}",
+          "actorRole": "${FEISHU_ACTOR_ROLE}"
+        }
+      }
+    }
+  },
+  "channels": {
+    "feishu": {
+      "enabled": false,
+      "connectionMode": "websocket",
+      "defaultAccount": "main",
+      "dmPolicy": "allowlist",
+      "allowFrom": [],
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": [],
+      "groupSenderAllowFrom": [],
+      "requireMention": true,
+      "dynamicAgentCreation": {
+        "enabled": false
+      },
+      "accounts": {
+        "main": {
+          "appId": "${FEISHU_APP_ID}",
+          "appSecret": "${FEISHU_APP_SECRET}",
+          "domain": "feishu"
+        }
+      }
+    }
+  }
+}

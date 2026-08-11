@@ -1,4 +1,5 @@
 export const VISITOR_PROFILE_KEY = 'stayscape.visitor.confirmed-profile'
+export const VISITOR_CONVERSATION_KEY = 'stayscape.visitor.conversation-id'
 
 export interface VisitorProfile {
   natural_language: string
@@ -29,4 +30,19 @@ export function loadVisitorProfile(): VisitorProfile | null {
     const raw = sessionStorage.getItem(VISITOR_PROFILE_KEY)
     return raw ? JSON.parse(raw) as VisitorProfile : null
   } catch { return null }
+}
+
+/** Keep a browser visitor's multi-turn Concierge history isolated from others. */
+export function visitorConversationId(): string {
+  try {
+    const existing = sessionStorage.getItem(VISITOR_CONVERSATION_KEY)
+    if (existing) return existing
+    const generated = typeof crypto?.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `visitor-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    sessionStorage.setItem(VISITOR_CONVERSATION_KEY, generated)
+    return generated
+  } catch {
+    return 'visitor-ephemeral'
+  }
 }

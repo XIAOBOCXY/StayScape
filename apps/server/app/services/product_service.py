@@ -50,7 +50,7 @@ class ProductService:
     def __init__(self, db: Session, hotel_id: int, orchestrator: AgentOrchestrator | None = None) -> None:
         self.db = db
         self.hotel_id = hotel_id
-        self.orchestrator = orchestrator or AgentOrchestrator(db, hotel_id=hotel_id)
+        self.orchestrator = orchestrator or AgentOrchestrator(db, hotel_id=hotel_id, source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR")
 
     def ensure_publish_capacity(self, product: TravelProduct) -> list[dict[str, Any]]:
         return ensure_publish_capacity(self.db, product)

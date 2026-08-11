@@ -1,26 +1,25 @@
 # StayScape 余宿成景
 
-面向酒店临期客房的库存驱动型文旅产品智能生成与动态运营系统。
+StayScape 是面向酒店临期客房的文旅业务系统：FastAPI + PostgreSQL 保存真实经营数据，确定性规则计算库存、成本、售价、毛利和状态；OpenClaw 只负责调用两个 StayScape Skill 完成产品创意、游客理解、文案和解释。
 
-StayScape 不把临期房简单降价清仓，而是根据房型库存、酒店服务、合作文旅资源、天气、目标客群、预算和最低毛利率，生成“客房 + 酒店服务 + 杭州文化体验”的主题住宿产品；资源名额、服务、房量或价格变化后，系统会在事务内自动重算库存、成本、售价、毛利和产品状态。
+## 产品定位
 
-## 核心演示结果
+- 酒店临期库存驱动的文旅产品生成与动态运营
+- 游客自然语言需求驱动的个性化旅居匹配
+- Web/H5 和飞书是两个入口，但只使用一个 OpenClaw Gateway、一个 Agent：`stayscape-main`
+- ClawHive 仅用于 Skill 发布、管理、验证和展示；不作为 StayScape 的运行时 API
 
-演示数据：亲子房6间、早餐30份、延迟退房6份、室内非遗体验12个名额；每套消耗1/3/1/3，因此可售4套。成本为220+45+10+180=455元，政策价格锚点599元，单套毛利144元，毛利率约24.04%。商户将体验名额改为4后，产品自动变成1套并标记为库存紧张。
+```text
+Visitor H5  -> FastAPI -> OpenClaw -> stayscape-main -> stayscape-visitor-matcher
+Hotel Web   -> FastAPI -> OpenClaw -> stayscape-main -> stayscape-product-generator
+Feishu      -> OpenClaw Feishu Channel -> stayscape-main -> StayScape Tools -> FastAPI
+```
 
-每次演示 Seed 还会在不改变上述主链路的前提下，补充 9 种房型、24 项酒店服务、10 家合作商户和 30 项文旅资源，覆盖主题乐园、亲子探索、运动、夜游、旅拍、美食、自然、演出、城市漫游和文化体验等类别，并生成至少 12 个来自同一规则引擎的在售展示产品。资源带有来源类型、天气、适龄、场次、状态和组包许可约束；`PUBLIC_REFERENCE` 仅用于展示参考，不会进入正式组包。
+## 核心演示不变量
 
-## 技术栈
+演示 Seed 始终保留：亲子房 6 间、家庭早餐 30 份、延迟退房 6 份、室内非遗手作 12 个名额；每套消耗 1/3/1/3，因此最终可售 4 套。成本为 `220 + 15×3 + 10 + 60×3 = 455` 元，建议售价 599 元，单套毛利 144 元，毛利率约 24.04%。商户把手作名额改为 4 后，产品自动变为 1 套并进入 `LOW_STOCK`。
 
-当前版本还支持商户完整维护资源名称、日期和起止场次；酒店产品池可编辑、删除产品；一次生成多套差异化方案；产品详情生成 SVG 图文海报、社媒文案、短视频脚本和门店卖点卡；游客可以直接用自然语言描述人数、预算、天气、兴趣、时间和过敏信息获取推荐。
-
-- 前端：Vue 3、TypeScript、Vite、Vue Router、Pinia、Axios、Element Plus、Vant、ECharts依赖。
-- 后端：Python 3.11、FastAPI、SQLAlchemy 2.x、Pydantic 2.x、Alembic、Pytest、WebSocket。
-- 数据库：本地 SQLite；Docker 使用 PostgreSQL 16。
-- Agent：默认 Mock Agent 离线可运行；ClawHive Skill 包可上传到帝王蟹并安装到龙虾实例，后端保留可配置 Agent bridge 适配器，支持超时、重试、JSON修复、Schema校验和降级。
-- 部署：Docker Compose + Nginx。
-
-## 本地启动（Windows）
+## 本地 Windows 开发
 
 ```powershell
 Copy-Item .env.example .env
@@ -29,44 +28,42 @@ python -m venv .venv
 .venv\Scripts\python.exe -m alembic -c apps/server/alembic.ini upgrade head
 .venv\Scripts\python.exe scripts/seed_demo.py
 
-# 终端一：
+# Terminal 1
 .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir apps/server --reload --port 8000
 
-# 终端二：
+# Terminal 2
 npm.cmd --prefix apps/web install --cache apps/web/.npm-cache
 npm.cmd --prefix apps/web run dev
 ```
 
-如果本机 npm 用户缓存没有权限，使用项目内的 `--cache apps/web/.npm-cache`；不会修改系统环境。也可以直接执行 `scripts/dev.ps1`。
+访问 `http://localhost:5173`；API 文档为 `http://localhost:8000/docs`。默认酒店账号为 `hotel_demo / StayScape123!`，商户账号示例为 `merchant_craft / StayScape123!`。
 
-访问：
+## Docker Demo
 
-- 游客H5：http://localhost:5173
-- API文档：http://localhost:8000/docs
-- 默认酒店账号：`hotel_demo / StayScape123!`
-- 默认商户账号：`merchant_craft / StayScape123!`、`merchant_tea / StayScape123!`、`merchant_photo / StayScape123!`
-
-## Docker启动
-
-```powershell
-docker compose up -d --build
-```
-
-入口为 http://localhost:8080。Compose会启动 PostgreSQL、FastAPI、Vue静态站点和Nginx；后端容器执行 Alembic migration 与演示 Seed。停止：
-
-```powershell
-docker compose down
-```
-
-## 阿里云公网部署
-
-如果要让评委或游客直接通过网址访问，推荐将 StayScape 和 OpenClaw Gateway 一起部署到 Linux ECS：Nginx 只暴露网站 80/443，FastAPI 在服务端通过 Token 调用同机 OpenClaw，浏览器不接触 Agent 密钥。
+无需模型密钥即可演示完整业务闭环：
 
 ```bash
-bash scripts/deploy_aliyun.sh
+cp .env.example .env
+bash scripts/deploy.sh demo
 ```
 
-完整的 ECS 购买、安全组、OpenClaw 安装、Skill 安装、Windows Hub SSH 隧道和赛题演示步骤见 [docs/DEPLOY_ALIYUN.md](docs/DEPLOY_ALIYUN.md)。
+Windows 若已安装 Docker Desktop，也可以执行 `docker compose up -d --build`，入口默认是 `http://localhost:8080`。
+
+## 阿里云公网 Live 部署
+
+在 Ubuntu 22.04/24.04 或阿里云 Linux ECS 上：
+
+```bash
+git clone https://github.com/XIAOBOCXY/StayScape.git
+cd StayScape
+cp .env.example .env
+# 在 .env 中填写模型供应商配置；飞书凭证可选
+bash scripts/deploy.sh live
+```
+
+脚本会生成服务端密钥、PostgreSQL 密码、Gateway Token 和 Tool Token，构建 PostgreSQL、FastAPI、Vue、Nginx 以及固定版本的官方 OpenClaw 镜像，安装两个 Skill 和 StayScape Tool Plugin，执行迁移、幂等 Seed、健康检查和 `openclaw skills list --agent stayscape-main --json`。模型供应商首次 OAuth/API 授权仍需人工完成一次。
+
+公网只开放 80/443；不要开放 18789、5432、8000。详细步骤见 [docs/DEPLOY_ALIYUN.md](docs/DEPLOY_ALIYUN.md)、[docs/OPENCLAW.md](docs/OPENCLAW.md) 和 [docs/FEISHU.md](docs/FEISHU.md)。
 
 ## 测试与打包
 
@@ -76,34 +73,14 @@ npm.cmd --prefix apps/web run build
 .venv\Scripts\python.exe scripts/package_skills.py
 ```
 
-生成两个可上传文件：`dist/stayscape-product-generator.zip` 和 `dist/stayscape-visitor-matcher.zip`。两个 ZIP 的根目录都直接包含 `SKILL.md`，不含密钥、`.env`、`node_modules`、`__pycache__`。
+两个 ZIP 位于 `dist/stayscape-product-generator.zip` 和 `dist/stayscape-visitor-matcher.zip`，ZIP 根目录直接包含 `SKILL.md`，打包脚本会排除 `.env`、密钥、`node_modules`、缓存和构建产物。
 
-## Agent配置
+## 目录
 
-默认 `AGENT_PROVIDER=mock`，无需外部服务即可完成完整演示。正式使用 ClawHive 时，先将两个 ZIP 上传并安装到目标龙虾，再由后端通过 ClawHive 管理的 Agent bridge 调用：
-
-```env
-AGENT_PROVIDER=clawhive
-CLAWHIVE_BASE_URL=https://your-clawhive-agent-bridge
-CLAWHIVE_API_KEY=从服务端环境变量注入
-CLAWHIVE_MODEL=your-configured-model
-CLAWHIVE_TRANSPORT=responses
-CLAWHIVE_RESPONSES_PATH=/v1/responses
-CLAWHIVE_AGENT_ID=your-agent-id
-CLAWHIVE_SKILL_VERSION=1.0.0
-```
-
-真实密钥只放在本地环境或部署平台密钥管理中，不提交仓库。没有可供后端调用的 bridge 时保持 Mock；页面和日志会明确显示 `MOCK` / `Mock Fallback`，不会冒充 ClawHive 实时调用。旧 `OPENCLAW_*` 配置仍作为兼容迁移入口。无论使用哪种 Agent，最终数字和数据状态都由后端规则引擎决定。详见 [docs/CLAWHIVE.md](docs/CLAWHIVE.md)。
-
-## 演示数据重置
-
-开发环境调用 `POST /api/v1/demo/reset`，或者运行：
-
-```powershell
-.venv\Scripts\python.exe scripts/reset_demo.py
-```
-
-更多演示步骤见 [docs/DEMO.md](docs/DEMO.md)，架构边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
-赛题对齐说明见 [docs/CONTEST_ALIGNMENT.md](docs/CONTEST_ALIGNMENT.md)。
-
-#
+- `apps/server`：FastAPI、SQLAlchemy、Alembic、规则引擎、Agent 编排和业务 API
+- `apps/web`：酒店 Web、商户端和游客 H5
+- `skills`：两个可上传 ClawHive 的 Skill
+- `integrations/stayscape-openclaw-plugin`：官方 OpenClaw Tool Plugin
+- `deploy/openclaw`：固定版本 OpenClaw 容器和配置模板
+- `scripts`：本地 Seed、Skill 打包、demo/live 一键部署
+- `docs`：架构、赛题对齐、OpenClaw、飞书和阿里云部署说明

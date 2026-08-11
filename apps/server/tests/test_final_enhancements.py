@@ -14,6 +14,18 @@ def test_interpret_returns_complete_timing_and_manual_fields(client):
     assert needs["activity_level"] == "MEDIUM"
 
 
+def test_interpret_does_not_fall_back_to_two_adults_for_group_phrases(client):
+    friends = client.post("/api/v1/visitor/interpret", json={"natural_language": "三个朋友周末来杭州"})
+    assert friends.status_code == 200
+    assert friends.json()["interpreted_needs"]["adult_count"] == 3
+    assert friends.json()["interpreted_needs"]["child_count"] == 0
+
+    family = client.post("/api/v1/visitor/interpret", json={"natural_language": "一家四口，孩子6岁和9岁"})
+    assert family.status_code == 200
+    assert family.json()["interpreted_needs"]["adult_count"] == 2
+    assert family.json()["interpreted_needs"]["child_count"] == 2
+
+
 def test_structured_confirmation_overrides_original_natural_language(client, hotel_token):
     request, _ = generate_request(client, hotel_token)
     generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)

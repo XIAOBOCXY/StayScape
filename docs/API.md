@@ -1,29 +1,42 @@
-# API 摘要
+# StayScape API 摘要
 
-所有管理端接口前缀为 `/api/v1`，管理端使用 Bearer JWT；游客接口无需登录。
+所有接口前缀为 `/api/v1`。酒店端和商户端使用 FastAPI JWT；游客接口无需登录。浏览器只调用 StayScape API，不直接访问 OpenClaw Gateway。
 
-| 场景 | 方法 | 路径 | 说明 |
+## 主要接口
+
+| 场景 | 方法 | 路径 | 用途 |
 |---|---|---|---|
 | 认证 | POST | `/auth/login` | 酒店/商户登录 |
-| 认证 | GET | `/auth/me` | 当前用户 |
-| 演示 | POST | `/demo/reset` | 开发环境重置演示数据 |
-| 酒店 | GET | `/hotel/dashboard` | 经营总览 |
-| 酒店 | GET/POST/PATCH | `/hotel/rooms`、`/hotel/rooms/{id}` | 临期客房新增与维护，支持房型、入住日期、库存、价格、入住人数和备注 |
-| 酒店 | GET/PATCH | `/hotel/services`、`/hotel/services/{id}` | 酒店服务维护 |
-| 酒店 | GET/PATCH | `/hotel/resources`、`/hotel/resources/{id}/package` | 资源池和组包许可；切换时提交 `{"package_enabled": true/false}` |
-| 酒店 | POST | `/hotel/products/generate` | Agent候选+规则校验生成，可通过 `variant_count` 生成多套候选 |
-| 酒店 | GET/PATCH/DELETE | `/hotel/products/{id}` | 产品详情、内容/天气/入住日期编辑、删除 |
-| 酒店 | POST | `/hotel/products/{id}/marketing-assets` | 重新生成图文海报、社媒文案、短视频脚本和门店卖点卡 |
-| 酒店 | PATCH | `/hotel/products/{id}/status` | 模拟发布、暂停、下架 |
-| 商户 | GET/POST/PATCH | `/merchant/resources`、`/merchant/resources/{id}` | 资源名称、日期、起止场次、名额、价格、天气和状态 |
-| 游客 | GET | `/visitor/products` | 可售产品 |
-| 游客 | POST | `/visitor/consult` | 智能咨询 |
-| 游客 | POST | `/visitor/interpret` | 将同行人数、目的地、预算、兴趣和注意事项整理为可确认的需求卡 |
-| 游客 | POST | `/visitor/recommend` | 用户确认需求卡后，按真实库存、天气、时间、容量和毛利条件进行个性化推荐 |
-| 游客 | POST | `/visitor/intents` | 接收自然语言预约意向，并由后端确定性解析儿童、饮食和过敏风险 |
-| 实时 | WS | `/ws/hotel/{hotel_id}` | 资源变化通知 |
+| 经营总览 | GET | `/hotel/dashboard` | 房间、资源、产品和预约统计 |
+| 临期客房 | GET/POST/PATCH | `/hotel/rooms`、`/hotel/rooms/{id}` | 维护房型、日期、库存、价格和入住人数 |
+| 酒店服务 | GET/PATCH | `/hotel/services`、`/hotel/services/{id}` | 维护早餐、延迟退房及其他服务 |
+| 合作资源 | GET/PATCH | `/hotel/resources`、`/hotel/resources/{id}/package` | 查看资源、切换组包许可 |
+| 产品生成 | POST | `/hotel/products/generate` | 调用 Product Skill，随后由规则引擎计算库存和价格 |
+| 产品维护 | GET/PATCH/DELETE | `/hotel/products/{id}` | 查看、编辑、删除产品 |
+| 营销素材 | POST | `/hotel/products/{id}/marketing-assets` | 生成或刷新海报、社媒文案、短视频脚本和门店卖点 |
+| 产品状态 | PATCH | `/hotel/products/{id}/status` | 模拟发布、暂停和下架 |
+| 动态运营 | GET | `/hotel/dynamic-operations` | 查看资源变化和产品重算结果 |
+| 商户资源 | GET/POST/PATCH | `/merchant/resources`、`/merchant/resources/{id}` | 维护名称、日期、场次、名额、状态和组包信息 |
+| 游客产品 | GET | `/visitor/products` | 浏览当前可售产品 |
+| 需求解析 | POST | `/visitor/interpret` | 自然语言解析为可编辑需求卡 |
+| 游客推荐 | POST | `/visitor/recommend` | 使用确认后的结构化需求进行确定性筛选和 Visitor Skill 解释 |
+| 智能咨询 | POST | `/visitor/consult` | 多轮游客咨询和产品安全摘要问答 |
+| 预约意向 | POST | `/visitor/intents` | 提交含人数、预算、时间和过敏信息的预约意向 |
+| 实时通知 | WS | `/ws/hotel/{hotel_id}` | 酒店端实时接收动态重算事件 |
 
-## 统一错误结构
+## Feishu Tool 内部接口
+
+以下接口只接受 OpenClaw Tool Plugin 的服务端 Bearer Token，并要求 `FEISHU`、酒店角色、酒店 ID 和 allowlist sender 上下文。它们不对浏览器开放：
+
+| 方法 | 路径 | 权限 | 用途 |
+|---|---|---|---|
+| POST | `/agent-tools/hotel-context` | HOTEL_OPERATOR/HOTEL_SUPPORT | 返回房间、服务和合作资源的运营字段 |
+| POST | `/agent-tools/available-products` | HOTEL_OPERATOR/HOTEL_SUPPORT | 返回游客安全的当前产品摘要 |
+| POST | `/agent-tools/product-draft` | HOTEL_OPERATOR | 创建 DRAFT；资源、库存、容量、时间和利润仍由 FastAPI 校验 |
+
+Tool 不提供删除、发布、改库存、改成本、改价格、SQL、Shell 或任意 HTTP 能力。
+
+## 错误结构
 
 ```json
 {
@@ -37,3 +50,7 @@
   }
 }
 ```
+
+## 业务边界
+
+Agent 只能提出主题、资源候选、推荐理由和营销内容。库存、成本、售价、毛利、日期、天气、年龄、资源状态、预约占用和数据库写入始终由 FastAPI、PostgreSQL 和确定性规则负责。

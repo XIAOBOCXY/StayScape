@@ -160,8 +160,24 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
         value = adult_match.group(1)
         updates["adult_count"] = number_value(value, request.adult_count)
     family_match = re.search(r"一家([一二两三四五六七八九十\d]+)口", text)
-    if family_match and "adult_count" not in updates and ages:
-        updates["adult_count"] = max(number_value(family_match.group(1), request.adult_count) - len(ages), 1)
+    if family_match and "adult_count" not in updates:
+        total = number_value(family_match.group(1), request.adult_count + request.child_count)
+        # A family phrase is not a reason to fall back to the UI defaults. If
+        # ages are supplied, they define the child count; otherwise use the
+        # common two-adult family split and leave editable age slots visible.
+        inferred_children = len(ages) if ages else max(total - min(2, max(total - 1, 1)), 0)
+        updates["adult_count"] = max(total - inferred_children, 1)
+        updates["child_count"] = inferred_children
+    friends_match = re.search(r"([一二两三四五六七八九十\d]+)\s*(?:个|位)?朋友", text)
+    if friends_match and "adult_count" not in updates:
+        updates["adult_count"] = number_value(friends_match.group(1), request.adult_count)
+        updates["child_count"] = 0
+        updates["child_ages"] = []
+    couple_match = re.search(r"情侣\s*([一二两三四五六七八九十\d]+)?\s*(?:个人|人)?", text)
+    if couple_match and "adult_count" not in updates:
+        updates["adult_count"] = number_value(couple_match.group(1) or "两", 2)
+        updates["child_count"] = 0
+        updates["child_ages"] = []
     child_count_match = re.search(r"(\d+|[一二两三四五六七八九十])\s*(?:位)?(?:个)?(?:小孩|儿童|孩子|小朋友)", text)
     if child_count_match and "child_count" not in updates:
         value = child_count_match.group(1)
@@ -238,6 +254,44 @@ def product_partner_rows(db: Session, product: TravelProduct) -> list[tuple[Prod
     return result
 
 
+def safe_product_context(db: Session, product: TravelProduct) -> dict[str, Any]:
+    """Return only visitor-safe facts for Visitor Skill explanations."""
+    room = db.get(RoomInventory, product.room_inventory_id)
+    resources: list[dict[str, Any]] = []
+    for row in product.resources:
+        item: dict[str, Any] = {
+            "name": row.resource_name,
+            "type": "住宿" if row.resource_type == "ROOM" else "酒店服务" if row.resource_type == "HOTEL_SERVICE" else "文旅体验",
+            "quantity_per_package": row.quantity_per_package,
+        }
+        source = room if row.resource_type == "ROOM" else db.get(HotelService if row.resource_type == "HOTEL_SERVICE" else PartnerResource, row.resource_id)
+        if source is not None:
+            item.update({
+                "category": getattr(source, "service_type", None) or getattr(source, "category", None),
+                "start_time": source.start_time.strftime("%H:%M") if getattr(source, "start_time", None) else None,
+                "end_time": source.end_time.strftime("%H:%M") if getattr(source, "end_time", None) else None,
+                "address": getattr(source, "address", None),
+                "indoor": getattr(source, "indoor", None),
+                "weather_tags": getattr(source, "weather_tags", None),
+                "minimum_age": getattr(source, "minimum_age", None),
+                "maximum_age": getattr(source, "maximum_age", None),
+            })
+        resources.append(item)
+    return {
+        "id": product.id,
+        "product_name": product.product_name,
+        "theme": product.theme,
+        "target_crowd": product.target_crowd,
+        "weather": product.weather,
+        "target_date": product.target_date.isoformat(),
+        "price": str(product.suggested_price),
+        "sale_quantity": product.sale_quantity,
+        "room_max_guests": room.max_guests if room else None,
+        "resources": resources,
+        "recommendation_reason": product.recommendation_reason,
+    }
+
+
 def matches_conditions(db: Session, product: TravelProduct, request: VisitorRecommendRequest) -> tuple[bool, bool, bool, int]:
     children_match = True
     weather_match = True
@@ -272,6 +326,8 @@ def matches_conditions(db: Session, product: TravelProduct, request: VisitorReco
     if request.activity_level == "HIGH" and not any(category in resource_categories for category in {"SPORT", "THEME_PARK", "ENTERTAINMENT", "NIGHTLIFE"}):
         activity_match = False
     positive_match = not interest_terms or any(item.lower() in searchable.lower() for item in interest_terms) or bool(requested_categories & semantic_categories)
+    # A negative preference only excludes a product that actually contains the
+    # unwanted category. It must never make every alternative disappear.
     interest_match = persona_match and activity_match and not negative_hit and positive_match
     budget_match = product.suggested_price <= request.budget
     score = (35 if budget_match else 0) + (25 if children_match else 0) + (20 if weather_match else 0) + (20 if interest_match else 0)
@@ -326,13 +382,13 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
         "target_crowd": interpreted_request.target_crowd,
         "negative_interests": interpreted_request.negative_interests,
         "activity_level": interpreted_request.activity_level,
-        "products": [{"id": product.id, "product_name": product.product_name, "sale_quantity": product.sale_quantity}] if product else [],
+        "products": [safe_product_context(db, product)] if product else [safe_product_context(db, item) for item in public_items(db)],
         "allergy_information": "",
     }
-    result = AgentOrchestrator(db, hotel_id=product.hotel_id if product else None).match_visitor(payload)
+    result = AgentOrchestrator(db, hotel_id=product.hotel_id if product else None, source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id=request.conversation_id).match_visitor(payload)
     answer = getattr(result.value, "answer", "") or "我会结合当前可售库存、预算、客群、天气和体验时间给出推荐；最终库存与价格以系统实时计算为准。"
     suggestions = []
-    if any(word in question for word in ("还有", "其他", "推荐", "别的")):
+    if any(word in request.question for word in ("还有", "其他", "推荐", "别的")):
         effective = VisitorRecommendRequest(natural_language=request.question, weather=request.weather, budget=product.visitor_budget_limit if product else Decimal("700"), target_date=product.target_date if product else None, target_crowd=product.target_crowd if product else "FAMILY")
         effective, _ = enrich_recommend_request(effective)
         candidates = []
@@ -344,7 +400,7 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
             if item.suggested_price > effective.budget:
                 continue
             child_ok, weather_ok, interest_ok, _ = matches_conditions(db, item, effective)
-            if child_ok and weather_ok and interest_ok and not effective.negative_interests:
+            if child_ok and weather_ok and interest_ok:
                 candidates.append(item)
         suggestions = [product_to_dict(item) for item in candidates[:3]]
     return {"trace_id": result.trace_id, "answer": answer, "safety_notes": getattr(result.value, "safety_notes", "") or "AI建议不替代商户对过敏、儿童安全和场次的最终确认。", "product": product_to_dict(product) if product else None, "suggestions": suggestions, "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河还是室内文化体验？", "预算上限和可接受场次是什么？"], "fallback_used": result.fallback_used}
@@ -393,10 +449,10 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         "natural_language": request.natural_language,
         "dietary_restrictions": request.dietary_restrictions,
         "allergy_information": request.allergy_information,
-        "products": [{"id": item.id, "product_name": item.product_name, "sale_quantity": item.sale_quantity} for item in valid_candidates],
+        "products": [safe_product_context(db, item) for item in valid_candidates],
     }
     hotel_ids = {item.hotel_id for item in valid_candidates}
-    agent_result = AgentOrchestrator(db, hotel_id=next(iter(hotel_ids)) if len(hotel_ids) == 1 else None).match_visitor(payload)
+    agent_result = AgentOrchestrator(db, hotel_id=next(iter(hotel_ids)) if len(hotel_ids) == 1 else None, source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id=request.conversation_id).match_visitor(payload)
     output = agent_result.value
     output_ids = set(output.selected_product_ids)
     results = []
@@ -405,7 +461,7 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
         reason = output.reasons.get(str(item.id), item.recommendation_reason)
         results.append({
             "product": product_to_dict(item),
-            "score": min(100, score + (3 if item.id in output_ids else 0)),
+            "score": min(100, score),
             "recommendation_reason": reason,
             "budget_match": item.suggested_price <= request.budget,
             "children_match": children_match,

@@ -22,6 +22,7 @@ class VisitorQuestion(BaseModel):
     natural_language: str = Field(default="", max_length=1000)
     child_age: int | None = Field(default=None, ge=0, le=120)
     weather: str = "RAIN"
+    conversation_id: str | None = Field(default=None, max_length=120)
 
 
 class VisitorRecommendRequest(BaseModel):
@@ -46,6 +47,7 @@ class VisitorRecommendRequest(BaseModel):
     arrival_time: time | None = None
     preferred_experience_time: time | None = None
     other_requirements: str = ""
+    conversation_id: str | None = Field(default=None, max_length=120)
 
 
 class VisitorInterpretRequest(BaseModel):
@@ -98,6 +100,7 @@ class VisitorIntentCreate(BaseModel):
     other_requirements: str = ""
     contact_name: str = Field(min_length=1, max_length=80)
     contact_phone: str = Field(min_length=6, max_length=40)
+    conversation_id: str | None = Field(default=None, max_length=120)
 
 
 class VisitorIntentStatusUpdate(BaseModel):

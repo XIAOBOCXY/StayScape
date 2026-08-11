@@ -5,7 +5,7 @@ import { visitorApi } from '../../api'
 import { errorMessage } from '../../api/client'
 import ProductCard from '../../components/ProductCard.vue'
 import type { Recommendation, TravelProduct } from '../../types'
-import { saveVisitorProfile, type VisitorProfile } from '../../utils/visitorProfile'
+import { saveVisitorProfile, type VisitorProfile, visitorConversationId } from '../../utils/visitorProfile'
 
 type Stage = 'input' | 'review' | 'results'
 type StructuredField = keyof Omit<VisitorProfile, 'natural_language'>
@@ -89,7 +89,7 @@ async function getRecommendations() {
   const profile = profilePayload(); saveVisitorProfile(profile)
   loading.value = true
   try {
-    const response = await visitorApi.recommend({ ...profile, structured_confirmed: true })
+    const response = await visitorApi.recommend({ ...profile, structured_confirmed: true, conversation_id: visitorConversationId() })
     results.value = response.data.results; alternatives.value = []; interpreted.value = response.data.interpreted_needs || interpreted.value; stage.value = 'results'
     if (!results.value.length) {
       try { alternatives.value = (await visitorApi.products()).data.slice(0, 3) } catch { alternatives.value = [] }

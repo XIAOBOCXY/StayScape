@@ -8,7 +8,7 @@ import MediaImage from '../../components/MediaImage.vue'
 import ProductCard from '../../components/ProductCard.vue'
 import type { MarketingAsset, TravelProduct } from '../../types'
 import { experienceLabel, experienceLabelZh, mediaForProduct, weatherLabel } from '../../utils/productMedia'
-import { loadVisitorProfile, saveVisitorProfile, type VisitorProfile } from '../../utils/visitorProfile'
+import { loadVisitorProfile, saveVisitorProfile, type VisitorProfile, visitorConversationId } from '../../utils/visitorProfile'
 
 const route = useRoute()
 const product = ref<TravelProduct | null>(null)
@@ -44,7 +44,7 @@ async function consult() {
   if (!question.value.trim() || !product.value) return
   const text = question.value.trim(); question.value = ''; chats.value.push({ user: text }); consultLoading.value = true
   try {
-    const response = await visitorApi.consult({ product_id: product.value.id, question: text, weather: product.value.weather })
+    const response = await visitorApi.consult({ product_id: product.value.id, question: text, weather: product.value.weather, conversation_id: visitorConversationId() })
     chats.value.push({ answer: String(response.data.answer || ''), suggestions: (response.data.suggestions as TravelProduct[]) || [], follow_up_questions: (response.data.follow_up_questions as string[]) || [] })
   } catch (e) { showToast(errorMessage(e)) }
   finally { consultLoading.value = false }
@@ -115,7 +115,7 @@ async function submitIntent() {
   saveVisitorProfile(profile)
   intentLoading.value = true
   try {
-    const response = await visitorApi.intent({ ...profile, product_id: product.value.id, structured_confirmed: true, contact_name: form.contact_name, contact_phone: form.contact_phone })
+    const response = await visitorApi.intent({ ...profile, product_id: product.value.id, structured_confirmed: true, contact_name: form.contact_name, contact_phone: form.contact_phone, conversation_id: visitorConversationId() })
     product.value.sale_quantity = Number(response.data.remaining_quantity ?? Math.max(product.value.sale_quantity - 1, 0))
     product.value.status = String(response.data.product_status || product.value.status)
     showToast(`预约意向已提交，当前还剩 ${product.value.sale_quantity} 套`); intentDialog.value = false

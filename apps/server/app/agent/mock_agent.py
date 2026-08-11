@@ -179,12 +179,29 @@ class MockAgent:
         partner_address = partner.get("address") or "杭州体验场地"
         partner_description = partner.get("description") or f"{partner_name}，让杭州的这一晚有具体去处。"
         capacity = partner.get("remaining_capacity") or 0
-        suffix = ["", "·探索版", "·轻享版", "·深玩版", "·周末版"][variant_index % 5]
+        suffix = ["", "·轻松版", "·加深体验", "·周末版", "·慢享版"][variant_index % 5]
         if variant_index == 0 and crowd == "FAMILY" and ("非遗" in theme or "非遗" in partner_name):
             name = "杭州雨天亲子非遗文化宿"
         else:
-            name = f"杭州{weather_label}{profile['label']}{profile['suffix']} · {partner_name[:8]}{suffix}"
-        title = f"{weather_label}的{name.replace('杭州', '', 1)}：把{profile['label']}放进一晚旅居"
+            name_options = {
+                "THEME_PARK": [f"带娃解锁{partner_name}｜{room_name}+{service_names}", f"周末去{partner_name}｜家庭房与{service_names}"],
+                "KIDS": [f"孩子放电计划｜{partner_name}+{room_name}", f"雨天带娃不无聊｜{partner_name}与{service_names}"],
+                "NATURE": [f"住一晚再去{partner_name}｜{room_name}+{service_names}", f"给全家留一段自然时间｜{partner_name}"],
+                "SPORT": [f"朋友周末玩点刺激的｜{partner_name}+{room_name}", f"把运动安排进一晚旅居｜{partner_name}"],
+                "NIGHTLIFE": [f"住一晚再看夜景｜{partner_name}+{room_name}", f"夜色里的杭州约会｜{partner_name}与{service_names}"],
+                "PHOTO": [f"把杭州拍进周末｜{partner_name}+{room_name}", f"住一晚去旅拍｜{partner_name}与{service_names}"],
+                "FOOD": [f"住进一晚江南味道｜{partner_name}+{service_names}", f"先吃好再慢慢逛｜{partner_name}与{room_name}"],
+                "PERFORMANCE": [f"看完演出再回酒店｜{partner_name}+{room_name}", f"把今晚留给{partner_name}｜住宿与{service_names}"],
+                "ENTERTAINMENT": [f"朋友见面就该这样玩｜{partner_name}+{room_name}", f"雨天也能玩尽兴｜{partner_name}与{service_names}"],
+                "CITY_WALK": [f"住一晚再去城市漫游｜{partner_name}+{room_name}", f"给自己一段杭州慢走时间｜{partner_name}"],
+                "TEA": [f"把一杯茶放进杭州周末｜{partner_name}+{room_name}", f"住一晚，慢下来喝杯茶｜{partner_name}"],
+                "CULTURE": [f"下雨也不改行程｜{partner_name}+{room_name}", f"把杭州手作安排进一晚｜{partner_name}与{service_names}"],
+            }
+            options = name_options.get(profile["key"].upper(), [f"住一晚去体验{partner_name}｜{room_name}", f"把{partner_name}安排进今晚行程｜{room_name}"])
+            name = options[variant_index % len(options)] + suffix
+            if profile["key"] == "sport" and partner_description:
+                name = f"{name}｜{partner_description}"
+        title = f"{weather_label}也能好好玩｜{name}"
         content = (
             f"为{audience}设计的{theme}主题旅居。以{room_name}为基地，"
             f"把{service_names}与{partner_name}排进同一张时间卡：{partner_time}，地点在{partner_address}。"
@@ -215,6 +232,8 @@ class MockAgent:
             "resource_quantities": quantities,
             "marketing_title": title,
             "marketing_content": content,
+            "creative_angle": f"{profile['label']}的具体城市体验主视觉：{partner_name} + {room_name}",
+            "poster_style": f"{profile['key']}-editorial",
             "marketing_assets": [
                 {"asset_type": "POSTER", "platform": "StayScape / 小红书封面", "title": title, "content": content, "visual_brief": f"以{profile['label']}（{profile['tag']}）为主视觉，画面包含{partner_name}、{room_name}与真实场次信息，不使用空泛纯色背景。", "creative_angle": f"{profile['label']}的具体城市体验主视觉", "poster_style": f"{profile['key']}-editorial", "call_to_action": "查看场次 · 提交预约意向", "poster_svg": poster_svg},
                 {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": f"{weather_label}杭州：{profile['label']}值得住一晚", "content": social_post, "visual_brief": f"首图突出{partner_name}具体体验，后续展示房间、城市场景、时间卡和余量。", "call_to_action": "收藏这段杭州行程"},

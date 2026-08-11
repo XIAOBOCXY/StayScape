@@ -26,6 +26,8 @@ class ProductAgentOutput(BaseModel):
     marketing_title: str = Field(min_length=1, max_length=220)
     marketing_content: str = ""
     marketing_assets: list[MarketingAssetOutput] = Field(default_factory=list)
+    creative_angle: str = Field(default="", max_length=260)
+    poster_style: str = Field(default="", max_length=80)
     recommendation_reason: str = ""
     risk_message: str = ""
 

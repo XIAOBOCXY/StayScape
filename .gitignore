@@ -8,6 +8,9 @@ venv/
 node_modules/
 .npm-cache/
 dist/
+!integrations/stayscape-openclaw-plugin/dist/
+!integrations/stayscape-openclaw-plugin/dist/index.js
+deploy/generated/*.json
 coverage/
 .pytest_cache/
 .mypy_cache/

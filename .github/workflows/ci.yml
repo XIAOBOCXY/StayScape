@@ -1,0 +1,70 @@
+name: StayScape CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: python -m pip install -r apps/server/requirements.txt
+      - name: Run backend tests
+        env:
+          PYTHONPATH: apps/server
+        run: python -m pytest apps/server/tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci --prefix apps/web
+      - name: Build frontend
+        run: npm run build --prefix apps/web
+
+  skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: integrations/stayscape-openclaw-plugin/package-lock.json
+      - name: Build StayScape OpenClaw Tool Plugin
+        run: npm ci --prefix integrations/stayscape-openclaw-plugin --ignore-scripts --legacy-peer-deps && npm run build --prefix integrations/stayscape-openclaw-plugin
+      - name: Package both Skills
+        run: python scripts/package_skills.py
+      - name: Verify ZIP roots contain SKILL.md
+        shell: python
+        run: |
+          from pathlib import Path
+          from zipfile import ZipFile
+          for archive in Path("dist").glob("stayscape-*.zip"):
+              with ZipFile(archive) as zf:
+                  assert "SKILL.md" in zf.namelist(), archive
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Docker Compose including live profile
+        env:
+          OPENCLAW_GATEWAY_TOKEN: ci-gateway-token
+          STAYSCAPE_AGENT_TOOL_TOKEN: ci-tool-token
+        run: docker compose --profile live config
