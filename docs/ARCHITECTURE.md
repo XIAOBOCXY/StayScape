@@ -72,4 +72,4 @@ ClawHive 不在运行时调用链中。两个 Skill 仍然打包为独立 ZIP �
 
 ## 部署边界
 
-Docker Compose 的 `demo` profile 不启动 Gateway，使用 Mock Agent 完成可重复演示；`live` profile 构建固定版本的官方 `ghcr.io/openclaw/openclaw:2026.6.6`，Gateway 只在 Docker 内网监听 18789。Nginx 只代理 Web/API/WebSocket，不代理 `/v1/responses`。
+Docker Compose 的 `demo` profile 不启动 Gateway，使用 Mock Agent 完成可重复演示；`live` profile 构建固定版本的官方 `ghcr.io/openclaw/openclaw:2026.6.6-slim`，Gateway 只在 Docker 内网监听 18789。Nginx 只代理 Web/API/WebSocket，不代理 `/v1/responses`。

@@ -1,4 +1,4 @@
-ARG OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:2026.6.6
+ARG OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:2026.6.6-slim
 FROM ${OPENCLAW_IMAGE}
 
 USER root
