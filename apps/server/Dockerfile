@@ -1,8 +1,10 @@
 FROM python:3.11-slim
 
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app \
     PIP_DEFAULT_TIMEOUT=300 \
-    PIP_RETRIES=8
+    PIP_RETRIES=8 \
+    PIP_INDEX_URL=${PIP_INDEX_URL}
 WORKDIR /app
 
 COPY apps/server/requirements.txt /app/requirements.txt

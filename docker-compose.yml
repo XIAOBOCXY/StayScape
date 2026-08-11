@@ -18,6 +18,8 @@ services:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-production}
