@@ -13,6 +13,7 @@ dist/
 deploy/generated/*.json
 coverage/
 .pytest_cache/
+.runtime-py/
 .mypy_cache/
 *.log
 .DS_Store

@@ -20,12 +20,12 @@ FEISHU_APP_SECRET=server-side-secret
 FEISHU_DM_ALLOW_FROM=ou_operator_open_id
 FEISHU_GROUP_ALLOW_FROM=oc_allowed_group_id
 FEISHU_GROUP_SENDER_ALLOW_FROM=ou_operator_open_id,ou_support_open_id
-FEISHU_OPERATOR_OPEN_ID=ou_operator_open_id
-FEISHU_ACTOR_ROLE=HOTEL_OPERATOR
+FEISHU_OPERATOR_ALLOW_FROM=ou_operator_open_id
+FEISHU_SUPPORT_ALLOW_FROM=ou_support_open_id
 FEISHU_REQUIRE_MENTION=true
 ```
 
-DM 和群组默认都是 allowlist；群聊要求 mention。sender、group 和 hotel 绑定信息必须由部署者填写，不接受任意公众用户控制酒店系统。
+DM 和群组默认都是 allowlist；群聊要求 mention。角色名单只负责给已经通过入口 allowlist 的 runtime sender 分配 `HOTEL_OPERATOR` 或 `HOTEL_SUPPORT`，不能绕过 DM/群聊 allowlist。sender、group 和 hotel 绑定信息必须由部署者填写，不接受任意公众用户控制酒店系统。
 
 ## StayScape Tool
 
@@ -35,7 +35,7 @@ DM 和群组默认都是 allowlist；群聊要求 mention。sender、group 和 h
 - `stayscape_list_available_products`
 - `stayscape_create_product_draft`
 
-插件只访问 FastAPI 的 `/api/v1/agent-tools/*`，携带服务端 Tool Token、来源 `FEISHU`、角色、酒店 ID 和 sender ID。FastAPI 再次校验 allowlist 和权限。`HOTEL_SUPPORT` 只能读上下文/在售产品；`HOTEL_OPERATOR` 才能创建 DRAFT。绝不提供发布、删除、改库存、改成本、改价格、SQL、shell 或 arbitrary HTTP。
+插件只访问 FastAPI 的 `/api/v1/agent-tools/*`，携带服务端 Tool Token、来源 `FEISHU`、酒店 ID 和 OpenClaw 运行时注入的 `requesterSenderId`。插件配置不保存静态 senderId 或 actorRole；FastAPI 根据 sender allowlist 重新推导角色。缺少运行时 sender 身份直接拒绝。`HOTEL_SUPPORT` 只能读上下文/在售产品；`HOTEL_OPERATOR` 才能创建 DRAFT。绝不提供发布、删除、改库存、改成本、改价格、SQL、shell 或 arbitrary HTTP。
 
 ## 验证流程
 

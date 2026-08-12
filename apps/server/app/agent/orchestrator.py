@@ -65,12 +65,13 @@ class AgentOrchestrator:
             self.provider = OpenClawAgent(
                 settings.openclaw_base_url,
                 settings.openclaw_gateway_token,
-                settings.openclaw_model,
+                settings.openclaw_agent_target,
                 settings.agent_timeout_seconds,
                 transport=settings.openclaw_transport,
                 responses_path=settings.openclaw_responses_path,
                 agent_id=settings.openclaw_agent_id,
                 skill_version=settings.openclaw_skill_version,
+                primary_model=settings.openclaw_primary_model,
             )
         else:
             self.provider = MockAgent(settings.mock_agent_mode)
@@ -147,7 +148,7 @@ class AgentOrchestrator:
                 actor_role=self.context.actor_role,
                 transport=getattr(self.provider, "transport", "mock"),
                 agent_id=getattr(self.provider, "agent_id", ""),
-                model=getattr(self.provider, "model", ""),
+                model=getattr(self.provider, "primary_model", getattr(self.provider, "model", "")),
                 skill_version=getattr(self.provider, "skill_version", ""),
                 conversation_id=self.context.conversation_id or "",
                 fallback_used=fallback_used,
@@ -166,10 +167,10 @@ class AgentOrchestrator:
         error_message = None
         fallback_used = False
         try:
-            if self._live_without_fallback and not settings.openclaw_skills_ready:
+            if self._live_without_fallback and not settings.openclaw_live_ready:
                 status = "NOT_READY"
-                error_code = "OPENCLAW_SKILLS_NOT_READY"
-                error_message = "The two StayScape Skills have not passed OpenClaw discovery"
+                error_code = "OPENCLAW_LIVE_NOT_READY"
+                error_message = "OpenClaw Gateway, provider, Skills, tools, or smoke test is not ready"
             else:
                 raw, retry_count = self._request_with_retries(lambda: self._provider_generate(skill_name, payload, trace_id))
             try:
@@ -225,7 +226,9 @@ class AgentOrchestrator:
         return AgentCallResult(
             trace_id, final_value, raw, status, validation, retry_count, fallback_used,
             getattr(self.provider, "provider_name", "MOCK"), getattr(self.provider, "transport", "mock"),
-            getattr(self.provider, "agent_id", ""), getattr(self.provider, "model", ""), getattr(self.provider, "skill_version", ""),
+            getattr(self.provider, "agent_id", ""),
+            getattr(self.provider, "primary_model", getattr(self.provider, "model", "")),
+            getattr(self.provider, "skill_version", ""),
         )
 
     def generate_product(self, payload: dict[str, Any]) -> AgentCallResult:

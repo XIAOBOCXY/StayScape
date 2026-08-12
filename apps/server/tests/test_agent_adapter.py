@@ -55,6 +55,13 @@ def test_openclaw_rejects_legacy_transport():
         raise AssertionError("legacy OpenClaw transports must not be accepted")
 
 
+def test_openclaw_agent_target_is_sent_as_route_target_not_primary_model():
+    agent = OpenClawAgent("http://gateway.local", "secret", "openclaw/default", 3)
+    body = agent._responses_body(skill_name="stayscape-product-generator", payload={}, trace_id="trace-test")
+    assert body["model"] == "openclaw/default"
+    assert "qwen/qwen3.5-plus" not in json.dumps(body)
+
+
 def test_request_context_session_keys_are_isolated():
     visitor_a = RequestContext(source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id="a")
     visitor_b = RequestContext(source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id="b")

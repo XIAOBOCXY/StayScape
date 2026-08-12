@@ -44,10 +44,26 @@ chmod 600 .env
 ```env
 MODE=live
 AGENT_PROVIDER=openclaw
-OPENCLAW_MODEL=openclaw/default
+OPENCLAW_AGENT_TARGET=openclaw/default
+OPENCLAW_PRIMARY_MODEL=qwen/qwen3.5-plus
+QWEN_API_KEY=<server-side-qwen-key>
 ```
 
 `scripts/deploy.sh live` 会自动生成 `SECRET_KEY`、PostgreSQL 密码、`OPENCLAW_GATEWAY_TOKEN` 和 `STAYSCAPE_AGENT_TOOL_TOKEN`。如果模型供应商需要 API Key/OAuth，请按该供应商要求把凭证配置在 OpenClaw 的服务端运行环境中；不要提交到 Git。
+
+其中 Qwen 使用阿里云百炼/Model Studio 的 **Standard 按量 API Key**。创建后只在
+ECS 的 `/opt/StayScape/.env` 中填写 `QWEN_API_KEY`，并确认：
+
+```env
+OPENCLAW_AGENT_TARGET=openclaw/default
+OPENCLAW_PRIMARY_MODEL=qwen/qwen3.5-plus
+QWEN_API_KEY=你的百炼服务端Key
+```
+
+不要把 Key 填到 Vue、浏览器、Skill、Dockerfile、GitHub 或聊天记录中。部署脚本
+会验证 Qwen provider、配置模型和真实 Responses 请求；检查失败时不会把系统标记
+为 Live。模型购买/计费、Key 创建和地域限制以[官方 Qwen provider 文档](https://docs.openclaw.ai/providers/qwen)
+及百炼控制台当前页面为准。
 
 飞书不是 Web/H5 启动条件。需要飞书时再填写 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_DM_ALLOW_FROM` 和 `FEISHU_GROUP_ALLOW_FROM`。
 
@@ -63,12 +79,12 @@ bash scripts/deploy.sh live
 2. 初始化并保护 `.env`
 3. 生成私密 Token
 4. 渲染不入 Git 的 OpenClaw 配置
-5. 构建 PostgreSQL、FastAPI、Vue、Nginx 和官方 `ghcr.io/openclaw/openclaw:2026.6.6-slim`
+5. 构建 PostgreSQL、FastAPI、Vue、Nginx 和固定版本官方 `ghcr.io/openclaw/openclaw:2026.6.9-slim`，同时安装版本匹配的 Qwen 与 Feishu 官方插件
 6. 启动 Alembic、幂等演示 Seed、单 Agent `stayscape-main`、两个 Skill 和 Tool Plugin
-7. 通过 `openclaw skills list --agent stayscape-main --json` 检查两个 Skill
-8. 只有发现成功后才把 FastAPI 的 Live Agent readiness 标记为 true
+7. 通过 `openclaw skills list --agent stayscape-main --json` 检查两个 Skill，并检查 Qwen provider、StayScape Tool Plugin 和模型清单
+8. 通过一次真实 `POST /v1/responses` smoke test 后才把 FastAPI 的 `OPENCLAW_LIVE_READY` 标记为 true；模型 Key 无效时部署失败，不伪装成 Live
 
-访问 `http://<ECS公网IP>/`。默认酒店演示账号为 `hotel_demo / StayScape123!`。确认演示数据后，把 `SEED_DEMO_ON_STARTUP=false` 写入 `.env`，再执行：
+访问 `http://<ECS公网IP>/`。演示账号由 Seed 创建并由部署输出提示，登录页不会预填用户名或密码。正式比赛前请在服务端更换演示密码；确认演示数据后，把 `SEED_DEMO_ON_STARTUP=false` 写入 `.env`，再执行：
 
 ```bash
 docker compose --env-file .env --profile live up -d server

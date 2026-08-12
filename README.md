@@ -61,7 +61,7 @@ cp .env.example .env
 bash scripts/deploy.sh live
 ```
 
-脚本会生成服务端密钥、PostgreSQL 密码、Gateway Token 和 Tool Token，构建 PostgreSQL、FastAPI、Vue、Nginx 以及固定版本的官方 OpenClaw 镜像，安装两个 Skill 和 StayScape Tool Plugin，执行迁移、幂等 Seed、健康检查和 `openclaw skills list --agent stayscape-main --json`。模型供应商首次 OAuth/API 授权仍需人工完成一次。
+脚本会生成服务端密钥、PostgreSQL 密码、Gateway Token 和 Tool Token，构建 PostgreSQL、FastAPI、Vue、Nginx 以及固定版本的官方 OpenClaw 镜像，安装两个 Skill、Qwen provider、可选 Feishu plugin 和 StayScape Tool Plugin，执行迁移、幂等 Seed、健康检查、Skill/plugin discovery、模型清单检查和一次真实 `/v1/responses` smoke test。Live 模式需要把 `QWEN_API_KEY` 预先写入服务器 `.env`；模型供应商首次授权仍需人工完成一次。
 
 公网只开放 80/443；不要开放 18789、5432、8000。详细步骤见 [docs/DEPLOY_ALIYUN.md](docs/DEPLOY_ALIYUN.md)、[docs/OPENCLAW.md](docs/OPENCLAW.md) 和 [docs/FEISHU.md](docs/FEISHU.md)。
 

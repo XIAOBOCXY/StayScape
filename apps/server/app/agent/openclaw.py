@@ -28,6 +28,7 @@ class OpenClawAgent:
         responses_path: str = "/v1/responses",
         agent_id: str = "stayscape-main",
         skill_version: str = "",
+        primary_model: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.gateway_token = gateway_token
@@ -39,6 +40,10 @@ class OpenClawAgent:
         self.responses_path = responses_path if responses_path.startswith("/") else f"/{responses_path}"
         self.agent_id = agent_id or "stayscape-main"
         self.skill_version = skill_version
+        # ``model`` is the OpenResponses routing target (normally
+        # ``openclaw/default``).  Keep the selected backend model separately so
+        # diagnostics and SkillCallLog do not confuse the two concepts.
+        self.primary_model = primary_model
 
     def _headers(self, session_key: str | None = None) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}

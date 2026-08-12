@@ -36,26 +36,62 @@ class ToolRequest(BaseModel):
 def _tool_context(
     authorization: str | None = Header(default=None),
     source_channel: str | None = Header(default=None, alias="X-StayScape-Source-Channel"),
-    actor_role: str | None = Header(default=None, alias="X-StayScape-Actor-Role"),
+    actor_role_header: str | None = Header(default=None, alias="X-StayScape-Actor-Role"),
     hotel_id: str | None = Header(default=None, alias="X-StayScape-Hotel-Id"),
     sender_id: str | None = Header(default=None, alias="X-StayScape-Sender-Id"),
+    direct_message: str | None = Header(default=None, alias="X-StayScape-Feishu-DM"),
+    group_id: str | None = Header(default=None, alias="X-StayScape-Feishu-Group-Id"),
     conversation_id: str | None = Header(default=None, alias="X-StayScape-Conversation-Id"),
 ) -> RequestContext:
     expected = settings.stayscape_agent_tool_token
     if not expected or authorization != f"Bearer {expected}":
         raise AppError("AGENT_TOOL_UNAUTHORIZED", "Agent Tool authentication failed", status_code=401)
-    if source_channel != "FEISHU" or actor_role not in {"HOTEL_OPERATOR", "HOTEL_SUPPORT"} or not hotel_id:
-        raise AppError("AGENT_TOOL_CONTEXT_REQUIRED", "Missing a trusted Feishu source, role, or hotel context", status_code=403)
-    allowed_senders = {item.strip() for item in settings.feishu_dm_allow_from.split(",") if item.strip()}
-    if not sender_id or not allowed_senders or sender_id not in allowed_senders:
+    if not (settings.feishu_enabled and settings.feishu_app_id and settings.feishu_app_secret):
+        raise AppError("FEISHU_DISABLED", "Feishu business tools are disabled", status_code=403)
+    if source_channel != "FEISHU" or not hotel_id:
+        raise AppError("AGENT_TOOL_CONTEXT_REQUIRED", "Missing a trusted Feishu source or hotel context", status_code=403)
+    if not sender_id:
+        raise AppError("FEISHU_SENDER_FORBIDDEN", "The Feishu runtime did not provide a sender identity", status_code=403)
+    def _csv(value: str) -> set[str]:
+        return {item.strip() for item in value.split(",") if item.strip()}
+
+    dm_senders = _csv(settings.feishu_dm_allow_from)
+    group_ids = {item.strip() for item in settings.feishu_group_allow_from.split(",") if item.strip()}
+    operator_senders = _csv(settings.feishu_operator_allow_from)
+    support_senders = _csv(settings.feishu_support_allow_from)
+    # Backwards-compatible demo configuration: when role-specific lists are
+    # absent, the existing DM allowlist is treated as operator-only. In live
+    # deployments role-specific lists are recommended and are authoritative.
+    if not operator_senders and not support_senders:
+        operator_senders = set(dm_senders)
+    configured_group_senders = _csv(settings.feishu_group_sender_allow_from)
+    # The channel allowlists remain the first boundary. Role lists only assign
+    # the trusted StayScape role after the sender has passed that boundary.
+    # When role-specific lists are absent, the legacy/demo DM list is mapped to
+    # HOTEL_OPERATOR above; group sender access still requires its own list.
+    if direct_message == "true":
+        allowed = sender_id in dm_senders
+    elif group_id:
+        allowed = group_id in group_ids and sender_id in configured_group_senders
+    else:
+        allowed = False
+    if not allowed:
         raise AppError("FEISHU_SENDER_FORBIDDEN", "The Feishu sender is not on the business tool allowlist", status_code=403)
+    if sender_id in operator_senders:
+        trusted_actor_role = "HOTEL_OPERATOR"
+    elif sender_id in support_senders:
+        trusted_actor_role = "HOTEL_SUPPORT"
+    else:
+        raise AppError("FEISHU_ROLE_FORBIDDEN", "The Feishu sender has no assigned StayScape role", status_code=403)
+    if actor_role_header and actor_role_header != trusted_actor_role:
+        raise AppError("FEISHU_ROLE_MISMATCH", "The supplied actor role does not match the sender allowlist", status_code=403)
     try:
         parsed_hotel_id = int(hotel_id)
     except (TypeError, ValueError) as exc:
         raise AppError("AGENT_TOOL_CONTEXT_INVALID", "The hotel context is invalid", status_code=403) from exc
     return RequestContext(
         source_channel="FEISHU",
-        actor_role=actor_role,
+        actor_role=trusted_actor_role,
         hotel_id=parsed_hotel_id,
         conversation_id=conversation_id,
     )

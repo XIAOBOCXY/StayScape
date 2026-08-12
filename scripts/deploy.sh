@@ -69,10 +69,13 @@ set_env SEED_DEMO_ON_STARTUP "${SEED_DEMO_ON_STARTUP:-true}"
 set_env STAYSCAPE_API_INTERNAL_URL http://server:8000
 set_env STAYSCAPE_HOTEL_ID "${STAYSCAPE_HOTEL_ID:-1}"
 set_env OPENCLAW_AGENT_ID stayscape-main
+primary_model="$(env_value OPENCLAW_PRIMARY_MODEL)"
+[[ -n "$primary_model" ]] || set_env OPENCLAW_PRIMARY_MODEL qwen/qwen3.5-plus
+primary_model="$(env_value OPENCLAW_PRIMARY_MODEL)"
 set_env OPENCLAW_TRANSPORT responses
 set_env OPENCLAW_RESPONSES_PATH /v1/responses
-set_env OPENCLAW_RUNTIME_VERSION 2026.6.6
-set_env OPENCLAW_IMAGE ghcr.io/openclaw/openclaw:2026.6.6-slim
+set_env OPENCLAW_RUNTIME_VERSION 2026.6.9
+set_env OPENCLAW_IMAGE ghcr.io/openclaw/openclaw:2026.6.9-slim
 
 secret_key="$(env_value SECRET_KEY)"
 [[ -n "$secret_key" && "$secret_key" != change-me* ]] || set_env SECRET_KEY "$(random_hex)"
@@ -80,6 +83,8 @@ postgres_password="$(env_value POSTGRES_PASSWORD)"
 [[ -n "$postgres_password" && "$postgres_password" != change-me* ]] || set_env POSTGRES_PASSWORD "$(random_hex)"
 
 if [[ "$MODE" == "live" ]]; then
+  qwen_api_key="$(env_value QWEN_API_KEY)"
+  [[ -n "$qwen_api_key" ]] || fail "Live mode requires QWEN_API_KEY in .env. Create a Qwen/Model Studio API key and keep it server-side; never commit or paste it into the browser."
   set_env AGENT_PROVIDER openclaw
   set_env OPENCLAW_BASE_URL http://openclaw:18789
   gateway_token="$(env_value OPENCLAW_GATEWAY_TOKEN)"
@@ -87,9 +92,11 @@ if [[ "$MODE" == "live" ]]; then
   tool_token="$(env_value STAYSCAPE_AGENT_TOOL_TOKEN)"
   [[ -n "$tool_token" ]] || set_env STAYSCAPE_AGENT_TOOL_TOKEN "$(random_hex)"
   set_env OPENCLAW_SKILLS_READY false
+  set_env OPENCLAW_LIVE_READY false
 else
   set_env AGENT_PROVIDER mock
   set_env OPENCLAW_SKILLS_READY false
+  set_env OPENCLAW_LIVE_READY false
 fi
 
 set -a
@@ -135,10 +142,51 @@ for attempt in $(seq 1 48); do
 done
 
 if [[ "$MODE" == "live" ]]; then
+  log "Waiting for the private OpenClaw Gateway readiness endpoint"
+  for attempt in $(seq 1 48); do
+    if docker compose --env-file .env --profile live exec -T openclaw node -e "fetch('http://127.0.0.1:18789/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+      break
+    fi
+    if [[ "$attempt" == 48 ]]; then
+      docker compose --env-file .env --profile live logs --tail=100 openclaw || true
+      fail "OpenClaw Gateway did not become ready in time"
+    fi
+    sleep 5
+  done
+  log "Verifying the single stayscape-main Agent"
+  docker compose --env-file .env --profile live exec -T openclaw openclaw agents list --json \
+    | python3 scripts/verify_openclaw_agent.py
   log "Discovering both Skills through the OpenClaw CLI"
   docker compose --env-file .env --profile live exec -T openclaw openclaw skills list --agent stayscape-main --json \
     | python3 scripts/verify_openclaw_skills.py
+  log "Checking that both Skills are visible to stayscape-main"
+  docker compose --env-file .env --profile live exec -T openclaw openclaw skills check --agent stayscape-main --json \
+    | python3 scripts/verify_openclaw_skills.py
+  log "Verifying official OpenClaw provider and StayScape Tool Plugin"
+  plugin_json="$(mktemp)"
+  trap 'rm -f "$plugin_json"' EXIT
+  docker compose --env-file .env --profile live exec -T openclaw openclaw plugins list --json >"$plugin_json"
+  FEISHU_ENABLED="$(env_value FEISHU_ENABLED)" python3 scripts/verify_openclaw_plugins.py <"$plugin_json"
+  log "Verifying configured Qwen model"
+  model_output="$(docker compose --env-file .env --profile live exec -T openclaw openclaw models list --provider qwen --all 2>&1)" || fail "OpenClaw Qwen provider is not available. Inspect: docker compose --profile live logs openclaw"
+  printf '%s\n' "$model_output" | grep -Fq "${primary_model:-qwen/qwen3.5-plus}" || fail "OpenClaw does not report the configured model ${primary_model:-qwen/qwen3.5-plus}"
+  log "Running one real OpenResponses smoke test through stayscape-main"
+  docker compose --env-file .env --profile live exec -T openclaw node --input-type=module -e '
+    const response = await fetch("http://127.0.0.1:18789/v1/responses", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENCLAW_GATEWAY_TOKEN}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "x-openclaw-agent-id": "stayscape-main"
+      },
+      body: JSON.stringify({ model: "openclaw/default", input: "Reply with the single word READY.", store: false })
+    });
+    if (!response.ok) { console.error(`OpenResponses smoke test failed with HTTP ${response.status}`); process.exit(1); }
+    console.log("OpenResponses smoke test passed");
+  ' || fail "OpenClaw Gateway or Qwen model smoke test failed"
   set_env OPENCLAW_SKILLS_READY true
+  set_env OPENCLAW_LIVE_READY true
   set -a
   . ./.env
   set +a
@@ -154,6 +202,7 @@ else
   docker compose --env-file .env ps
 fi
 log "Deployment complete: http://127.0.0.1:${port}"
+log "Hotel demo username: hotel_demo (enter the password manually; it is not embedded in the web bundle)"
 if [[ "$MODE" == "live" ]]; then
   log "Live runtime: one private OpenClaw Gateway, Agent stayscape-main, two Skills"
   log "If a model provider needs first-time OAuth/API authorization, complete that one provider-specific step now."

@@ -18,6 +18,9 @@
   "agents": {
     "defaults": {
       "workspace": "/home/node/.openclaw/workspace",
+      "model": {
+        "primary": "${OPENCLAW_PRIMARY_MODEL}"
+      },
       "skills": [
         "stayscape-product-generator",
         "stayscape-visitor-matcher"
@@ -55,9 +58,13 @@
   },
   "plugins": {
     "enabled": true,
-    "allow": ["stayscape-openclaw-plugin"],
+    "allow": ["stayscape-openclaw-plugin", "qwen", "feishu"],
     "load": {
-      "paths": ["/opt/stayscape/openclaw-plugin"]
+      "paths": [
+        "/opt/stayscape/openclaw-plugin",
+        "${OPENCLAW_RUNTIME_PLUGIN_ROOT}/node_modules/@openclaw/qwen-provider",
+        "${OPENCLAW_RUNTIME_PLUGIN_ROOT}/node_modules/@openclaw/feishu"
+      ]
     },
     "entries": {
       "stayscape-openclaw-plugin": {
@@ -65,10 +72,14 @@
         "config": {
           "baseUrl": "${STAYSCAPE_API_INTERNAL_URL}",
           "token": "${STAYSCAPE_AGENT_TOOL_TOKEN}",
-          "hotelId": "${STAYSCAPE_HOTEL_ID}",
-          "senderId": "${FEISHU_OPERATOR_OPEN_ID}",
-          "actorRole": "${FEISHU_ACTOR_ROLE}"
+          "hotelId": "${STAYSCAPE_HOTEL_ID}"
         }
+      },
+      "qwen": {
+        "enabled": true
+      },
+      "feishu": {
+        "enabled": false
       }
     }
   },
@@ -76,18 +87,19 @@
     "feishu": {
       "enabled": false,
       "connectionMode": "websocket",
-      "defaultAccount": "main",
+      "defaultAccount": "default",
       "dmPolicy": "allowlist",
       "allowFrom": [],
       "groupPolicy": "allowlist",
       "groupAllowFrom": [],
       "groupSenderAllowFrom": [],
       "requireMention": true,
+      "groupSessionScope": "group_sender",
       "dynamicAgentCreation": {
         "enabled": false
       },
       "accounts": {
-        "main": {
+        "default": {
           "appId": "${FEISHU_APP_ID}",
           "appSecret": "${FEISHU_APP_SECRET}",
           "domain": "feishu"

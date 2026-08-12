@@ -34,19 +34,23 @@ def main() -> None:
         "STAYSCAPE_AGENT_TOOL_TOKEN": env("STAYSCAPE_AGENT_TOOL_TOKEN"),
         "STAYSCAPE_API_INTERNAL_URL": env("STAYSCAPE_API_INTERNAL_URL", "http://server:8000"),
         "STAYSCAPE_HOTEL_ID": env("STAYSCAPE_HOTEL_ID", "1"),
-        "FEISHU_OPERATOR_OPEN_ID": env("FEISHU_OPERATOR_OPEN_ID"),
-        "FEISHU_ACTOR_ROLE": env("FEISHU_ACTOR_ROLE", "HOTEL_OPERATOR"),
+        "OPENCLAW_PRIMARY_MODEL": env("OPENCLAW_PRIMARY_MODEL", "qwen/qwen3.5-plus"),
+        "OPENCLAW_RUNTIME_PLUGIN_ROOT": env("OPENCLAW_RUNTIME_PLUGIN_ROOT", "/opt/stayscape/runtime-plugins"),
         "FEISHU_APP_ID": env("FEISHU_APP_ID"),
         "FEISHU_APP_SECRET": env("FEISHU_APP_SECRET"),
     }
     config = json.loads(Template(TEMPLATE.read_text(encoding="utf-8")).substitute(substitutions))
-    feishu_enabled = bool(env("FEISHU_APP_ID") and env("FEISHU_APP_SECRET"))
+    feishu_enabled = (
+        env("FEISHU_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        and bool(env("FEISHU_APP_ID") and env("FEISHU_APP_SECRET"))
+    )
     feishu = config["channels"]["feishu"]
     feishu["enabled"] = feishu_enabled
     feishu["allowFrom"] = csv_values(env("FEISHU_DM_ALLOW_FROM"))
     feishu["groupAllowFrom"] = csv_values(env("FEISHU_GROUP_ALLOW_FROM"))
     feishu["groupSenderAllowFrom"] = csv_values(env("FEISHU_GROUP_SENDER_ALLOW_FROM"))
-    feishu["requireMention"] = env("FEISHU_REQUIRE_MENTION", "true").lower() == "true"
+    feishu["requireMention"] = env("FEISHU_REQUIRE_MENTION", "true").lower() in {"1", "true", "yes", "on"}
+    config["plugins"]["entries"]["feishu"]["enabled"] = feishu_enabled
     plugin_config = config["plugins"]["entries"]["stayscape-openclaw-plugin"]["config"]
     plugin_config["hotelId"] = int(env("STAYSCAPE_HOTEL_ID", "1"))
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)

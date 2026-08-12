@@ -67,4 +67,38 @@ jobs:
         env:
           OPENCLAW_GATEWAY_TOKEN: ci-gateway-token
           STAYSCAPE_AGENT_TOOL_TOKEN: ci-tool-token
+          QWEN_API_KEY: ci-qwen-key
         run: docker compose --profile live config
+
+  openclaw-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Render and inspect live config without secrets
+        env:
+          OPENCLAW_GATEWAY_TOKEN: ci-gateway-token
+          STAYSCAPE_AGENT_TOOL_TOKEN: ci-tool-token
+          OPENCLAW_PRIMARY_MODEL: qwen/qwen3.5-plus
+          FEISHU_ENABLED: "false"
+          FEISHU_APP_ID: ci-app
+          FEISHU_APP_SECRET: ci-secret
+          OPENCLAW_CONFIG_PATH: deploy/generated/ci-openclaw.json
+        run: |
+          python scripts/render_openclaw_config.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          config = json.loads(Path("deploy/generated/ci-openclaw.json").read_text())
+          assert config["agents"]["defaults"]["model"]["primary"] == "qwen/qwen3.5-plus"
+          assert config["channels"]["feishu"]["enabled"] is False
+          assert "qwen" in config["plugins"]["allow"]
+          assert "feishu" in config["plugins"]["allow"]
+          assert "senderId" not in json.dumps(config["plugins"]["entries"]["stayscape-openclaw-plugin"])
+          PY
+      - name: Verify Agent discovery contract helper
+        shell: bash
+        run: |
+          printf '%s\n' '{"agents":[{"id":"stayscape-main"}]}' | python scripts/verify_openclaw_agent.py

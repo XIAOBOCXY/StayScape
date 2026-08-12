@@ -19,17 +19,28 @@ class Settings(BaseSettings):
     mock_agent_mode: str = "normal"
     openclaw_base_url: str = ""
     openclaw_gateway_token: str = ""
-    openclaw_model: str = "openclaw/default"
+    # OpenResponses routes to the Agent target; OpenClaw itself selects the
+    # backend model from agents.defaults.model.primary.
+    openclaw_agent_target: str = "openclaw/default"
+    openclaw_primary_model: str = "qwen/qwen3.5-plus"
     openclaw_transport: str = "responses"
     openclaw_responses_path: str = "/v1/responses"
     openclaw_agent_id: str = "stayscape-main"
     openclaw_skill_version: str = "1.0.0"
     openclaw_skills_ready: bool = False
-    openclaw_runtime_version: str = "2026.6.6"
+    openclaw_runtime_version: str = "2026.6.9"
+    # This flag is set only after Gateway, Agent, provider, Skills, tools and
+    # a real /v1/responses smoke test all pass in live mode.
+    openclaw_live_ready: bool = False
     stayscape_agent_tool_token: str = ""
     feishu_enabled: bool = False
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
     feishu_dm_allow_from: str = ""
     feishu_group_allow_from: str = ""
+    feishu_group_sender_allow_from: str = ""
+    feishu_operator_allow_from: str = ""
+    feishu_support_allow_from: str = ""
     feishu_require_mention: bool = True
     poster_embed_remote_images: bool = False
     visitor_intent_hold_minutes: int = 30

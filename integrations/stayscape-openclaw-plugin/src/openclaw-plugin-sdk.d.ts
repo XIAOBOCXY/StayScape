@@ -1,5 +1,14 @@
 declare module "openclaw/plugin-sdk/tool-plugin" {
-  type ToolContext = { signal?: AbortSignal };
+  type ToolContext = {
+    signal?: AbortSignal;
+    agentId?: string;
+    sessionKey?: string;
+    nativeChannelId?: string;
+    messageChannel?: string;
+    requesterSenderId?: string;
+    deliveryContext?: Record<string, unknown>;
+    toolBindings?: Readonly<Record<string, unknown>>;
+  };
   type ToolDefinition = {
     name: string;
     label?: string;

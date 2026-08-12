@@ -9,11 +9,9 @@
     "properties": {
       "baseUrl": { "type": "string" },
       "token": { "type": "string" },
-      "hotelId": { "type": "integer", "minimum": 1 },
-      "senderId": { "type": "string" },
-      "actorRole": { "type": "string", "enum": ["HOTEL_OPERATOR", "HOTEL_SUPPORT"] }
+      "hotelId": { "type": "integer", "minimum": 1 }
     },
-    "required": ["baseUrl", "token", "hotelId", "senderId", "actorRole"]
+    "required": ["baseUrl", "token", "hotelId"]
   },
   "activation": { "onStartup": true },
   "contracts": {

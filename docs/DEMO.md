@@ -17,7 +17,7 @@ Copy-Item .env.example .env
 npm.cmd --prefix apps/web run dev
 ```
 
-打开 `http://localhost:5173`。Docker Demo 直接使用 `docker compose --profile demo up -d --build`。
+打开 `http://localhost:5173`。Docker Demo 直接使用 `bash scripts/deploy.sh demo`；该模式不启动 OpenClaw，使用确定性 Mock Agent。
 
 ## 2. 主链路：临期库存生成产品
 

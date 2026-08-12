@@ -478,17 +478,20 @@ def agent_diagnostics(db: Session = Depends(get_db), user: User = Depends(get_ho
         "error": "OpenClaw Gateway not configured" if is_remote else "Demo mode uses Mock Agent",
     }
     if configured:
-        agent = OpenClawAgent(settings.openclaw_base_url, settings.openclaw_gateway_token, settings.openclaw_model, settings.agent_timeout_seconds, transport=settings.openclaw_transport, responses_path=settings.openclaw_responses_path, agent_id=settings.openclaw_agent_id, skill_version=settings.openclaw_skill_version)
+        agent = OpenClawAgent(settings.openclaw_base_url, settings.openclaw_gateway_token, settings.openclaw_agent_target, settings.agent_timeout_seconds, transport=settings.openclaw_transport, responses_path=settings.openclaw_responses_path, agent_id=settings.openclaw_agent_id, skill_version=settings.openclaw_skill_version, primary_model=settings.openclaw_primary_model)
         gateway = agent.diagnostics()
     provider = "OPENCLAW" if is_remote else "MOCK"
-    skill_status = "READY" if is_remote and settings.openclaw_skills_ready else ("NOT_READY" if is_remote else "DEMO")
+    skill_status = "READY" if is_remote and settings.openclaw_live_ready else ("NOT_READY" if is_remote else "DEMO")
     return {
         "provider": provider,
         "mode": settings.mode,
         "transport": settings.openclaw_transport if is_remote else "mock",
         "gateway": gateway,
         "agent_id": settings.openclaw_agent_id if is_remote else "",
-        "model": settings.openclaw_model if is_remote else "",
+        "agent_target": settings.openclaw_agent_target if is_remote else "",
+        "primary_model": settings.openclaw_primary_model if is_remote else "",
+        "live_ready": bool(is_remote and settings.openclaw_live_ready),
+        "skills_discovered": bool(is_remote and settings.openclaw_skills_ready),
         "skill_status": skill_status,
         "skills": [
             {"name": "stayscape-product-generator", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
