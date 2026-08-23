@@ -56,8 +56,12 @@ def main() -> None:
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     try:
-        OUTPUT.chmod(0o600)
-    except OSError:
+        # Docker bind mounts preserve host ownership.  The Gateway runs as the
+        # node user (GID 1000), so grant that group read-only access without
+        # making the token-bearing rendered config world-readable.
+        OUTPUT.chmod(0o640)
+        os.chown(OUTPUT, -1, int(env("OPENCLAW_CONFIG_GROUP_ID", "1000")))
+    except (OSError, ValueError):
         pass
     print(f"Rendered OpenClaw config: {OUTPUT}")
     print(f"Feishu channel: {'enabled' if feishu_enabled else 'disabled (credentials not supplied)'}")

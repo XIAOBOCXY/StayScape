@@ -57,3 +57,26 @@ def test_config_loads_official_runtime_plugins_and_no_static_sender():
     assert "qwen" in config["plugins"]["allow"]
     assert "feishu" in config["plugins"]["allow"]
     assert "senderId" not in json.dumps(config["plugins"]["entries"]["stayscape-openclaw-plugin"])
+
+
+def test_qwen_standard_provider_and_tool_boundary_are_explicit():
+    config = render()
+
+    assert config["auth"]["profiles"]["qwen:default"] == {
+        "provider": "qwen",
+        "mode": "api_key",
+    }
+
+    qwen = config["models"]["providers"]["qwen"]
+    assert qwen["baseUrl"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert qwen["api"] == "openai-completions"
+    assert any(model["id"] == "qwen3.5-plus" for model in qwen["models"])
+
+    tools = config["tools"]
+    assert tools["profile"] == "full"
+    assert set(tools["allow"]) == {
+        "stayscape_get_hotel_context",
+        "stayscape_list_available_products",
+        "stayscape_create_product_draft",
+    }
+    assert {"group:runtime", "group:fs", "group:ui", "group:nodes", "group:agents", "group:automation"} <= set(tools["deny"])

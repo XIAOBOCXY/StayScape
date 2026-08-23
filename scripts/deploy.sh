@@ -75,7 +75,14 @@ primary_model="$(env_value OPENCLAW_PRIMARY_MODEL)"
 set_env OPENCLAW_TRANSPORT responses
 set_env OPENCLAW_RESPONSES_PATH /v1/responses
 set_env OPENCLAW_RUNTIME_VERSION 2026.6.9
-set_env OPENCLAW_IMAGE ghcr.io/openclaw/openclaw:2026.6.9-slim
+openclaw_image="$(env_value OPENCLAW_IMAGE)"
+[[ -n "$openclaw_image" ]] || set_env OPENCLAW_IMAGE ghcr.io/openclaw/openclaw:2026.6.9-slim
+openclaw_install_method="$(env_value OPENCLAW_INSTALL_METHOD)"
+[[ -n "$openclaw_install_method" ]] || set_env OPENCLAW_INSTALL_METHOD image
+openclaw_config_group_id="$(env_value OPENCLAW_CONFIG_GROUP_ID)"
+[[ -n "$openclaw_config_group_id" ]] || set_env OPENCLAW_CONFIG_GROUP_ID 1000
+openclaw_config_group_id="$(env_value OPENCLAW_CONFIG_GROUP_ID)"
+[[ "$openclaw_config_group_id" =~ ^[0-9]+$ ]] || fail "OPENCLAW_CONFIG_GROUP_ID must be a numeric GID"
 
 secret_key="$(env_value SECRET_KEY)"
 [[ -n "$secret_key" && "$secret_key" != change-me* ]] || set_env SECRET_KEY "$(random_hex)"
@@ -117,9 +124,16 @@ fi
 log "Building and starting StayScape in $MODE mode"
 if [[ "$MODE" == "live" ]]; then
   docker compose --env-file .env --profile live up -d --build
+  # The entrypoint copies the rendered secret-bearing config at container start,
+  # so force a single Gateway recreation whenever Live configuration is rendered.
+  docker compose --env-file .env --profile live up -d --force-recreate --no-deps openclaw
 else
   docker compose --env-file .env up -d --build
 fi
+
+# Nginx otherwise keeps a stale Docker service IP after a backend recreation.
+docker compose --env-file .env exec -T nginx nginx -t >/dev/null
+docker compose --env-file .env exec -T nginx nginx -s reload >/dev/null
 
 port="$(env_value STAYSCAPE_HTTP_PORT)"
 port="${port:-80}"

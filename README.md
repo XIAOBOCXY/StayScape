@@ -65,8 +65,17 @@ bash scripts/deploy.sh live
 
 所有密钥只填写在**项目根目录的本机 `.env` 文件**中：
 
-- 部署到 ECS 后：`/opt/StayScape/.env`
+- 下载 ZIP 后：先解压，再进入同时包含 `README.md` 和 `.env.example` 的解压目录；API 填在该目录的 `.env`
 - 本地克隆后：`<项目根目录>/.env`
+- 部署到 ECS 后：`/opt/StayScape/.env`
+
+例如，下载 ZIP 后请在解压目录执行；不要在 GitHub 网页、前端页面或任何源码文件中填写 Key：
+
+```bash
+cd <解压后的 StayScape 目录>
+cp .env.example .env
+nano .env
+```
 
 先从模板创建并限制权限：
 
@@ -77,6 +86,8 @@ chmod 600 .env
 nano .env
 ```
 
+当前仓库固定的 OpenClaw `2026.6.9` 已实测 `qwen/qwen3.5-plus`；不要在此固定版本中填写 `qwen/qwen3.7-plus`。
+
 使用 Qwen + OpenClaw 的 Live 模式时，填写以下配置；`QWEN_API_KEY` 替换为你自己在阿里云百炼创建的真实 Standard API Key：
 
 ```env
@@ -84,7 +95,7 @@ MODE=live
 AGENT_PROVIDER=openclaw
 OPENCLAW_BASE_URL=http://openclaw:18789
 OPENCLAW_AGENT_TARGET=openclaw/default
-OPENCLAW_PRIMARY_MODEL=qwen/qwen3.7-plus
+OPENCLAW_PRIMARY_MODEL=qwen/qwen3.5-plus
 QWEN_API_KEY=<你的百炼 Standard API Key>
 FEISHU_ENABLED=false
 ```

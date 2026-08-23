@@ -97,6 +97,8 @@ services:
       dockerfile: deploy/openclaw/Dockerfile
       args:
         OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.6.9-slim}
+        OPENCLAW_RUNTIME_VERSION: ${OPENCLAW_RUNTIME_VERSION:-2026.6.9}
+        OPENCLAW_INSTALL_METHOD: ${OPENCLAW_INSTALL_METHOD:-image}
         OPENCLAW_QWEN_PROVIDER_VERSION: ${OPENCLAW_QWEN_PROVIDER_VERSION:-2026.6.9}
         OPENCLAW_FEISHU_VERSION: ${OPENCLAW_FEISHU_VERSION:-2026.6.9}
     restart: unless-stopped

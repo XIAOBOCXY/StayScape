@@ -1,12 +1,28 @@
 ARG OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:2026.6.9-slim
+ARG OPENCLAW_RUNTIME_VERSION=2026.6.9
+ARG OPENCLAW_INSTALL_METHOD=image
 ARG OPENCLAW_QWEN_PROVIDER_VERSION=2026.6.9
 ARG OPENCLAW_FEISHU_VERSION=2026.6.9
 FROM ${OPENCLAW_IMAGE}
 
+ARG OPENCLAW_RUNTIME_VERSION=2026.6.9
+ARG OPENCLAW_INSTALL_METHOD=image
 ARG OPENCLAW_QWEN_PROVIDER_VERSION=2026.6.9
 ARG OPENCLAW_FEISHU_VERSION=2026.6.9
 
 USER root
+
+# The normal production path uses the official OpenClaw image.  On hosts that
+# cannot reach GHCR/Docker Hub package images, the official npm package can
+# bootstrap the same pinned Gateway runtime on a Node 22 base image.
+RUN case "$OPENCLAW_INSTALL_METHOD" in \
+      image) ;; \
+      npm) node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 19)) { console.error("OpenClaw requires Node >= 22.19"); process.exit(1); }' \
+        && npm install -g --omit=dev --no-audit --no-fund "openclaw@${OPENCLAW_RUNTIME_VERSION}" \
+        && rm -rf /app \
+        && ln -s /usr/local/lib/node_modules/openclaw /app ;; \
+      *) echo "OPENCLAW_INSTALL_METHOD must be image or npm" >&2; exit 2 ;; \
+    esac
 WORKDIR /opt/stayscape/openclaw-plugin
 
 # The base image is the official OpenClaw image.  The plugin is installed as a
