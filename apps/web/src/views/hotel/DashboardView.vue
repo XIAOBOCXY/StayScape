@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { hotelApi } from '../../api'
@@ -8,17 +8,17 @@ import { useAuthStore } from '../../stores/auth'
 import MetricCard from '../../components/MetricCard.vue'
 import ProductCard from '../../components/ProductCard.vue'
 import StatusTag from '../../components/StatusTag.vue'
-import type { Dashboard, PartnerResource, TravelProduct } from '../../types'
+import type { Dashboard, TravelProduct } from '../../types'
 
 const loading = ref(true)
 const error = ref('')
 const dashboard = ref<Dashboard | null>(null)
 const products = ref<TravelProduct[]>([])
-const resources = ref<PartnerResource[]>([])
 const chartEl = ref<HTMLElement | null>(null)
 let chart: echarts.ECharts | undefined
 let socket: WebSocket | undefined
 const auth = useAuthStore()
+const offSaleProductCount = computed(() => Math.max(0, Number(dashboard.value?.product_count || 0) - Number(dashboard.value?.on_sale_product_count || 0)))
 
 function renderChart() {
   if (!chartEl.value || !dashboard.value) return
@@ -26,23 +26,20 @@ function renderChart() {
   chart = echarts.init(chartEl.value)
   chart.setOption({
     grid: { left: 24, right: 20, top: 20, bottom: 25, containLabel: true },
-    xAxis: { type: 'category', data: ['临期房量', '可组包资源', '在售产品', '预约意向'], axisLine: { lineStyle: { color: '#dfe9e4' } }, axisLabel: { color: '#71817c' } },
+    xAxis: { type: 'category', data: ['临期房量', '在售产品', '暂未在售', '预约意向'], axisLine: { lineStyle: { color: '#dfe9e4' } }, axisLabel: { color: '#71817c' } },
     yAxis: { type: 'value', splitLine: { lineStyle: { color: '#edf2ef' } }, axisLabel: { color: '#9aa9a4' } },
-    series: [{ type: 'bar', barWidth: 30, data: [dashboard.value.available_room_units, dashboard.value.package_enabled_resource_count, dashboard.value.on_sale_product_count, dashboard.value.visitor_intent_count], itemStyle: { color: '#0f766e', borderRadius: [6, 6, 0, 0] } }]
+    series: [{ type: 'bar', barWidth: 30, data: [dashboard.value.available_room_units, dashboard.value.on_sale_product_count, offSaleProductCount.value, dashboard.value.visitor_intent_count], itemStyle: { color: '#566d66', borderRadius: [6, 6, 0, 0] } }]
   })
 }
 
 function resizeChart() { chart?.resize() }
-function openResources(resourceId?: number) { window.location.href = resourceId ? `/hotel/resources?focus=${resourceId}` : '/hotel/resources' }
-
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [summary, productResponse, resourceResponse] = await Promise.all([hotelApi.dashboard(), hotelApi.products(), hotelApi.resources()])
+    const [summary, productResponse] = await Promise.all([hotelApi.dashboard(), hotelApi.products()])
     dashboard.value = summary.data
     products.value = productResponse.data.items
-    resources.value = resourceResponse.data.filter(item => item.package_enabled && item.status === 'AVAILABLE')
     await nextTick()
     renderChart()
   } catch (e) {
@@ -74,21 +71,10 @@ onBeforeUnmount(() => { socket?.close(); chart?.dispose(); window.removeEventLis
   <template v-else-if="dashboard">
     <div class="metric-grid">
       <div class="metric-link" @click="$router.push('/hotel/rooms')"><MetricCard label="临期客房" :value="dashboard.available_room_units" hint="明日待售房量 · 点击查看" accent="#0f766e" /></div>
-      <div class="metric-link" @click="openResources()"><MetricCard label="可组包资源" :value="dashboard.package_enabled_resource_count" :hint="`合作资源 ${dashboard.partner_resource_count} 项 · 点击查看`" accent="#c9963e" /></div>
       <div class="metric-link" @click="$router.push('/hotel/products')"><MetricCard label="在售产品" :value="dashboard.on_sale_product_count" :hint="`共 ${dashboard.product_count} 个产品 · 点击查看`" accent="#498c70" /></div>
-      <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="在售毛利" :value="`¥${dashboard.gross_profit_on_sale}`" hint="按当前产品库存估算 · 点击查看预约" accent="#7c6ab0" /></div>
+      <div class="metric-link" @click="$router.push('/hotel/products')"><MetricCard label="暂未在售" :value="offSaleProductCount" hint="草稿、暂停或库存紧张 · 点击查看" accent="#b28350" /></div>
+      <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="预约意向" :value="dashboard.visitor_intent_count" hint="点击查看游客需求" accent="#7c6ab0" /></div>
     </div>
-
-    <div class="section-title"><h2>可组包资源</h2><span>点击具体资源查看内容、日期、场次与组包许可</span></div>
-    <div v-if="resources.length" class="resource-snapshot-grid">
-      <button v-for="resource in resources" :key="resource.id" class="resource-snapshot" @click="openResources(resource.id)">
-        <div class="product-card__top"><strong>{{ resource.resource_name }}</strong><span :class="resource.remaining_capacity <= 5 ? 'warning-text' : 'muted'">余 {{ resource.remaining_capacity }}</span></div>
-        <p class="muted">{{ resource.available_date }} · {{ resource.start_time?.slice(0, 5) || '--' }} - {{ resource.end_time?.slice(0, 5) || '--' }}</p>
-        <div class="product-card__resources"><span>{{ resource.merchant_name }}</span><span>¥{{ resource.settlement_price }}</span></div>
-        <small class="resource-snapshot__hint">VIEW RESOURCE DETAIL →</small>
-      </button>
-    </div>
-    <div v-else class="panel empty-state">暂无可组包资源，请先在资源池打开许可。</div>
 
     <div class="section-title"><h2>当前产品池</h2><span>{{ dashboard.target_date }} · 点击产品查看完整内容</span></div>
     <div v-if="products.length" class="product-grid"><ProductCard v-for="product in products" :key="product.id" :product="product" /></div>

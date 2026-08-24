@@ -37,6 +37,7 @@ def test_openclaw_uses_only_responses_with_gateway_auth_and_agent_route(monkeypa
     assert calls[0][0] == "http://gateway.local/v1/responses"
     body = calls[0][1]["json"]
     assert body["model"] == "openclaw/default"
+    assert [item["type"] for item in body["input"]] == ["message", "message"]
     assert body["metadata"]["skill_name"] == "stayscape-visitor-matcher"
     assert body["metadata"]["trace_id"] == "trace_test"
     assert "stayscape-visitor-matcher" in body["input"][0]["content"][0]["text"]
@@ -59,7 +60,7 @@ def test_openclaw_agent_target_is_sent_as_route_target_not_primary_model():
     agent = OpenClawAgent("http://gateway.local", "secret", "openclaw/default", 3)
     body = agent._responses_body(skill_name="stayscape-product-generator", payload={}, trace_id="trace-test")
     assert body["model"] == "openclaw/default"
-    assert "qwen/qwen3.5-plus" not in json.dumps(body)
+    assert "qwen/qwen3.7-plus" not in json.dumps(body)
 
 
 def test_request_context_session_keys_are_isolated():

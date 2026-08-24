@@ -70,8 +70,7 @@ set_env STAYSCAPE_API_INTERNAL_URL http://server:8000
 set_env STAYSCAPE_HOTEL_ID "${STAYSCAPE_HOTEL_ID:-1}"
 set_env OPENCLAW_AGENT_ID stayscape-main
 primary_model="$(env_value OPENCLAW_PRIMARY_MODEL)"
-[[ -n "$primary_model" ]] || set_env OPENCLAW_PRIMARY_MODEL qwen/qwen3.5-plus
-primary_model="$(env_value OPENCLAW_PRIMARY_MODEL)"
+[[ -n "$primary_model" ]] || fail "OPENCLAW_PRIMARY_MODEL must be set in .env before a live deployment"
 set_env OPENCLAW_TRANSPORT responses
 set_env OPENCLAW_RESPONSES_PATH /v1/responses
 set_env OPENCLAW_RUNTIME_VERSION 2026.6.9
@@ -183,21 +182,39 @@ if [[ "$MODE" == "live" ]]; then
   FEISHU_ENABLED="$(env_value FEISHU_ENABLED)" python3 scripts/verify_openclaw_plugins.py <"$plugin_json"
   log "Verifying configured Qwen model"
   model_output="$(docker compose --env-file .env --profile live exec -T openclaw openclaw models list --provider qwen --all 2>&1)" || fail "OpenClaw Qwen provider is not available. Inspect: docker compose --profile live logs openclaw"
-  printf '%s\n' "$model_output" | grep -Fq "${primary_model:-qwen/qwen3.5-plus}" || fail "OpenClaw does not report the configured model ${primary_model:-qwen/qwen3.5-plus}"
+  printf '%s\n' "$model_output" | grep -Fq "${primary_model}" || fail "OpenClaw does not report the configured model ${primary_model}"
   log "Running one real OpenResponses smoke test through stayscape-main"
   docker compose --env-file .env --profile live exec -T openclaw node --input-type=module -e '
     const response = await fetch("http://127.0.0.1:18789/v1/responses", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.OPENCLAW_GATEWAY_TOKEN}`,
+        "Authorization": "Bearer " + process.env.OPENCLAW_GATEWAY_TOKEN,
         "Content-Type": "application/json",
         "Accept": "application/json",
         "x-openclaw-agent-id": "stayscape-main"
       },
       body: JSON.stringify({ model: "openclaw/default", input: "Reply with the single word READY.", store: false })
     });
-    if (!response.ok) { console.error(`OpenResponses smoke test failed with HTTP ${response.status}`); process.exit(1); }
-    console.log("OpenResponses smoke test passed");
+    const raw = await response.text();
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      console.error("OpenResponses smoke test returned non-JSON HTTP " + response.status);
+      process.exit(1);
+    }
+    const output = Array.isArray(payload.output)
+      ? payload.output.flatMap((item) => Array.isArray(item?.content) ? item.content : [])
+          .map((part) => typeof part?.text === "string" ? part.text : "")
+          .filter(Boolean)
+          .join("\n")
+          .trim()
+      : "";
+    if (!response.ok || payload.status !== "completed" || output.toUpperCase() !== "READY") {
+      console.error("OpenResponses smoke test failed: http=" + response.status + ", status=" + (payload.status || "missing") + ", output=" + JSON.stringify(output.slice(0, 160)));
+      process.exit(1);
+    }
+    console.log("OpenResponses smoke test passed with validated READY output");
   ' || fail "OpenClaw Gateway or Qwen model smoke test failed"
   set_env OPENCLAW_SKILLS_READY true
   set_env OPENCLAW_LIVE_READY true

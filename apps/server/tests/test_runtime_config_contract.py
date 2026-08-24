@@ -70,7 +70,8 @@ def test_qwen_standard_provider_and_tool_boundary_are_explicit():
     qwen = config["models"]["providers"]["qwen"]
     assert qwen["baseUrl"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert qwen["api"] == "openai-completions"
-    assert any(model["id"] == "qwen3.5-plus" for model in qwen["models"])
+    assert any(model["id"] == "qwen3.5-plus" and model["reasoning"] is True for model in qwen["models"])
+    assert any(model["id"] == "qwen3.7-plus" and model["reasoning"] is True for model in qwen["models"])
 
     tools = config["tools"]
     assert tools["profile"] == "full"

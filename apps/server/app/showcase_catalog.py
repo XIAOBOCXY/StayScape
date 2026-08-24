@@ -118,8 +118,7 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
         if user.merchant and user.merchant.hotel_id == hotel_id
     }
 
-    db.add_all(
-        [
+    room_rows = [
             _room(hotel_id, target_date, room_type="湖景大床房", count=2, normal="699", minimum="559", cost="280", max_guests=2, features="落地窗、湖景、纪念日欢迎卡", crowds="COUPLE", tags="湖景,旅拍,纪念日"),
             _room(hotel_id, target_date, room_type="城市景观房", count=8, normal="539", minimum="429", cost="230", max_guests=2, features="城市天际线、办公桌、咖啡角", crowds="COUPLE,SOLO,LOCAL_WEEKEND", tags="城市,咖啡,独处"),
             _room(hotel_id, target_date, room_type="家庭套房", count=2, normal="899", minimum="699", cost="350", max_guests=5, features="双卧布局、儿童阅读角、家庭客厅", crowds="FAMILY", tags="家庭,儿童,大空间"),
@@ -127,9 +126,17 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
             _room(hotel_id, target_date, room_type="影音娱乐房", count=4, normal="639", minimum="499", cost="250", max_guests=4, features="投影、影音会员、桌游收纳", crowds="COUPLE,FRIENDS", tags="电影,桌游,朋友出行"),
             _room(hotel_id, target_date, room_type="亲子联通房", count=2, normal="829", minimum="629", cost="320", max_guests=4, features="相邻双空间、儿童阅读角、家庭储物", crowds="FAMILY", tags="家庭,儿童,联通房"),
         ]
+    existing_room_types = set(
+        db.scalars(
+            select(RoomInventory.room_type).where(
+                RoomInventory.hotel_id == hotel_id,
+                RoomInventory.available_date == target_date,
+            )
+        )
     )
-    db.add_all(
-        [
+    db.add_all([row for row in room_rows if row.room_type not in existing_room_types])
+
+    service_rows = [
             _service(hotel_id, target_date, name="欢迎龙井茶", service_type="WELCOME_TEA", quantity=12, cost="5", reference="28", crowds="FAMILY,COUPLE,SOLO", start=time(14, 0), end=time(18, 0)),
             _service(hotel_id, target_date, name="双人欢迎饮品", service_type="WELCOME_DRINK", quantity=8, cost="8", reference="36", crowds="COUPLE,FRIENDS", start=time(15, 0), end=time(22, 0)),
             _service(hotel_id, target_date, name="儿童洗漱包", service_type="KIDS_AMENITY", quantity=6, cost="4", reference="15", crowds="FAMILY", start=time(15, 0), end=time(23, 0)),
@@ -151,14 +158,36 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
             _service(hotel_id, target_date, name="客房茶席", service_type="ROOM_TEA_SETUP", quantity=3, cost="25", reference="88", crowds="COUPLE,SOLO,LOCAL_WEEKEND", start=time(16, 0), end=time(18, 0)),
             _service(hotel_id, target_date, name="运动能量包", service_type="SPORT_SNACK", quantity=6, cost="8", reference="30", crowds="FRIENDS,COUPLE,LOCAL_WEEKEND"),
         ]
+    existing_services = set(
+        db.execute(
+            select(HotelService.service_name, HotelService.service_type).where(
+                HotelService.hotel_id == hotel_id,
+                HotelService.available_date == target_date,
+            )
+        ).all()
+    )
+    db.add_all(
+        [
+            row
+            for row in service_rows
+            if (row.service_name, row.service_type) not in existing_services
+        ]
     )
     db.flush()
 
     resource_rows = [
+        _resource(merchants["merchant_craft"].id, target_date, name="良渚文明探索体验", category="CULTURE", description="在良渚文化灵感中完成一段适合亲子和朋友的文明探索。", start=time(10, 0), end=time(11, 30), capacity=18, settlement="72", market="138", crowds="FAMILY,FRIENDS,SOLO", minimum_age=6, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="良渚文化片区"),
+        _resource(merchants["merchant_craft"].id, target_date, name="城市博物馆主题导览", category="CULTURE", description="从一件展品和一段城市故事开始，留出慢慢看的午后。", start=time(14, 0), end=time(15, 30), capacity=16, settlement="65", market="128", crowds="FAMILY,COUPLE,SOLO,LOCAL_WEEKEND", minimum_age=6, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="杭州城市文化场馆"),
+        _resource(merchants["merchant_craft"].id, target_date, name="亲子科学探索实验室", category="KIDS", description="用轻量实验和互动任务，把好奇心装进亲子周末。", start=time(10, 30), end=time(12, 0), capacity=20, settlement="76", market="148", crowds="FAMILY", minimum_age=5, maximum_age=14, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="钱江新城科普场馆"),
+        _resource(merchants["merchant_performance"].id, target_date, name="南山路看展漫游", category="CITY_WALK", description="在展览、街景和咖啡间慢慢走，适合不赶行程的下午。", start=time(13, 30), end=time(15, 30), capacity=14, settlement="58", market="118", crowds="COUPLE,SOLO,LOCAL_WEEKEND", minimum_age=12, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="南山路艺术街区"),
+        _resource(merchants["merchant_nature"].id, target_date, name="湘湖轻户外探索", category="NATURE", description="在湖畔完成轻量自然观察和散步，不追求打卡速度。", start=time(9, 30), end=time(11, 30), capacity=16, settlement="68", market="128", crowds="FAMILY,COUPLE,FRIENDS,SOLO", minimum_age=6, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="湘湖片区"),
+        _resource(merchants["merchant_sport"].id, target_date, name="钱塘江沿线骑行", category="SPORT", description="沿江骑一段舒服的路，把城市天际线留在傍晚。", start=time(16, 0), end=time(18, 0), capacity=12, settlement="78", market="148", crowds="COUPLE,FRIENDS,SOLO,LOCAL_WEEKEND", minimum_age=12, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="钱塘江城市绿道"),
+        _resource(merchants["merchant_food"].id, target_date, name="湖滨夜市美食漫游", category="FOOD", description="把小吃、散步和夜色安排在一起，适合朋友或情侣慢慢逛。", start=time(18, 30), end=time(20, 30), capacity=18, settlement="82", market="158", crowds="COUPLE,FRIENDS,LOCAL_WEEKEND", minimum_age=12, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="湖滨步行街"),
+        _resource(merchants["merchant_photo"].id, target_date, name="西湖晨间城市漫步", category="CITY_WALK", description="趁城市刚醒来时走一段湖边，把杭州留得更安静一些。", start=time(8, 0), end=time(9, 30), capacity=14, settlement="48", market="98", crowds="COUPLE,SOLO,LOCAL_WEEKEND", minimum_age=8, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="西湖湖畔"),
         _resource(merchants["merchant_craft"].id, target_date, name="丝绸手作体验", category="CULTURE", description="在轻量工作坊完成一件杭州丝绸小物，适合第一次来杭州的家庭与情侣。", start=time(13, 0), end=time(14, 30), capacity=16, settlement="55", market="108", crowds="FAMILY,COUPLE", minimum_age=5, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="拱宸桥丝绸工坊"),
         _resource(merchants["merchant_tea"].id, target_date, name="江南香囊制作", category="CULTURE", description="把江南香气装进一只可带走的香囊，适合亲子与文化兴趣游客。", start=time(14, 30), end=time(16, 0), capacity=16, settlement="58", market="108", crowds="FAMILY,COUPLE,SOLO", minimum_age=5, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="西湖茶事体验馆"),
         _resource(merchants["merchant_photo"].id, target_date, name="城市夜景旅拍", category="PHOTO", description="摄影师带领游客记录运河灯影与城市夜色，交付一组轻旅拍照片。", start=time(19, 0), end=time(20, 30), capacity=12, settlement="110", market="198", crowds="COUPLE,FRIENDS", minimum_age=12, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="京杭大运河灯影段"),
-        _resource(merchants["merchant_themepark"].id, target_date, name="杭州乐园亲子欢乐体验", category="THEME_PARK", description="以家庭友好的游乐设施和互动任务组成的一日体验，属于比赛 Demo 合作名额。", start=time(10, 0), end=time(17, 0), capacity=30, settlement="150", market="238", crowds="FAMILY", minimum_age=3, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="杭州乐园 Demo 合作区", source_type="DEMO"),
+        _resource(merchants["merchant_themepark"].id, target_date, name="杭州乐园亲子欢乐体验", category="THEME_PARK", description="把家庭友好的游乐设施和互动任务安排进一天的杭州周末。", start=time(10, 0), end=time(17, 0), capacity=30, settlement="150", market="238", crowds="FAMILY", minimum_age=3, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="杭州乐园 Demo 合作区", source_type="DEMO"),
         _resource(merchants["merchant_themepark"].id, target_date, name="主题乐园家庭日票", category="THEME_PARK", description="家庭日票与酒店服务组合，适合晴天的亲子一日游。", start=time(10, 0), end=time(18, 0), capacity=24, settlement="135", market="218", crowds="FAMILY", minimum_age=3, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="杭州乐园 Demo 合作区", source_type="DEMO"),
         _resource(merchants["merchant_themepark"].id, target_date, name="夜场乐园体验", category="THEME_PARK", description="日落后进入乐园，适合年轻情侣与朋友把夜晚过得更有参与感。", start=time(18, 30), end=time(21, 30), capacity=20, settlement="128", market="208", crowds="COUPLE,FRIENDS", minimum_age=12, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="杭州乐园夜场 Demo 区", source_type="DEMO"),
         _resource(merchants["merchant_themepark"].id, target_date, name="室内儿童乐园", category="KIDS", description="雨天也能玩的室内儿童乐园，设置分龄游戏区与亲子互动时段。", start=time(15, 0), end=time(17, 0), capacity=24, settlement="90", market="168", crowds="FAMILY", minimum_age=3, maximum_age=12, indoor=True, weather="RAIN,CLOUDY", address="城西室内儿童乐园"),
@@ -176,12 +205,24 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
         _resource(merchants["merchant_nightlife"].id, target_date, name="西湖夜景漫游", category="NIGHTLIFE", description="以短距离湖畔步行为主的夜景路线，适合情侣与朋友。", start=time(18, 0), end=time(19, 30), capacity=20, settlement="45", market="98", crowds="COUPLE,FRIENDS", minimum_age=12, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="西湖音乐喷泉附近"),
         _resource(merchants["merchant_nightlife"].id, target_date, name="音乐现场小剧场", category="ENTERTAINMENT", description="小型音乐现场与城市夜宵路线组合，适合朋友和年轻情侣。", start=time(20, 0), end=time(22, 0), capacity=18, settlement="118", market="218", crowds="COUPLE,FRIENDS,LOCAL_WEEKEND", minimum_age=18, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="湖滨小剧场"),
         _resource(merchants["merchant_nightlife"].id, target_date, name="双人陶艺体验", category="ENTERTAINMENT", description="在夜间工作室做一对属于自己的杯子，适合情侣和朋友。", start=time(16, 0), end=time(18, 0), capacity=12, settlement="85", market="158", crowds="COUPLE,FRIENDS", minimum_age=12, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="南山陶艺空间"),
-        _resource(merchants["merchant_performance"].id, target_date, name="沉浸式城市演出", category="PERFORMANCE", description="用一场沉浸式演出认识杭州的城市故事，含固定场次和实时余量。", start=time(19, 0), end=time(20, 30), capacity=20, settlement="130", market="238", crowds="COUPLE,FRIENDS,LOCAL_WEEKEND", minimum_age=12, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="城市演艺空间"),
+        _resource(merchants["merchant_performance"].id, target_date, name="沉浸式城市演出", category="PERFORMANCE", description="跟着演员和空间线索慢慢进入杭州的城市故事。", start=time(19, 0), end=time(20, 30), capacity=20, settlement="130", market="238", crowds="COUPLE,FRIENDS,LOCAL_WEEKEND", minimum_age=12, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="城市演艺空间"),
         _resource(merchants["merchant_performance"].id, target_date, name="儿童剧周末场", category="PERFORMANCE", description="面向家庭的儿童剧场次，适合亲子完成一晚轻松的文化娱乐。", start=time(14, 0), end=time(15, 30), capacity=18, settlement="80", market="148", crowds="FAMILY", minimum_age=4, maximum_age=14, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="杭州儿童剧场"),
         _resource(merchants["merchant_performance"].id, target_date, name="宋韵演出", category="PERFORMANCE", description="以宋韵音乐与舞台叙事串起杭州夜晚，适合情侣和本地周末客。", start=time(19, 0), end=time(20, 0), capacity=16, settlement="98", market="188", crowds="COUPLE,LOCAL_WEEKEND", minimum_age=12, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="城市演艺空间"),
         _resource(merchants["merchant_reference"].id, target_date, name="杭州乐园公开信息", category="THEME_PARK", description="公开资料参考，不代表可售合作名额，不能进入正式套餐。", start=time(10, 0), end=time(10, 30), capacity=0, settlement="0", market="0", crowds="ALL", minimum_age=None, maximum_age=None, indoor=False, weather="SUNNY,CLOUDY", address="公开信息页", source_type="PUBLIC_REFERENCE", package_enabled=False),
         _resource(merchants["merchant_reference"].id, target_date, name="西湖博物馆公开导览", category="CITY_WALK", description="游客自由探索参考，不参与酒店套餐库存和收入计算。", start=time(10, 0), end=time(11, 0), capacity=0, settlement="0", market="0", crowds="FAMILY,COUPLE,SOLO", minimum_age=None, maximum_age=None, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="西湖博物馆", source_type="PUBLIC_REFERENCE", package_enabled=False),
     ]
-    db.add_all(resource_rows)
+    existing_resource_names = set(
+        db.scalars(
+            select(PartnerResource.resource_name)
+            .join(PartnerResource.merchant)
+            .where(
+                Merchant.hotel_id == hotel_id,
+                PartnerResource.available_date == target_date,
+            )
+        )
+    )
+    db.add_all(
+        [row for row in resource_rows if row.resource_name not in existing_resource_names]
+    )
     db.flush()
     return {"rooms": 9, "services": 24, "merchants": len(merchants), "partner_resources": 30}

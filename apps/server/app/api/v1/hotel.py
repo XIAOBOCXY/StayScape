@@ -14,10 +14,11 @@ from ...models import Hotel, HotelService, Merchant, PartnerResource, ProductRes
 from ...repositories.product_repository import get_product, list_products
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
-from ...schemas.products import AdjustmentRead, GenerateProductRequest, ProductDetailResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
+from ...schemas.products import AdjustmentRead, GenerateProductRequest, MarketingRegenerationRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
 from ...schemas.visitor import VisitorIntentStatusUpdate
 from ...schemas.resources import MerchantRead, PackageToggleRequest, PartnerResourceRead, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
+from ...services.product_draft_parser import interpret_product_draft
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
 from ...agent.openclaw import OpenClawAgent
@@ -259,6 +260,14 @@ def generate_product(request: GenerateProductRequest, db: Session = Depends(get_
     }
 
 
+@router.post("/products/interpret", response_model=ProductDraftInterpretResponse)
+def interpret_product_request(request: ProductDraftInterpretRequest, user: User = Depends(get_hotel_user)):
+    # Authentication keeps the operator's free-text brief within their own
+    # workspace.  This parser has no model call and never writes inventory.
+    _ = user
+    return interpret_product_draft(request.natural_language)
+
+
 @router.get("/products/{product_id}", response_model=ProductDetailResponse)
 def product_detail(product_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     product = get_product(db, product_id)
@@ -319,12 +328,18 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
 
 
 @router.post("/products/{product_id}/marketing-assets", response_model=ProductRead)
-def regenerate_marketing_assets(product_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+def regenerate_marketing_assets(
+    product_id: int,
+    request: MarketingRegenerationRequest | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
     hotel_id = hotel_id_for(db, user)
     product = get_product(db, product_id)
     if not product or product.hotel_id != hotel_id or product.status == "DELETED":
         raise AppError("NOT_FOUND", "产品不存在", status_code=404)
-    ProductService(db, hotel_id).regenerate_marketing(product)
+    options = request or MarketingRegenerationRequest()
+    ProductService(db, hotel_id).regenerate_marketing(product, style=options.style, generate_image=options.generate_image, image_model=options.image_model)
     db.commit()
     return product_to_dict(product)
 

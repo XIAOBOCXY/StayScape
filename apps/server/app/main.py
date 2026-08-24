@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -31,6 +33,8 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     application = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan, docs_url="/docs", redoc_url="/redoc")
+    Path(settings.generated_media_dir).mkdir(parents=True, exist_ok=True)
+    application.mount(settings.generated_media_url_path, StaticFiles(directory=settings.generated_media_dir), name="generated-media")
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
     @application.exception_handler(AppError)

@@ -7,7 +7,7 @@ export interface ProductMediaAsset {
   source: string
   source_url: string
   kind: 'scene' | 'room' | 'culture' | 'tea' | 'city' | 'family' | 'food' | 'themePark' | 'entertainment' | 'sport' | 'nightlife' | 'nature' | 'photo' | 'performance' | 'couple' | 'kids'
-  source_type?: 'UNSPLASH_DEMO' | 'PEXELS_DEMO' | 'WIKIMEDIA_COMMONS' | 'OFFICIAL_REFERENCE' | 'HOTEL_UPLOAD' | 'PARTNER_UPLOAD' | 'PROJECT_ASSET'
+  source_type?: 'UNSPLASH_DEMO' | 'PEXELS_DEMO' | 'WIKIMEDIA_COMMONS' | 'OFFICIAL_REFERENCE' | 'TRAVEL_REFERENCE' | 'EDITORIAL_REFERENCE' | 'HOTEL_UPLOAD' | 'PARTNER_UPLOAD' | 'PROJECT_ASSET'
   attribution?: string
   usage_note?: string
   license?: string
@@ -53,22 +53,38 @@ const MEDIA_LIBRARY_RAW: Record<string, ProductMediaAsset> = {
   themeParkLights: { id: 'theme-park-lights', url: 'https://images.pexels.com/photos/1779487/pexels-photo-1779487.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '夜间游乐园灯光与摩天轮', source: 'Pexels', source_url: 'https://www.pexels.com/photo/ferris-wheel-under-the-stars-1779487/', kind: 'themePark' },
   kidsDiscovery: { id: 'kids-discovery', url: 'https://images.pexels.com/photos/3662667/pexels-photo-3662667.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '儿童在探索空间中动手体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/children-playing-inside-a-room-3662667/', kind: 'kids' },
   climbing: { id: 'climbing-wall', url: 'https://images.pexels.com/photos/1699030/pexels-photo-1699030.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '室内攀岩运动体验', source: 'Pexels', source_url: 'https://www.pexels.com/search/indoor%20climbing/', kind: 'sport' },
-  warmFood: { id: 'warm-food-editorial', url: 'https://images.pexels.com/photos/262978/pexels-photo-262978.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '暖色餐桌与城市美食体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/restaurant-interior-262978/', kind: 'food' }
+  warmFood: { id: 'warm-food-editorial', url: 'https://images.pexels.com/photos/262978/pexels-photo-262978.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '暖色餐桌与城市美食体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/restaurant-interior-262978/', kind: 'food' },
+  westLake: { id: 'west-lake-hangzhou-2025', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/West%20Lake%2C%20Hangzhou%202025.jpg?width=1800', alt: '杭州西湖的湖面与群山', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:West_Lake,_Hangzhou_2025.jpg', kind: 'city', attribution: 'Wikimedia Commons · CC BY 4.0', license: 'CC BY 4.0', location: '杭州 · 西湖' },
+  westLakeDawn: { id: 'west-lake-dawn', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Hangzhou%60s%20West%20Lake%20scenery%20at%20dawn.JPG?width=1800', alt: '清晨的杭州西湖', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Hangzhou%60s_West_Lake_scenery_at_dawn.JPG', kind: 'city', attribution: 'Wikimedia Commons · public domain', license: 'Public domain', location: '杭州 · 西湖' },
+  gongchen: { id: 'gongchen-bridge', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/20231122%20Gongchen%20Bridge%2002.jpg?width=1800', alt: '杭州拱宸桥与运河景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:20231122_Gongchen_Bridge_02.jpg', kind: 'city', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 拱宸桥' },
+  xixi: { id: 'xixi-wetland', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Xixi%20Wetland%20Park%2C%20Hangzhou%2C%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%BA%AA%E6%B9%BF%E5%9C%B0%20-%20panoramio.jpg?width=1800', alt: '杭州西溪湿地景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Xixi_Wetland_Park,_Hangzhou,%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%BA%AA%E6%B9%BF%E5%9C%B0_-_panoramio.jpg', kind: 'nature', attribution: 'Wikimedia Commons · CC BY-SA 3.0', license: 'CC BY-SA 3.0', location: '杭州 · 西溪湿地' },
+  longjing: { id: 'longjing-tea-garden', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Tea%20Garden%20Hangzhou.jpg?width=1800', alt: '杭州茶园与山景', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Tea_Garden_Hangzhou.jpg', kind: 'tea', attribution: 'Wikimedia Commons · CC BY 4.0', license: 'CC BY 4.0', location: '杭州 · 龙井茶园' },
+  lingyin: { id: 'lingyin-temple', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Lingyin%20Buddhist%20Temple%2C%20Hangzhou%20%283020083374%29.jpg?width=1800', alt: '杭州灵隐寺建筑景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Lingyin_Buddhist_Temple,_Hangzhou_(3020083374).jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY 2.0', license: 'CC BY 2.0', location: '杭州 · 灵隐' },
+  silkMuseum: { id: 'china-national-silk-museum', url: 'https://zh.unesco.org/silkroad/sites/default/files/styles/silkroad_colorbox/public/museum_front.jpg?itok=y1whLB1I', alt: '杭州中国丝绸博物馆外观', source: 'UNESCO Silk Roads', source_url: 'https://zh.unesco.org/silkroad/content/zhongguosichoubowuguan', kind: 'culture', attribution: 'UNESCO Silk Roads · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 中国丝绸博物馆' },
+  liangzhuCctv: { id: 'liangzhu-museum-cctv', url: 'https://p2.img.cctvpic.com/photoworkspace/contentimg/2025/02/07/2025020710435689379.jpg', alt: '杭州良渚博物院建筑与园区', source: '央视网', source_url: 'https://caiyi.cctv.com/2025/02/07/ARTIfQRVTDD9Es3ApjildzUc250207.shtml', kind: 'culture', attribution: '央视网 · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 良渚博物院' },
+  songcheng: { id: 'hangzhou-songcheng-night', url: 'https://youimg1.c-ctrip.com/target/100q040000000b7qhD3B1.jpg', alt: '杭州宋城夜间入口与灯光', source: '携程旅行', source_url: 'https://you.ctrip.com/sight/hangzhou14/4081.html', kind: 'themePark', attribution: '携程旅行 · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 宋城' },
+  animationMuseum: { id: 'china-cartoon-animation-museum', url: 'https://obj.shine.cn/files/2021/06/29/78356371-6dde-4ebf-919f-e82b85c43d8a_0.jpg', alt: '杭州中国动漫博物馆建筑', source: 'Shanghai Daily City News', source_url: 'https://www.citynewsservice.cn/shine/814b1dde-b79e-45d5-a3ca-90d49ddf1e29', kind: 'entertainment', attribution: 'Shanghai Daily City News · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 中国动漫博物馆' },
+  liangzhuMuseum: { id: 'liangzhu-museum', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1800', alt: '杭州良渚博物院建筑', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 良渚' }
 }
 
 // Curated demo catalog metadata is deliberately explicit.  These are public
 // reference images, not hotel/partner supplied photos; production can replace
 // individual records with HOTEL_UPLOAD/PARTNER_UPLOAD assets after permission.
 const MEDIA_LIBRARY: Record<string, ProductMediaAsset> = Object.fromEntries(Object.entries(MEDIA_LIBRARY_RAW).map(([key, item]) => {
-  const sourceType = item.source === 'Pexels' ? 'PEXELS_DEMO' : 'UNSPLASH_DEMO'
+  const sourceType = item.source === 'Wikimedia Commons' ? 'WIKIMEDIA_COMMONS'
+    : item.source === 'Pexels' ? 'PEXELS_DEMO'
+    : item.source === 'Unsplash' ? 'UNSPLASH_DEMO'
+    : item.source === '携程旅行' ? 'TRAVEL_REFERENCE'
+    : item.source === '央视网' || item.source === 'Shanghai Daily City News' ? 'EDITORIAL_REFERENCE'
+    : 'OFFICIAL_REFERENCE'
   return [key, {
     ...item,
     source_type: sourceType,
-    attribution: `${item.source} curated demo image`,
-    usage_note: '公开演示参考图，不代表酒店或合作商户真实供图；正式商用前请按来源页面核验许可。',
-    license: 'Demo reference · verify source license before production',
+    attribution: item.attribution || `${item.source} curated demo image`,
+    usage_note: item.usage_note || '公开参考图，不代表酒店或合作商户实拍；正式商用前请按来源页面核验许可。',
+    license: item.license || 'Demo reference · verify source license before production',
     tags: [item.kind, key, 'Hangzhou travel', 'StayScape demo'],
-    location: '杭州主题 / 城市文旅氛围参考',
+    location: item.location || '杭州主题 / 城市文旅氛围参考',
     category: item.kind,
     orientation: key.toLowerCase().includes('poster') ? 'portrait' : 'landscape'
   }] as const
@@ -84,7 +100,7 @@ function rotate(items: ProductMediaAsset[], seed: number) {
 
 function legacyMediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null): ProductMediaAsset[] {
   if (!product) return [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.tea]
-  const text = [product.product_name, product.theme, product.target_crowd, product.weather, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''}`)].join(' ').toLowerCase()
+  const text = [product.product_name, product.theme, product.target_crowd, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''}`)].join(' ').toLowerCase()
   const themePark = includesAny(text, ['乐园', '游乐', '主题公园', 'theme park', 'themepark'])
   const kids = includesAny(text, ['儿童', '孩子', '亲子乐园', 'kids'])
   const sport = includesAny(text, ['运动', '攀岩', '卡丁车', '射箭', 'sport'])
@@ -100,9 +116,9 @@ function legacyMediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_nam
   const couple = includesAny(text, ['情侣', '夫妻', '旅拍', 'couple']) || product.target_crowd === 'COUPLE'
   const city = includesAny(text, ['西湖', '运河', '城市', '漫游', '摄影', 'city']) || couple
   const seed = Number(product.id || 0)
-  const themeSet = themePark ? [MEDIA_LIBRARY.themePark, MEDIA_LIBRARY.themeParkDay, MEDIA_LIBRARY.family] : kids ? [MEDIA_LIBRARY.kids, MEDIA_LIBRARY.family, MEDIA_LIBRARY.familyRoom] : sport ? [MEDIA_LIBRARY.sport, MEDIA_LIBRARY.sportDetail, MEDIA_LIBRARY.hotel] : nightlife ? [MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.canal, MEDIA_LIBRARY.city] : food ? [MEDIA_LIBRARY.food, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel] : nature ? [MEDIA_LIBRARY.nature, MEDIA_LIBRARY.natureDetail, MEDIA_LIBRARY.family] : photo ? [MEDIA_LIBRARY.photo, MEDIA_LIBRARY.city, MEDIA_LIBRARY.couple] : performance ? [MEDIA_LIBRARY.performance, MEDIA_LIBRARY.entertainment, MEDIA_LIBRARY.city] : entertainment ? [MEDIA_LIBRARY.entertainment, MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.hotel] : tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.teaSet, MEDIA_LIBRARY.teaGarden] : culture ? [MEDIA_LIBRARY.craft, MEDIA_LIBRARY.craftTable, MEDIA_LIBRARY.craftHands] : city ? [MEDIA_LIBRARY.city, MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : family ? [MEDIA_LIBRARY.family, MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.familyTable] : [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.hangzhou]
+  const themeSet = themePark ? [MEDIA_LIBRARY.songcheng, MEDIA_LIBRARY.themeParkLights, MEDIA_LIBRARY.themeParkDay, MEDIA_LIBRARY.family] : kids ? [MEDIA_LIBRARY.kids, MEDIA_LIBRARY.family, MEDIA_LIBRARY.familyRoom] : sport ? [MEDIA_LIBRARY.sport, MEDIA_LIBRARY.sportDetail, MEDIA_LIBRARY.hotel] : nightlife ? [MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.canal, MEDIA_LIBRARY.city] : food ? [MEDIA_LIBRARY.food, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel] : nature ? [MEDIA_LIBRARY.nature, MEDIA_LIBRARY.natureDetail, MEDIA_LIBRARY.family] : photo ? [MEDIA_LIBRARY.photo, MEDIA_LIBRARY.city, MEDIA_LIBRARY.couple] : performance ? [MEDIA_LIBRARY.performance, MEDIA_LIBRARY.entertainment, MEDIA_LIBRARY.city] : entertainment ? [MEDIA_LIBRARY.entertainment, MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.hotel] : tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.teaSet, MEDIA_LIBRARY.teaGarden] : culture ? [MEDIA_LIBRARY.craft, MEDIA_LIBRARY.craftTable, MEDIA_LIBRARY.craftHands] : city ? [MEDIA_LIBRARY.city, MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : family ? [MEDIA_LIBRARY.family, MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.familyTable] : [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.hangzhou]
   const supportSet = family ? [MEDIA_LIBRARY.familyRoom, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel] : sport ? [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.sportDetail, MEDIA_LIBRARY.breakfast] : food ? [MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.city] : tea ? [MEDIA_LIBRARY.tea, MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.hotel] : culture ? [MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou] : [MEDIA_LIBRARY.hotelWindow, MEDIA_LIBRARY.breakfast, MEDIA_LIBRARY.hangzhou]
-  const contextSet = product.weather === 'RAIN' ? [MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hangzhou] : nightlife ? [MEDIA_LIBRARY.nightlife, MEDIA_LIBRARY.canal] : nature ? [MEDIA_LIBRARY.nature, MEDIA_LIBRARY.lake] : city ? [MEDIA_LIBRARY.canal, MEDIA_LIBRARY.lake] : [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.city]
+  const contextSet = nightlife ? [MEDIA_LIBRARY.gongchen, MEDIA_LIBRARY.nightlife] : nature ? [MEDIA_LIBRARY.xixi, MEDIA_LIBRARY.nature] : tea ? [MEDIA_LIBRARY.longjing, MEDIA_LIBRARY.hangzhou] : city ? [MEDIA_LIBRARY.westLake, MEDIA_LIBRARY.gongchen] : product.weather === 'RAIN' ? [MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hotel] : [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.city]
   return [...rotate(themeSet, seed), ...rotate(supportSet, seed + 1), ...rotate(contextSet, seed + 2)].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index).slice(0, 8)
 }
 
@@ -111,16 +127,23 @@ function legacyMediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_nam
  * which visual family is allowed. */
 export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null): ProductMediaAsset[] {
   if (!product) return [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.tea]
-  const text = [product.product_name, product.theme, product.target_crowd, product.weather, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''} ${item.address || ''}`)].join(' ').toLowerCase()
+  const text = [product.product_name, product.theme, product.target_crowd, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''} ${item.address || ''}`)].join(' ').toLowerCase()
   const tests: Array<[string[], string[]]> = [
-    [['乐园', '游乐', '主题公园', 'theme'], ['themePark', 'themeParkDay', 'themeParkLights']],
+    [['博物馆', '良渚', '看展', '美术馆', '科技馆', '展览', '丝绸'], ['silkMuseum', 'liangzhuCctv', 'liangzhuMuseum', 'hotel']],
+    [['西湖', '湖滨', '湖畔'], ['westLake', 'westLakeDawn', 'hotel', 'breakfast']],
+    [['运河', '拱宸'], ['gongchen', 'canal', 'city', 'photo']],
+    [['西溪', '湿地'], ['xixi', 'nature', 'lake', 'family']],
+    [['龙井', '茶园'], ['longjing', 'tea', 'teaSet', 'hotel']],
+    [['灵隐'], ['lingyin', 'westLake', 'hotel', 'city']],
+    [['乐园', '游乐', '主题公园', '宋城', 'theme'], ['songcheng', 'themeParkLights', 'themeParkDay']],
     [['儿童', '亲子', '孩子', 'kids'], ['kids', 'kidsDiscovery', 'family', 'familyRoom']],
     [['攀岩', '卡丁车', '运动', 'sport'], ['sport', 'sportDetail', 'climbing', 'entertainment']],
     [['夜游', '夜景', '音乐', 'night'], ['nightlife', 'canal', 'city', 'performance']],
     [['旅拍', '摄影', '拍照', 'photo'], ['photo', 'couple', 'city', 'lake']],
     [['美食', '杭帮菜', '甜品', '咖啡', '烘焙', 'food'], ['food', 'warmFood', 'breakfast', 'hotel']],
     [['自然', '湿地', '动物', '植物', 'nature'], ['nature', 'natureDetail', 'lake', 'family']],
-    [['演出', '儿童剧', '剧场', 'performance'], ['performance', 'entertainment', 'city', 'nightlife']],
+    [['演出', '儿童剧', '剧场', 'performance'], ['songcheng', 'performance', 'entertainment', 'nightlife']],
+    [['动漫', '动画', '二次元'], ['animationMuseum', 'entertainment', 'city', 'nightlife']],
     [['非遗', '手作', '文化', 'craft'], ['craft', 'craftTable', 'craftHands', 'hotel']],
     [['茶', '点茶', '茶园', 'tea'], ['tea', 'teaSet', 'teaGarden', 'hangzhou']],
   ]
@@ -136,7 +159,94 @@ export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_na
 
 export function heroMedia(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null) { return mediaForProduct(product)[0] }
 export function experienceLabel(resourceType: string) { return ({ ROOM: 'STAY', HOTEL_SERVICE: 'TASTE', PARTNER_RESOURCE: 'EXPERIENCE' } as Record<string, string>)[resourceType] || 'MOMENT' }
-export function experienceLabelZh(resourceType: string) { return ({ ROOM: '住宿', HOTEL_SERVICE: '酒店服务', PARTNER_RESOURCE: '文化体验' } as Record<string, string>)[resourceType] || '旅居内容' }
+export function experienceLabelZh(resourceType: string) { return ({ ROOM: '住宿', HOTEL_SERVICE: '贴心服务', PARTNER_RESOURCE: '在地体验' } as Record<string, string>)[resourceType] || '旅居内容' }
 export function weatherLabel(weather: string) { return ({ RAIN: 'RAIN FRIENDLY', SUNNY: 'SUNNY DAY', CLOUDY: 'SOFT CLOUDS' } as Record<string, string>)[weather] || weather }
+
+
+export interface ProductMoment {
+  media: ProductMediaAsset
+  resource_name: string
+  resource_type: string
+}
+
+type ProductMediaInput = Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'>
+type ProductResource = TravelProduct['resources'][number]
+
+function mediaCandidatesForResource(product: ProductMediaInput | null | undefined, resource: ProductResource | undefined, index = 0) {
+  if (!resource) return mediaForProduct(product)
+  const text = [resource.resource_name, resource.description || '', resource.address || '', product?.product_name || '', product?.theme || ''].join(' ').toLowerCase()
+  let keys: string[]
+  if (resource.resource_type === 'ROOM') {
+    keys = product?.target_crowd === 'FAMILY' ? ['familyRoom', 'hotelWindow', 'hotel'] : ['hotelWindow', 'hotel', 'familyRoom']
+  } else if (resource.resource_type === 'HOTEL_SERVICE') {
+    keys = includesAny(text, ['早餐', '餐', '美食', '咖啡', '下午茶', 'food']) ? ['breakfast', 'warmFood', 'food'] : includesAny(text, ['茶', 'tea']) ? ['teaSet', 'tea', 'hotelWindow'] : ['hotelWindow', 'breakfast', 'hotel']
+  } else if (includesAny(text, ['博物馆', '良渚', '看展', '美术馆', '科技馆', '展览', '丝绸'])) {
+    keys = ['silkMuseum', 'liangzhuCctv', 'liangzhuMuseum']
+  } else if (includesAny(text, ['西湖', '湖滨', '湖畔'])) {
+    keys = ['westLake', 'westLakeDawn', 'lake']
+  } else if (includesAny(text, ['运河', '拱宸'])) {
+    keys = ['gongchen', 'canal', 'city']
+  } else if (includesAny(text, ['西溪', '湿地'])) {
+    keys = ['xixi', 'natureDetail', 'nature']
+  } else if (includesAny(text, ['龙井', '茶园'])) {
+    keys = ['longjing', 'teaGarden', 'teaSet']
+  } else if (includesAny(text, ['灵隐'])) {
+    keys = ['lingyin', 'westLakeDawn', 'hangzhou']
+  } else if (includesAny(text, ['乐园', '游乐', '主题公园', '宋城', 'theme'])) {
+    keys = ['songcheng', 'themeParkLights', 'themeParkDay']
+  } else if (includesAny(text, ['动漫', '动画', '二次元'])) {
+    keys = ['animationMuseum', 'entertainment', 'nightlife']
+  } else if (includesAny(text, ['儿童', '亲子', '孩子', 'kids'])) {
+    keys = ['kidsDiscovery', 'kids', 'family']
+  } else if (includesAny(text, ['攀岩', '卡丁车', '运动', 'sport'])) {
+    keys = ['climbing', 'sportDetail', 'sport']
+  } else if (includesAny(text, ['夜游', '夜景', '音乐', 'night'])) {
+    keys = ['nightlife', 'canal', 'performance']
+  } else if (includesAny(text, ['旅拍', '摄影', '拍照', 'photo'])) {
+    keys = ['photo', 'couple', 'city']
+  } else if (includesAny(text, ['美食', '杭帮菜', '甜品', '咖啡', '烘焙', 'food'])) {
+    keys = ['warmFood', 'food', 'breakfast']
+  } else if (includesAny(text, ['自然', '动物', '植物', 'nature'])) {
+    keys = ['natureDetail', 'nature', 'lake']
+  } else if (includesAny(text, ['演出', '儿童剧', '剧场', 'performance'])) {
+    keys = ['performance', 'songcheng', 'nightlife']
+  } else if (includesAny(text, ['非遗', '手作', '文化', 'craft'])) {
+    keys = ['craftHands', 'craftTable', 'craft']
+  } else if (includesAny(text, ['茶', '点茶', 'tea'])) {
+    keys = ['teaSet', 'teaGarden', 'tea']
+  } else {
+    keys = mediaForProduct(product).map((item) => item.id === 'hangzhou-water-town' ? 'hangzhou' : Object.entries(MEDIA_LIBRARY).find((entry) => entry[1].id === item.id)?.[0]).filter(Boolean) as string[]
+  }
+  const assets = keys.map((key) => MEDIA_LIBRARY[key]).filter(Boolean)
+  return rotate(assets, Number(product?.id || 0) + index * 3)
+}
+
+export function mediaForResource(product: ProductMediaInput | null | undefined, resource: ProductResource | undefined, index = 0) {
+  return mediaCandidatesForResource(product, resource, index)[0] || mediaForProduct(product)[index % Math.max(mediaForProduct(product).length, 1)] || MEDIA_LIBRARY.hangzhou
+}
+
+export function experienceMoments(product?: ProductMediaInput | null): ProductMoment[] {
+  if (!product) return []
+  const chosen: ProductMoment[] = []
+  const usedIds = new Set<string>()
+  const usedSources = new Set<string>()
+  product.resources.forEach((resource, index) => {
+    const candidates = mediaCandidatesForResource(product, resource, index)
+    const media = candidates.find((candidate) => !usedIds.has(candidate.id) && !usedSources.has(candidate.source)) || candidates.find((candidate) => !usedIds.has(candidate.id)) || candidates[0]
+    if (media && chosen.length < 3) {
+      chosen.push({ media, resource_name: resource.resource_name, resource_type: resource.resource_type })
+      usedIds.add(media.id)
+      usedSources.add(media.source)
+    }
+  })
+  const fallbacks = mediaForProduct(product)
+  fallbacks.forEach((media) => {
+    if (chosen.length < 3 && !usedIds.has(media.id)) {
+      chosen.push({ media, resource_name: '杭州漫游', resource_type: 'PARTNER_RESOURCE' })
+      usedIds.add(media.id)
+    }
+  })
+  return chosen
+}
 
 export { MEDIA_LIBRARY }

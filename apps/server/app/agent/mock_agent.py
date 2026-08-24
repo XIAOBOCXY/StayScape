@@ -144,9 +144,9 @@ class MockAgent:
             f'<g>{art}</g><text x="100" y="770" fill="{dark}" font-size="56" font-weight="700" font-family="Microsoft YaHei, sans-serif">{safe(title[:22])}</text>'
             f'<text x="104" y="820" fill="{dark}" font-size="24" font-family="Microsoft YaHei, sans-serif">{safe(weather_label)} · {safe(profile["tag"])} · {safe(partner_name[:20])}</text>'
             f'<rect x="70" y="885" width="940" height="190" rx="24" fill="#fff" opacity=".85"/><text x="110" y="945" fill="{dark}" font-size="25" font-weight="700" font-family="Microsoft YaHei, sans-serif">住进 {safe(room_name)}，把 {safe(profile["label"])} 放进今晚</text>'
-            f'<text x="110" y="995" fill="#5b756e" font-size="22" font-family="Microsoft YaHei, sans-serif">{safe(partner_address[:28])}</text><text x="110" y="1035" fill="#5b756e" font-size="22" font-family="Microsoft YaHei, sans-serif">真实场次 · 实时余量 · 到店后按时间卡体验</text>'
-            f'<rect x="70" y="1110" width="420" height="190" rx="24" fill="{dark}"/><text x="105" y="1170" fill="#c9eadc" font-size="20" font-family="Microsoft YaHei, sans-serif">从临期库存重新设计的杭州体验</text><text x="105" y="1250" fill="#fff" font-size="56" font-weight="700" font-family="Arial, sans-serif">¥{safe(price)}</text>'
-            f'<rect x="530" y="1110" width="480" height="190" rx="24" fill="#f2dfad"/><text x="570" y="1170" fill="#7b5b2a" font-size="23" font-weight="700" font-family="Microsoft YaHei, sans-serif">{safe(profile["label"])} · {safe(partner_name[:14])}</text><text x="570" y="1220" fill="#6b6250" font-size="21" font-family="Microsoft YaHei, sans-serif">打开 StayScape，查看可售名额</text>'
+            f'<text x="110" y="995" fill="#5b756e" font-size="22" font-family="Microsoft YaHei, sans-serif">{safe(partner_address[:28])}</text><text x="110" y="1035" fill="#5b756e" font-size="22" font-family="Microsoft YaHei, sans-serif">慢慢体验 · 给今天留一段杭州时间</text>'
+            f'<rect x="70" y="1110" width="420" height="190" rx="24" fill="{dark}"/><text x="105" y="1170" fill="#c9eadc" font-size="20" font-family="Microsoft YaHei, sans-serif">为今天安排的一段杭州旅居</text><text x="105" y="1250" fill="#fff" font-size="56" font-weight="700" font-family="Arial, sans-serif">¥{safe(price)}</text>'
+            f'<rect x="530" y="1110" width="480" height="190" rx="24" fill="#f2dfad"/><text x="570" y="1170" fill="#7b5b2a" font-size="23" font-weight="700" font-family="Microsoft YaHei, sans-serif">{safe(profile["label"])} · {safe(partner_name[:14])}</text><text x="570" y="1220" fill="#6b6250" font-size="21" font-family="Microsoft YaHei, sans-serif">打开 StayScape，看看这段行程</text>'
             f'<text x="72" y="1370" fill="#5b756e" font-size="21" font-family="Microsoft YaHei, sans-serif">#杭州旅行 #StayScape #{safe(profile["key"])}</text></svg>'
         )
 
@@ -174,7 +174,7 @@ class MockAgent:
         partner_name = partner.get("resource_name", profile["label"])
         room_name = room.get("room_type", "舒适客房")
         audience = cls.CROWD_LABELS.get(crowd, crowd)
-        service_names = "、".join(item.get("service_name", "酒店服务") for item in payload.get("allowed_hotel_services", []) if item["id"] in service_ids) or "酒店服务"
+        service_names = "、".join(item.get("service_name", "贴心服务") for item in payload.get("allowed_hotel_services", []) if item["id"] in service_ids) or "酒店服务"
         partner_time = "-".join(item for item in (partner.get("start_time"), partner.get("end_time")) if item) or "场次待确认"
         partner_address = partner.get("address") or "杭州体验场地"
         partner_description = partner.get("description") or f"{partner_name}，让杭州的这一晚有具体去处。"
@@ -201,26 +201,26 @@ class MockAgent:
             name = options[variant_index % len(options)] + suffix
             if profile["key"] == "sport" and partner_description:
                 name = f"{name}｜{partner_description}"
-        title = f"{weather_label}也能好好玩｜{name}"
+        title = f"把杭州安排进周末｜{name}"
         content = (
-            f"为{audience}设计的{theme}主题旅居。以{room_name}为基地，"
-            f"把{service_names}与{partner_name}排进同一张时间卡：{partner_time}，地点在{partner_address}。"
-            f"{partner_description}在{weather_label}场景下，这不是一句泛泛的宣传语，而是可按真实场次体验的城市内容。"
-            f"当前合作体验余{capacity}个名额，房量、体验名额、成本、售价与毛利率由规则引擎持续校验。"
+            f"为{audience}安排的{theme}主题旅居。以{room_name}为休息地，"
+            f"把{service_names}和{partner_name}放进同一天的行程里。"
+            f"地点在{partner_address}，{partner_description}"
+            f"出发前，酒店会和你确认体验时间与到店安排。"
         )
         poster_svg = cls._poster_svg(profile=profile, title=title, partner_name=partner_name, room_name=room_name, weather_label=weather_label, price=payload.get("preferred_price", "599"), partner_address=partner_address)
         social_post = (
-            f"{weather_label}的杭州，也值得住一晚。\n\n"
+            f"这个周末的杭州，也值得住一晚。\n\n"
             f"{partner_description}\n\n"
             f"这次把 {room_name}、{service_names} 和 {partner_name} 排成一张轻松的时间卡。\n"
             f"不用赶很多景点，按 {partner_time} 去 {partner_address}，把{profile['label']}变成旅程里最具体的一段。\n\n"
-            f"预算参考 ¥{payload.get('preferred_price', '599')} / 套 · 当前余 {capacity} 个名额\n\n"
+            f"出发前，酒店会和你确认时间与到店安排。\n\n"
             f"{profile['hashtags']} #杭州酒店 #StayScape"
         )
         short_video = (
-            f"0-3秒：{weather_label}城市/酒店窗景；3-8秒：{room_name}与{service_names}；"
-            f"8-18秒：拍到{partner_name}的真实体验画面；18-25秒：字幕显示{partner_time}与{partner_address}；"
-            f"25-30秒：展示¥{payload.get('preferred_price', '599')}、余{capacity}个名额，提示先查看场次再提交预约意向。"
+            f"0-3秒：杭州城市或酒店窗景；3-8秒：{room_name}与{service_names}；"
+            f"8-18秒：拍到{partner_name}的体验画面；18-25秒：字幕展示{partner_time}与{partner_address}；"
+            "25-30秒：把这段杭州时光留给周末，邀请旅人查看行程。"
         )
         return {
             "product_name": name,
@@ -235,13 +235,13 @@ class MockAgent:
             "creative_angle": f"{profile['label']}的具体城市体验主视觉：{partner_name} + {room_name}",
             "poster_style": f"{profile['key']}-editorial",
             "marketing_assets": [
-                {"asset_type": "POSTER", "platform": "StayScape / 小红书封面", "title": title, "content": content, "visual_brief": f"以{profile['label']}（{profile['tag']}）为主视觉，画面包含{partner_name}、{room_name}与真实场次信息，不使用空泛纯色背景。", "creative_angle": f"{profile['label']}的具体城市体验主视觉", "poster_style": f"{profile['key']}-editorial", "call_to_action": "查看场次 · 提交预约意向", "poster_svg": poster_svg},
-                {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": f"{weather_label}杭州：{profile['label']}值得住一晚", "content": social_post, "visual_brief": f"首图突出{partner_name}具体体验，后续展示房间、城市场景、时间卡和余量。", "call_to_action": "收藏这段杭州行程"},
-                {"asset_type": "SHORT_VIDEO_SCRIPT", "platform": "短视频 30 秒", "title": f"30秒讲清{profile['label']}主题宿", "content": short_video, "visual_brief": "镜头必须出现房间、服务、体验现场和时间地点四类具体画面。", "call_to_action": "立即查看可售套餐"},
-                {"asset_type": "STORE_CARD", "platform": "OTA / 酒店前台", "title": f"{profile['label']}产品卖点卡", "content": f"{weather_label}友好 · {room_name} · {service_names} · {partner_name}\n场次 {partner_time} · {partner_address}\n适合 {audience} · ¥{payload.get('preferred_price', '599')} / 套 · 余 {capacity} 个名额", "visual_brief": "用房间、服务、体验、场次四块信息替代大段宣传语。", "call_to_action": "查看详情"},
+                {"asset_type": "POSTER", "platform": "StayScape / 小红书封面", "title": title, "content": content, "visual_brief": f"以{profile['label']}（{profile['tag']}）为主视觉，画面包含{partner_name}、{room_name}与体验现场氛围，不使用空泛纯色背景。", "creative_angle": f"{profile['label']}的具体城市体验主视觉", "poster_style": f"{profile['key']}-editorial", "call_to_action": "查看场次 · 提交预约意向", "poster_svg": poster_svg},
+                {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": f"杭州周末：{profile['label']}值得住一晚", "content": social_post, "visual_brief": f"首图突出{partner_name}具体体验，后续展示房间、城市场景、行程片段和城市氛围。", "call_to_action": "收藏这段杭州行程"},
+                {"asset_type": "SHORT_VIDEO_SCRIPT", "platform": "短视频 30 秒", "title": f"30秒讲清{profile['label']}主题宿", "content": short_video, "visual_brief": "镜头必须出现房间、服务、体验现场和时间地点四类具体画面。", "call_to_action": "看看这段行程"},
+                {"asset_type": "STORE_CARD", "platform": "OTA / 酒店前台", "title": f"{profile['label']}产品卖点卡", "content": f"杭州周末 · {room_name} · {service_names} · {partner_name}\n场次 {partner_time} · {partner_address}\n适合 {audience} · ¥{payload.get('preferred_price', '599')} / 套 · 余 {capacity} 个名额", "visual_brief": "用房间、服务、体验、地点四块信息替代大段宣传语。", "call_to_action": "查看详情"},
             ],
-            "recommendation_reason": f"{room_name}、{service_names}和{partner_name}在{payload.get('target_date', '入住日')}可用，场次为{partner_time}。该组合同时满足{weather_label}、{audience}与真实容量约束，适合把{profile['label']}做成可直接销售的杭州旅居产品。",
-            "risk_message": "体验名额、房量、天气和价格会实时变化；如有过敏、儿童安全或饮食禁忌，请在预约意向中说明并等待酒店与商户人工确认。",
+            "recommendation_reason": f"以{room_name}为休息地，把{service_names}和{partner_name}安排进同一天，适合{audience}慢慢体验{profile['label']}。",
+            "risk_message": "如有饮食、儿童陪同或行动安排方面的需求，提交预约意向时告诉我们即可。",
         }
 
     @staticmethod
@@ -254,17 +254,17 @@ class MockAgent:
         needs_hint = f"我先按你的描述整理：{natural_language}。" if natural_language else ""
         question = str(payload.get("question", "")).strip()
         if question:
-            answer = f"{needs_hint}关于“{question}”，我会优先依据当前套餐的真实场次、库存、天气和年龄范围回答；最终预约以酒店与商户确认结果为准。"
+            answer = f"{needs_hint}关于“{question}”，我会结合你的同行方式、偏好和想去的地方，帮你看看怎么安排更合适。"
         elif target_ids:
-            answer = f"{needs_hint}当前有{len(target_ids)}个套餐同时通过预算、人数、天气和库存校验。已排除你标记的不偏好：{'、'.join(negative) or '暂无'}，可以继续查看时间安排。"
+            answer = f"{needs_hint}我为你挑出了 {len(target_ids)} 段杭州玩法，已经优先考虑预算、同行人数和兴趣偏好。"
         else:
-            answer = f"{needs_hint}暂时没有同时满足这些条件的可售套餐，可以放宽日期、预算或体验偏好，我会继续按真实库存匹配。"
+            answer = f"{needs_hint}暂时还没有特别合适的方案。你可以换个日期、预算或想去的地方，我继续帮你找。"
         return {
             "answer": answer,
-            "safety_notes": "过敏、儿童安全和活动场次必须由酒店与商户在确认前再次人工核对，AI不会替代安全确认。",
+            "safety_notes": "如有过敏、儿童陪同或特殊饮食需求，请在提交预约意向时告诉酒店。",
             "selected_product_ids": target_ids,
-            "reasons": {str(item["id"]): f"匹配预算、天气、同行客群和实时库存；同时考虑了负向偏好{'、'.join(negative)}。" for item in products if item["id"] in target_ids},
-            "schedule_notes": {str(item["id"]): [{"time": "15:00", "title": "办理入住", "description": "酒店前台办理入住并领取体验时间卡"}, {"time": "16:00", "title": "前往体验", "description": "以产品详情中的真实场次与地址为准"}] for item in products if item["id"] in target_ids},
+            "reasons": {str(item["id"]): f"结合预算、同行方式和玩法偏好挑选；也避开了你不想安排的内容：{'、'.join(negative) or '暂无'}。" for item in products if item["id"] in target_ids},
+            "schedule_notes": {str(item["id"]): [{"time": "15:00", "title": "办理入住", "description": "到店后办理入住，稍作休息再出发"}, {"time": "16:00", "title": "前往体验", "description": "酒店会在出行前和你确认具体时间与地点"}] for item in products if item["id"] in target_ids},
             "limited_adjustments": {str(item["id"]): ["可在预约意向中备注希望的场次与同行注意事项", "实时名额变化后以酒店与商户确认结果为准"] for item in products if item["id"] in target_ids},
             "allergy_warning": f"已记录过敏信息：{allergy}；酒店与商户需要在确认前再次核对。" if allergy else "如有过敏或饮食禁忌，请在预约意向中主动说明。",
         }

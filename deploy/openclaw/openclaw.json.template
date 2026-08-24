@@ -32,7 +32,16 @@
           {
             "id": "qwen3.5-plus",
             "name": "qwen3.5-plus",
-            "reasoning": false,
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.7-plus",
+            "name": "qwen3.7-plus",
+            "reasoning": true,
             "input": ["text", "image"],
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
             "contextWindow": 1000000,

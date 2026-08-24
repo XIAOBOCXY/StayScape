@@ -6,59 +6,290 @@ import { errorMessage } from '../../api/client'
 import StatusTag from '../../components/StatusTag.vue'
 import type { HotelService, PartnerResource, Room, TravelProduct } from '../../types'
 
-const loading = ref(false); const loadingData = ref(true); const rooms = ref<Room[]>([]); const services = ref<HotelService[]>([]); const resources = ref<PartnerResource[]>([]); const products = ref<TravelProduct[]>([]); const selectedIndex = ref(0); const validation = ref<Record<string, unknown> | null>(null); const traceId = ref(''); const fallbackUsed = ref(false); const agentProvider = ref('MOCK'); const agentTransport = ref('mock'); const agentSkill = ref('stayscape-product-generator'); const agentId = ref(''); const agentSkillVersion = ref('')
-const form = reactive({ target_date: '', weather: 'RAIN', target_crowd: 'FAMILY', minimum_gross_margin: '0.20', visitor_budget: '700', theme: '雨天亲子非遗', creative_direction: '', variant_count: 3, room_inventory_id: 0, breakfast_id: 0, breakfast_qty: 3, late_id: 0, late_qty: 1, partner_ids: [] as number[], partner_qty: 3, preferred_price: '599' })
-const candidateResources = computed(() => resources.value.filter((item) => item.source_type !== 'PUBLIC_REFERENCE' && item.package_enabled && item.status === 'AVAILABLE' && item.remaining_capacity > 0 && item.weather_tags.split(/[,，]/).map(tag => tag.trim().toUpperCase()).some(tag => tag === 'ALL' || tag === form.weather) && (item.suitable_crowds === 'ALL' || item.suitable_crowds.split(/[,，]/).map(tag => tag.trim()).includes(form.target_crowd))))
-const product = computed(() => products.value[selectedIndex.value] || null)
-const selectedRoom = computed(() => rooms.value.find((item) => item.id === form.room_inventory_id))
-const selectedPartners = computed(() => resources.value.filter((item) => form.partner_ids.includes(item.id)))
-const weatherLabel = computed(() => ({ RAIN: '雨天室内', SUNNY: '晴日漫游', CLOUDY: '多云轻旅' }[form.weather] || form.weather))
+const loading = ref(false)
+const loadingData = ref(true)
+const rooms = ref<Room[]>([])
+const services = ref<HotelService[]>([])
+const resources = ref<PartnerResource[]>([])
+const products = ref<TravelProduct[]>([])
+const selectedIndex = ref(0)
+const showAutoResources = ref(false)
+const naturalBrief = ref('')
+const interpreting = ref(false)
+const parsedFields = ref<Array<{ label: string; value: unknown }>>([])
+
+const form = reactive({
+  target_date: '',
+  weather: 'CLOUDY',
+  target_crowd: 'FAMILY',
+  minimum_gross_margin: '0.20',
+  visitor_budget: '699',
+  preferred_price: '599',
+  theme: '亲子探索日',
+  creative_direction: '',
+  variant_count: 3,
+  room_inventory_id: 0,
+  breakfast_id: 0,
+  late_id: 0,
+  partner_ids: [] as number[],
+})
+
+function supportsCrowd(value: string | undefined, crowd: string) {
+  return !value || value === 'ALL' || value.split(/[,，]/).map(item => item.trim()).includes(crowd)
+}
+function supportsWeather(value: string | undefined, weather: string) {
+  return !value || value.split(/[,，]/).map(item => item.trim().toUpperCase()).some(item => item === 'ALL' || item === weather)
+}
+
+const eligibleRooms = computed(() => rooms.value.filter(item => item.available_date === form.target_date && item.available_count > 0))
+const eligibleServices = computed(() => services.value.filter(item => item.available_date === form.target_date && item.available_quantity > 0 && supportsCrowd(item.suitable_crowds, form.target_crowd)))
+function resourcesFor(weather: string) {
+  return resources.value.filter(item =>
+    item.source_type !== 'PUBLIC_REFERENCE' &&
+    item.package_enabled &&
+    item.status === 'AVAILABLE' &&
+    item.available_date === form.target_date &&
+    item.remaining_capacity > 0 &&
+    supportsCrowd(item.suitable_crowds, form.target_crowd) &&
+    supportsWeather(item.weather_tags, weather),
+  )
+}
+const candidateResources = computed(() => resourcesFor(form.weather))
+const selectedRoom = computed(() => rooms.value.find(item => item.id === form.room_inventory_id))
+const selectedPartners = computed(() => resources.value.filter(item => form.partner_ids.includes(item.id)))
+const partySize = computed(() => ({ FAMILY: 3, COUPLE: 2, FRIENDS: 3, SOLO: 1, LOCAL_WEEKEND: 2 }[form.target_crowd] || 2))
+const inventorySummary = computed(() => ({
+  rooms: eligibleRooms.value.length,
+  services: eligibleServices.value.length,
+  experiences: candidateResources.value.length,
+}))
+
+function chooseWeather() {
+  const choices = ['CLOUDY', 'SUNNY', 'RAIN']
+  return choices
+    .map(weather => ({ weather, count: resourcesFor(weather).length }))
+    .sort((left, right) => right.count - left.count || choices.indexOf(left.weather) - choices.indexOf(right.weather))[0]?.weather || 'CLOUDY'
+}
+
+function syncSmartInventory() {
+  if (!form.target_date) return
+  form.weather = chooseWeather()
+  const sortedRooms = [...eligibleRooms.value].sort((left, right) => right.available_count - left.available_count)
+  const room = sortedRooms[0]
+  form.room_inventory_id = room?.id || 0
+  const breakfast = eligibleServices.value.filter(item => item.service_type === 'BREAKFAST').sort((left, right) => right.available_quantity - left.available_quantity)[0]
+  const late = eligibleServices.value.filter(item => item.service_type === 'LATE_CHECKOUT').sort((left, right) => right.available_quantity - left.available_quantity)[0]
+  form.breakfast_id = breakfast?.id || 0
+  form.late_id = late?.id || 0
+  form.partner_ids = [...candidateResources.value]
+    .sort((left, right) => right.remaining_capacity - left.remaining_capacity)
+    .slice(0, 4)
+    .map(item => item.id)
+}
 
 async function loadData() {
   loadingData.value = true
   try {
     const [roomResponse, serviceResponse, resourceResponse] = await Promise.all([hotelApi.rooms(), hotelApi.services(), hotelApi.resources()])
-    rooms.value = roomResponse.data; services.value = serviceResponse.data; resources.value = resourceResponse.data
-    const target = rooms.value.find((item) => item.room_type === '亲子房') || rooms.value[0]
-    form.target_date = target?.available_date || ''; form.room_inventory_id = target?.id || 0
-    form.breakfast_id = services.value.find((item) => item.service_type === 'BREAKFAST')?.id || 0
-    form.late_id = services.value.find((item) => item.service_type === 'LATE_CHECKOUT')?.id || 0
-    const preferredPartner = candidateResources.value.find((item) => item.resource_name.includes('非遗')) || candidateResources.value[0]
-    form.partner_ids = preferredPartner ? [preferredPartner.id] : []
-  } catch (e) { ElMessage.error(errorMessage(e)) } finally { loadingData.value = false }
+    rooms.value = roomResponse.data
+    services.value = serviceResponse.data
+    resources.value = resourceResponse.data
+    const preferredRoom = [...rooms.value].sort((left, right) => right.available_count - left.available_count)[0]
+    form.target_date = preferredRoom?.available_date || ''
+    syncSmartInventory()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    loadingData.value = false
+  }
 }
-function choose(index: number) { selectedIndex.value = index }
-function setPersona(crowd: string, theme: string) { form.target_crowd = crowd; form.theme = theme }
-async function generate() {
-  if (!form.room_inventory_id || !form.partner_ids.length) { ElMessage.warning('请先选择临期房型和至少一个可组包体验资源'); return }
-  loading.value = true; products.value = []; selectedIndex.value = 0
+
+async function interpretBrief() {
+  if (!naturalBrief.value.trim()) { ElMessage.warning('先写一句这次想做什么，例如“周末带孩子看展，预算900，想要室内一些”'); return }
+  interpreting.value = true
   try {
-    const selections = [{ resource_type: 'HOTEL_SERVICE', resource_id: form.breakfast_id, quantity_per_package: form.breakfast_qty }, { resource_type: 'HOTEL_SERVICE', resource_id: form.late_id, quantity_per_package: form.late_qty }, ...form.partner_ids.map((resource_id) => ({ resource_type: 'PARTNER_RESOURCE', resource_id, quantity_per_package: form.partner_qty }))].filter((item) => item.resource_id > 0)
-    const response = await hotelApi.generateProduct({ target_date: form.target_date, weather: form.weather, target_crowd: form.target_crowd, minimum_gross_margin: form.minimum_gross_margin, visitor_budget: form.visitor_budget, theme: form.theme, creative_direction: form.creative_direction, variant_count: form.variant_count, room_inventory_id: form.room_inventory_id, resource_selections: selections, preferred_price: form.preferred_price })
-    products.value = response.data.products?.length ? response.data.products : [response.data.product]; validation.value = response.data.validation; traceId.value = response.data.trace_id; fallbackUsed.value = response.data.fallback_used; agentProvider.value = response.data.provider || 'MOCK'; agentTransport.value = response.data.transport || 'mock'; agentSkill.value = response.data.skill_name || 'stayscape-product-generator'; agentId.value = response.data.agent_id || ''; agentSkillVersion.value = response.data.skill_version || ''
-    ElMessage.success(`已生成 ${products.value.length} 个差异化候选方案：${weatherLabel.value}、客群、资源和营销素材均已重新组合`)
-  } catch (e) { ElMessage.error(errorMessage(e)) } finally { loading.value = false }
+    const response = await hotelApi.interpretProductDraft(naturalBrief.value.trim())
+    const interpreted = response.data.interpreted || {}
+    const editableFields = ['target_date', 'weather', 'target_crowd', 'theme', 'visitor_budget', 'preferred_price', 'variant_count', 'creative_direction']
+    editableFields.forEach((field) => { if (interpreted[field] !== undefined) (form as Record<string, unknown>)[field] = interpreted[field] })
+    parsedFields.value = (response.data.parsed_fields || []).map((item) => ({ label: String(item.label), value: item.value }))
+    syncSmartInventory()
+    ElMessage.success('已解析需求，下面仍可手动调整')
+  } catch (error) { ElMessage.error(errorMessage(error)) } finally { interpreting.value = false }
 }
-async function publish() { if (!product.value) return; try { products.value[selectedIndex.value] = (await hotelApi.productStatus(product.value.id, 'ON_SALE')).data; ElMessage.success('当前候选产品已模拟发布') } catch (e) { ElMessage.error(errorMessage(e)) } }
-watch([() => form.weather, () => form.target_crowd], () => { form.partner_ids = form.partner_ids.filter(id => candidateResources.value.some(item => item.id === id)); if (!form.partner_ids.length && candidateResources.value[0]) form.partner_ids = [candidateResources.value[0].id] })
+
+function choose(index: number) { selectedIndex.value = index }
+function setPersona(crowd: string, theme: string) {
+  form.target_crowd = crowd
+  form.theme = theme
+  syncSmartInventory()
+}
+function systemSelections() {
+  const quantity = partySize.value
+  return [
+    form.breakfast_id ? { resource_type: 'HOTEL_SERVICE', resource_id: form.breakfast_id, quantity_per_package: quantity } : null,
+    form.late_id ? { resource_type: 'HOTEL_SERVICE', resource_id: form.late_id, quantity_per_package: 1 } : null,
+    ...form.partner_ids.map(resource_id => ({ resource_type: 'PARTNER_RESOURCE', resource_id, quantity_per_package: quantity })),
+  ].filter(Boolean)
+}
+async function generate() {
+  syncSmartInventory()
+  if (!form.room_inventory_id || !form.partner_ids.length) {
+    ElMessage.warning('当前日期下可组合的房间或体验不足，请换一个日期或客群再试。')
+    return
+  }
+  loading.value = true
+  products.value = []
+  selectedIndex.value = 0
+  try {
+    const response = await hotelApi.generateProduct({
+      target_date: form.target_date,
+      weather: form.weather,
+      target_crowd: form.target_crowd,
+      minimum_gross_margin: form.minimum_gross_margin,
+      visitor_budget: form.visitor_budget,
+      preferred_price: form.preferred_price,
+      theme: form.theme,
+      creative_direction: form.creative_direction,
+      variant_count: form.variant_count,
+      room_inventory_id: form.room_inventory_id,
+      resource_selections: systemSelections(),
+    })
+    products.value = response.data.products?.length ? response.data.products : [response.data.product]
+    ElMessage.success('已按真实库存生成 ' + products.value.length + ' 套可选方案')
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    loading.value = false
+  }
+}
+async function publish() {
+  if (!product.value) return
+  try {
+    products.value[selectedIndex.value] = (await hotelApi.productStatus(product.value.id, 'ON_SALE')).data
+    ElMessage.success('已发布当前方案')
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
+}
+const product = computed(() => products.value[selectedIndex.value] || null)
+watch([() => form.target_date, () => form.target_crowd], () => {
+  products.value = []
+  syncSmartInventory()
+})
 onMounted(loadData)
 </script>
 
 <template>
-  <div class="page-head studio-head"><div><div class="eyebrow">PRODUCT STUDIO · AI OPERATING SYSTEM</div><h1>把临期库存，变成今晚值得发生的杭州故事</h1><p>同一份真实库存可以生成多套不同定位的方案；天气、客群、资源、价格和营销素材都会随输入重新计算。</p></div><div class="studio-head__mark">✦<small>STUDIO</small></div><el-button plain @click="loadData">重载资源</el-button></div>
-  <div v-if="!loadingData" class="studio-signal"><span><b>{{ selectedRoom?.room_type || '临期客房' }}</b><small>ROOM INVENTORY · 余 {{ selectedRoom?.available_count || 0 }} 间</small></span><span><b>{{ services.find(item => item.service_type === 'BREAKFAST')?.available_quantity || 0 }}</b><small>BREAKFASTS</small></span><span><b>{{ selectedPartners.reduce((sum, item) => sum + item.remaining_capacity, 0) || 0 }}</b><small>SELECTED EXPERIENCE SEATS</small></span><span class="studio-signal__context">{{ form.target_date }} · {{ weatherLabel }} · {{ form.target_crowd }}<small>真实规则约束</small></span></div>
-  <div v-if="!loadingData" class="studio-persona-quick"><span class="eyebrow">START WITH A REAL TRAVEL MOMENT</span><button :class="{ active: form.target_crowd === 'FAMILY' }" @click="setPersona('FAMILY', '雨天亲子非遗')">FAMILY · 亲子</button><button :class="{ active: form.target_crowd === 'COUPLE' }" @click="setPersona('COUPLE', '西湖城市旅拍')">COUPLE · 情侣</button><button :class="{ active: form.target_crowd === 'FRIENDS' }" @click="setPersona('FRIENDS', '雨天运动娱乐')">FRIENDS · 朋友</button><button :class="{ active: form.target_crowd === 'SOLO' }" @click="setPersona('SOLO', '一个人的咖啡漫游')">SOLO · 独自</button><button :class="{ active: form.target_crowd === 'LOCAL_WEEKEND' }" @click="setPersona('LOCAL_WEEKEND', '杭州城市演出夜')">LOCAL WEEKEND · 本地</button></div>
-  <div v-if="loadingData" class="panel empty-state">正在读取真实房量、服务与合作资源…</div>
-  <div v-else class="split-layout studio-layout">
-    <div class="panel sticky-panel studio-constraints"><div class="section-title" style="margin-top:0"><div><div class="eyebrow">CONSTRAINTS</div><h2>产品约束</h2></div><span>输入经营目标</span></div><el-form label-position="top"><div class="form-grid"><el-form-item label="目标入住日期"><el-date-picker v-model="form.target_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item><el-form-item label="天气场景"><el-select v-model="form.weather" style="width:100%"><el-option label="小雨 · 室内文化" value="RAIN" /><el-option label="晴天 · 城市漫游" value="SUNNY" /><el-option label="多云 · 轻户外" value="CLOUDY" /></el-select></el-form-item><el-form-item label="目标客群"><el-select v-model="form.target_crowd" style="width:100%"><el-option label="亲子家庭" value="FAMILY" /><el-option label="情侣" value="COUPLE" /><el-option label="朋友出行" value="FRIENDS" /><el-option label="一个人旅行" value="SOLO" /><el-option label="本地周末客" value="LOCAL_WEEKEND" /></el-select></el-form-item><el-form-item label="生成候选数量"><el-input-number v-model="form.variant_count" :min="1" :max="5" style="width:100%" /></el-form-item><el-form-item label="最低毛利率"><el-input v-model="form.minimum_gross_margin"><template #append>小数</template></el-input></el-form-item><el-form-item label="游客预算上限"><el-input v-model="form.visitor_budget"><template #prepend>¥</template></el-input></el-form-item><el-form-item label="价格策略锚点"><el-input v-model="form.preferred_price"><template #prepend>¥</template></el-input></el-form-item><el-form-item label="主题方向"><el-input v-model="form.theme" placeholder="如：雨天亲子非遗" /></el-form-item><el-form-item class="full" label="个性化创意方向"><el-input v-model="form.creative_direction" placeholder="可选：偏研学、偏松弛、偏茶文化、适合短视频传播" /></el-form-item><el-form-item class="full" label="临期房型"><el-select v-model="form.room_inventory_id" style="width:100%"><el-option v-for="item in rooms" :key="item.id" :label="`${item.room_type} · 余 ${item.available_count} 间 · 成本 ¥${item.accounting_cost}`" :value="item.id" /></el-select></el-form-item><el-form-item label="早餐 / 套"><el-select v-model="form.breakfast_id" style="width:100%"><el-option v-for="item in services.filter(s => s.service_type === 'BREAKFAST')" :key="item.id" :label="`${item.service_name} · 余 ${item.available_quantity}`" :value="item.id" /></el-select><el-input-number v-model="form.breakfast_qty" :min="1" style="margin-top:8px;width:100%" /></el-form-item><el-form-item label="延迟退房 / 套"><el-select v-model="form.late_id" style="width:100%"><el-option v-for="item in services.filter(s => s.service_type === 'LATE_CHECKOUT')" :key="item.id" :label="`${item.service_name} · 余 ${item.available_quantity}`" :value="item.id" /></el-select><el-input-number v-model="form.late_qty" :min="1" style="margin-top:8px;width:100%" /></el-form-item><el-form-item class="full" label="备选文化体验资源（候选方案会各选一项）"><el-select v-model="form.partner_ids" multiple collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="item in candidateResources" :key="item.id" :label="`${item.resource_name} · ${item.available_date} · ${item.start_time?.slice(0,5) || '--'} · 余 ${item.remaining_capacity} · 结算 ¥${item.settlement_price}`" :value="item.id" /></el-select><el-input-number v-model="form.partner_qty" :min="1" style="margin-top:8px;width:100%" /></el-form-item></div><el-button type="primary" size="large" :loading="loading" style="width:100%;margin-top:8px" @click="generate">✦ 生成差异化候选方案</el-button></el-form><div class="studio-flow"><span>READ INVENTORY</span><i>→</i><span>FILTER RESOURCES</span><i>→</i><span>VALIDATE MARGIN</span></div><div v-if="selectedRoom && selectedPartners.length" class="muted" style="margin-top:14px;line-height:1.8">当前将使用 {{ selectedRoom.room_type }} + {{ selectedPartners.map(item => item.resource_name).join('、') }}。多个体验会作为不同候选方案分别校验时间、库存与毛利，不会因为候选方案之间时间相同而互相阻塞。</div></div>
-    <div class="panel">
-      <div v-if="!products.length" class="empty-state"><div><div style="font-size:36px;color:#b8d8ce">✦</div><p>填写左侧约束后，系统会一次生成多套可审阅的杭州主题住宿产品。</p></div></div>
-      <template v-else><div class="candidate-tabs"><button v-for="(item,index) in products" :key="item.id" :class="['candidate-tab', {active:selectedIndex===index}]" @click="choose(index)"><span>方案 {{ index + 1 }}</span><strong>{{ item.product_name }}</strong><small>{{ item.weather }} · {{ item.sale_quantity }} 套 · ¥{{ item.suggested_price }}</small></button></div><div v-if="product"><div class="product-card__top"><span class="eyebrow">{{ product.theme }} · {{ product.target_crowd }} · {{ product.weather }}</span><StatusTag :status="product.status" /></div><h2 style="font-size:28px;margin:16px 0 6px">{{ product.product_name }}</h2><p class="muted" style="line-height:1.8">{{ product.recommendation_reason }}</p><div class="result-highlight"><div><small>可售数量</small><strong>{{ product.sale_quantity }} 套</strong></div><div><small>单套成本</small><strong>¥{{ product.unit_cost }}</strong></div><div><small>建议售价</small><strong>¥{{ product.suggested_price }}</strong></div><div><small>毛利率</small><strong>{{ (Number(product.gross_margin) * 100).toFixed(2) }}%</strong></div></div><div class="section-title"><h2>套餐资源与时段</h2><span>瓶颈：{{ product.bottleneck_resource }}</span></div><div class="product-card__resources"><span v-for="item in product.resources" :key="item.id">{{ item.resource_name }} × {{ item.quantity_per_package }} · {{ item.start_time?.slice(0,5) || '--' }}</span></div><div class="panel" style="box-shadow:none;background:#f7fbf8;margin-top:16px"><div class="muted">营销标题</div><strong>{{ product.marketing_title }}</strong><p class="muted" style="line-height:1.8">{{ product.marketing_content }}</p><div v-if="product.marketing_assets?.length" class="asset-pill-row"><span v-for="asset in product.marketing_assets" :key="asset.asset_type">{{ asset.platform }}</span></div><div class="muted">风险提示</div><p class="danger-text" style="line-height:1.7">{{ product.risk_message }}</p></div><el-alert v-if="fallbackUsed" title="当前使用了Mock/降级结果，库存与财务仍已由规则引擎重新校验。" type="warning" show-icon /><div v-if="validation" class="muted" style="margin-top:14px">规则校验 trace_id：{{ traceId }} · 最低允许售价 ¥{{ String((validation.financials as Record<string, unknown>)?.minimumAllowedPrice || '') }}</div><div class="form-actions"><el-button @click="$router.push(`/hotel/products/${product.id}`)">查看详情与营销素材</el-button><el-button type="primary" :disabled="product.status !== 'DRAFT'" @click="publish">模拟发布当前方案</el-button></div></div></template>
+  <div class="studio-head">
+    <div class="studio-head__copy">
+      <div class="eyebrow">智能组包</div>
+      <h1>留一点选择，剩下交给真实库存</h1>
+      <p>选好日期、同行的人和想要的感觉，系统会自动筛选可用房间与体验，生成几套不同风格的杭州周末方案。</p>
     </div>
+    <div class="studio-orb" aria-hidden="true"><i /> <span>杭</span></div>
+    <el-button plain class="studio-refresh" @click="loadData">更新可用资源</el-button>
   </div>
-  <div v-if="products.length" class="agent-inline-signal"><strong>{{ agentProvider === 'OPENCLAW' && !fallbackUsed ? 'OPENCLAW LIVE' : 'Mock Fallback' }}</strong><span>{{ agentSkill }} · fallback={{ String(fallbackUsed) }}</span><span v-if="agentId">agent={{ agentId }}</span><span>trace={{ traceId }}</span></div>
+
+  <div v-if="loadingData" class="panel empty-state">正在读取可用房间与体验…</div>
+  <template v-else>
+    <section class="brief-panel panel"><div><div class="eyebrow">一句话组包</div><strong>把同行人、日期、预算和偏好交给系统解析</strong><small>解析只会填入可修改的草稿；房间与体验仍按当前库存自动匹配。</small></div><el-input v-model="naturalBrief" placeholder="例如：周末两个人看展吃饭，预算 1200，想有一点夜游氛围" @keyup.enter="interpretBrief" /><el-button type="primary" :loading="interpreting" @click="interpretBrief">解析</el-button><div v-if="parsedFields.length" class="brief-chips"><span v-for="item in parsedFields" :key="item.label">{{ item.label }}：{{ item.value }}</span></div></section>
+    <div class="studio-persona-quick">
+      <span>这次想和谁出发？</span>
+      <button :class="{ active: form.target_crowd === 'FAMILY' }" @click="setPersona('FAMILY', '亲子探索日')">亲子家庭</button>
+      <button :class="{ active: form.target_crowd === 'COUPLE' }" @click="setPersona('COUPLE', '湖边约会')">两人约会</button>
+      <button :class="{ active: form.target_crowd === 'FRIENDS' }" @click="setPersona('FRIENDS', '城市玩乐')">朋友相聚</button>
+      <button :class="{ active: form.target_crowd === 'SOLO' }" @click="setPersona('SOLO', '一个人的咖啡漫游')">一个人慢游</button>
+      <button :class="{ active: form.target_crowd === 'LOCAL_WEEKEND' }" @click="setPersona('LOCAL_WEEKEND', '周末夜游')">本地周末</button>
+    </div>
+
+    <div class="smart-stats">
+      <div><small>可用房型</small><strong>{{ inventorySummary.rooms }}</strong><span>系统优先安排余量充足的房间</span></div>
+      <div><small>酒店服务</small><strong>{{ inventorySummary.services }}</strong><span>自动匹配早餐、延迟退房等服务</span></div>
+      <div><small>备选体验</small><strong>{{ inventorySummary.experiences }}</strong><span>每套方案会从中选择合适组合</span></div>
+      <div class="smart-stats__note"><i /> 已按日期与客群筛选<br /><span>天气只用于保障体验可执行</span></div>
+    </div>
+
+    <div class="studio-layout">
+      <section class="panel smart-form">
+        <div class="section-title smart-form__heading">
+          <div><div class="eyebrow">三步开始</div><h2>告诉系统你想要什么</h2></div>
+          <span>不用手动挑库存</span>
+        </div>
+        <el-form label-position="top">
+          <div class="form-grid compact-form">
+            <el-form-item label="入住日期">
+              <el-date-picker v-model="form.target_date" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+            </el-form-item>
+            <el-form-item label="参考售价">
+              <el-input v-model="form.preferred_price"><template #prepend>¥</template></el-input>
+            </el-form-item>
+            <el-form-item label="同行的人">
+              <el-select v-model="form.target_crowd" style="width:100%">
+                <el-option label="亲子家庭" value="FAMILY" />
+                <el-option label="两人约会" value="COUPLE" />
+                <el-option label="朋友相聚" value="FRIENDS" />
+                <el-option label="一个人慢游" value="SOLO" />
+                <el-option label="本地周末" value="LOCAL_WEEKEND" />
+              </el-select>
+            </el-form-item>
+            <div class="auto-variant"><span>候选方案</span><strong>自动生成 {{ form.variant_count }} 套</strong><small>根据可用库存给出不同搭配</small></div>
+            <el-form-item class="full" label="这次想怎么玩">
+              <el-input v-model="form.theme" placeholder="如：看展以后去吃一顿好饭、带孩子探索城市、朋友们夜游放松" />
+            </el-form-item>
+            <el-form-item class="full" label="想要的感觉（可选）">
+              <el-input v-model="form.creative_direction" placeholder="如：轻松一点、适合拍照、有故事感、适合发短视频" />
+            </el-form-item>
+          </div>
+          <el-button type="primary" size="large" class="generate-button" :loading="loading" @click="generate">生成我的杭州周末方案</el-button>
+        </el-form>
+
+        <div class="auto-picks">
+          <div class="auto-picks__head"><div><b>系统已准备好这些内容</b><span>每套按 {{ partySize }} 人出行自动计算</span></div><button @click="showAutoResources = !showAutoResources">{{ showAutoResources ? '收起' : '查看' }}</button></div>
+          <div class="auto-picks__main">
+            <span>{{ selectedRoom?.room_type || '等待可用房间' }}</span>
+            <i>＋</i>
+            <span>{{ selectedPartners.length }} 个备选体验</span>
+            <i>＋</i>
+            <span>{{ form.breakfast_id || form.late_id ? '贴心酒店服务' : '基础住宿' }}</span>
+          </div>
+          <div v-if="showAutoResources" class="auto-picks__detail">
+            <div v-if="selectedRoom"><small>住宿</small><strong>{{ selectedRoom.room_type }} · 余 {{ selectedRoom.available_count }} 间</strong></div>
+            <div v-for="item in selectedPartners" :key="item.id"><small>体验</small><strong>{{ item.resource_name }} · 余 {{ item.remaining_capacity }} 个名额</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel candidate-stage">
+        <div v-if="!products.length" class="candidate-empty">
+          <div class="candidate-empty__visual"><span>✦</span><i /><b>杭州周末</b></div>
+          <h2>先给一个方向，再看不同的答案</h2>
+          <p>系统会从当前真实库存中自动搭配房间、服务和体验。生成后，你可以挑选最适合发布的一套。</p>
+        </div>
+        <template v-else>
+          <div class="candidate-stage__head"><div><div class="eyebrow">候选方案</div><h2>挑一套最想让客人出发的</h2></div><span>{{ products.length }} 套可选</span></div>
+          <div class="candidate-tabs">
+            <button v-for="(item, index) in products" :key="item.id" :class="{ active: selectedIndex === index }" @click="choose(index)">
+              <small>方案 {{ index + 1 }}</small><strong>{{ item.product_name }}</strong><span>{{ item.theme }} · ¥{{ item.suggested_price }}</span>
+            </button>
+          </div>
+          <div v-if="product" class="candidate-detail">
+            <div class="candidate-detail__top"><span>{{ product.theme }}</span><StatusTag :status="product.status" /></div>
+            <h2>{{ product.product_name }}</h2>
+            <p>{{ product.recommendation_reason }}</p>
+            <div class="candidate-chips"><span v-for="item in product.resources" :key="item.id">{{ item.resource_name }}</span></div>
+            <div class="candidate-price"><div><small>参考售价</small><strong>¥{{ product.suggested_price }}</strong></div><div><small>可售数量</small><strong>{{ product.sale_quantity }} 套</strong></div><button @click="$router.push('/hotel/products/' + product.id)">查看完整内容与宣传素材 →</button></div>
+            <el-alert v-if="product.risk_message" :title="product.risk_message" type="info" :closable="false" show-icon />
+            <div class="form-actions"><el-button @click="$router.push('/hotel/products/' + product.id)">查看详情</el-button><el-button type="primary" :disabled="product.status !== 'DRAFT'" @click="publish">发布当前方案</el-button></div>
+          </div>
+        </template>
+      </section>
+    </div>
+  </template>
 </template>
 
 <style scoped>
-.studio-head{align-items:center;padding:28px 30px;background:linear-gradient(120deg,#eef7f1,#fffaf0);border:1px solid #dcebe3;border-radius:16px}.studio-head h1{max-width:720px;font-family:Georgia,'Songti SC',serif;font-weight:500;font-size:34px}.studio-head__mark{margin-left:auto;width:72px;height:72px;display:grid;place-items:center;border-radius:24px;background:#173f39;color:#d7b36d;font:35px Georgia,serif}.studio-head__mark small{display:block;font:8px Inter,sans-serif;letter-spacing:.15em;color:#d7ebe0}.studio-persona-quick{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:16px 0 2px;padding:13px 16px;border:1px solid #dbeae2;background:#fffdf8}.studio-persona-quick button{border:1px solid #d6e7df;background:#f6faf7;color:#55736a;border-radius:999px;padding:8px 11px;font-size:11px}.studio-persona-quick button.active,.studio-persona-quick button:hover{border-color:var(--teal);background:var(--teal);color:#fff}.studio-signal{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin:18px 0;background:#cbded5;border:1px solid #cbded5}.studio-signal>span{min-height:74px;padding:16px;background:#fff}.studio-signal b{display:block;font:24px Georgia,serif;color:var(--teal-dark)}.studio-signal small{display:block;color:var(--muted);font-size:10px;letter-spacing:.08em;margin-top:5px}.studio-signal__context{font-size:13px;color:var(--teal-dark);display:flex;flex-direction:column;justify-content:center}.studio-signal__context small{font-size:10px}.studio-layout{grid-template-columns:410px 1fr}.studio-constraints{border-top:3px solid var(--teal)}.studio-flow{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:18px;color:#78958a;font-size:9px;letter-spacing:.09em}.studio-flow i{font-style:normal;color:var(--gold)}.candidate-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:22px}.candidate-tab{border:1px solid var(--line);border-radius:12px;background:#fbfdfc;padding:12px;text-align:left;cursor:pointer;color:var(--ink);transition:.2s}.candidate-tab:hover,.candidate-tab.active{border-color:#69a998;background:#edf8f3;box-shadow:0 8px 22px rgba(15,118,110,.1)}.candidate-tab span,.candidate-tab small{display:block;color:var(--muted);font-size:11px}.candidate-tab strong{display:block;margin:7px 0;font-size:13px;line-height:1.4}.asset-pill-row{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.asset-pill-row span{font-size:11px;color:var(--teal-dark);background:#e1f2eb;padding:5px 8px;border-radius:999px}.agent-inline-signal{display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:11px 14px;margin:12px 0;color:#d9eee6;background:#173f39;border-radius:12px;font-size:11px}.agent-inline-signal strong{color:#d6edbd;font-size:13px}@media(max-width:900px){.studio-signal{grid-template-columns:repeat(2,1fr)}.studio-layout{grid-template-columns:1fr}}@media(max-width:800px){.candidate-tabs{grid-template-columns:1fr}.studio-head{display:block;padding:22px}.studio-head__mark{display:none}.studio-head h1{font-size:28px}.studio-signal>span{padding:12px}.studio-signal b{font-size:20px}.studio-persona-quick{align-items:flex-start}.studio-persona-quick .eyebrow{flex-basis:100%}}
+.studio-head{position:relative;display:flex;align-items:center;gap:22px;overflow:hidden;padding:34px 36px;border:1px solid #e2e9e5;border-radius:22px;background:linear-gradient(125deg,#fff 6%,#f3f8f5 66%,#faf4e9);box-shadow:0 16px 38px rgba(23,63,56,.06)}
+.studio-head__copy{position:relative;z-index:1;max-width:720px}.studio-head h1{margin:8px 0 10px;font:500 clamp(29px,3.4vw,42px)/1.16 Georgia,'Songti SC',serif;letter-spacing:-.7px}.studio-head p{margin:0;color:var(--muted);font-size:14px;line-height:1.8}.studio-orb{position:absolute;right:126px;top:-75px;width:250px;height:250px;border-radius:50%;background:radial-gradient(circle at 35% 32%,#fbdf9d,#e3b66d 34%,#30695e 36%,#173f39 68%);box-shadow:inset 0 0 0 18px rgba(255,255,255,.16);animation:float-orb 7s ease-in-out infinite}.studio-orb span{position:absolute;right:41px;bottom:34px;color:#fff;font:700 74px Georgia,serif;opacity:.86}.studio-orb i{position:absolute;inset:22px;border:1px solid rgba(255,255,255,.35);border-radius:50%}.studio-refresh{position:absolute;right:28px;bottom:24px;z-index:1}.studio-persona-quick{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 14px;padding:13px 16px;border:1px solid var(--line);border-radius:14px;background:#fff}.studio-persona-quick>span{margin-right:5px;color:var(--ink);font-size:13px;font-weight:700}.studio-persona-quick button{border:1px solid #dce9e2;border-radius:999px;background:#f8fbf9;color:#5b736d;padding:8px 13px;font-size:12px;transition:.2s}.studio-persona-quick button:hover,.studio-persona-quick button.active{border-color:var(--teal);background:var(--teal);color:#fff;transform:translateY(-1px)}.smart-stats{display:grid;grid-template-columns:repeat(4,1fr);overflow:hidden;margin-bottom:20px;border:1px solid #e2ebe6;border-radius:16px;background:#fff}.smart-stats>div{min-height:92px;padding:17px 20px;border-right:1px solid #edf1ee}.smart-stats>div:last-child{border-right:0}.smart-stats small,.smart-stats span{display:block;color:var(--muted);font-size:11px}.smart-stats strong{display:inline-block;margin:5px 7px 2px 0;color:var(--teal-dark);font:28px Georgia,serif}.smart-stats__note{display:flex;align-items:center;color:#496a60;font-size:13px;line-height:1.6;background:#fafcfb}.smart-stats__note i{width:8px;height:8px;margin-right:9px;border-radius:50%;background:#65ac8b;box-shadow:0 0 0 5px #e7f4ed}.studio-layout{display:grid;grid-template-columns:minmax(310px,.78fr) minmax(0,1.22fr);gap:20px;align-items:start}.smart-form{padding:23px}.smart-form__heading{margin:0 0 18px}.smart-form__heading h2{margin-top:5px;font-size:20px}.compact-form{gap:12px}.smart-form :deep(.el-form-item){margin-bottom:12px}.smart-form :deep(.el-form-item__label){padding-bottom:5px;font-size:13px;font-weight:650;line-height:1.3}.generate-button{width:100%;margin-top:4px;height:44px;font-size:14px}.auto-picks{margin-top:18px;padding:15px;border:1px solid #e2ece6;border-radius:14px;background:#f8fbf9}.auto-picks__head{display:flex;justify-content:space-between;gap:10px;align-items:start}.auto-picks__head b{display:block;font-size:13px}.auto-picks__head span{display:block;margin-top:3px;color:var(--muted);font-size:11px}.auto-picks__head button{border:0;background:none;color:var(--teal);font-size:12px}.auto-picks__main{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:13px}.auto-picks__main span{padding:6px 8px;border-radius:8px;background:#fff;color:#44665c;font-size:11px}.auto-picks__main i{font-style:normal;color:#95b8ab}.auto-picks__detail{display:grid;gap:6px;margin-top:12px;padding-top:10px;border-top:1px solid #dfeae4}.auto-picks__detail div{display:flex;justify-content:space-between;gap:9px}.auto-picks__detail small{color:var(--muted);font-size:11px}.auto-picks__detail strong{font-size:11px;text-align:right}.candidate-stage{min-height:560px;padding:25px}.candidate-empty{display:grid;place-items:center;align-content:center;min-height:510px;text-align:center}.candidate-empty__visual{position:relative;width:150px;height:150px;margin-bottom:18px;border-radius:44px;background:linear-gradient(145deg,#e8f3ed,#fff6e7);box-shadow:inset 0 0 0 1px #e3ebe6}.candidate-empty__visual span{position:absolute;left:26px;top:24px;color:#d59c4d;font-size:43px}.candidate-empty__visual i{position:absolute;right:22px;bottom:31px;width:73px;height:73px;border:2px solid #3d8274;border-radius:50%}.candidate-empty__visual b{position:absolute;right:15px;bottom:13px;color:#326659;font:15px Georgia,serif}.candidate-empty h2,.candidate-stage__head h2{margin:4px 0 9px;font:500 26px Georgia,'Songti SC',serif}.candidate-empty p{max-width:400px;margin:0;color:var(--muted);font-size:13px;line-height:1.8}.candidate-stage__head{display:flex;align-items:end;justify-content:space-between;gap:16px}.candidate-stage__head>span{padding:6px 9px;border-radius:999px;background:#edf7f2;color:var(--teal-dark);font-size:11px}.candidate-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:18px 0}.candidate-tabs button{min-height:110px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:13px;text-align:left;color:var(--ink);transition:.2s}.candidate-tabs button:hover,.candidate-tabs button.active{border-color:#78b6a2;background:#f2faf6;box-shadow:0 10px 24px rgba(22,95,80,.09);transform:translateY(-2px)}.candidate-tabs small,.candidate-tabs span{display:block;color:var(--muted);font-size:11px}.candidate-tabs strong{display:block;margin:8px 0 6px;font-size:14px;line-height:1.35}.candidate-detail{padding:20px;border-top:1px solid var(--line)}.candidate-detail__top{display:flex;justify-content:space-between;gap:10px;align-items:center}.candidate-detail__top>span{color:var(--teal);font-size:11px;font-weight:700}.candidate-detail h2{margin:13px 0 8px;font-size:25px;line-height:1.3}.candidate-detail>p{margin:0;color:var(--muted);font-size:14px;line-height:1.8}.candidate-chips{display:flex;flex-wrap:wrap;gap:7px;margin:15px 0}.candidate-chips span{padding:6px 9px;border-radius:999px;background:#f1f7f4;color:#39695b;font-size:11px}.candidate-price{display:flex;align-items:center;gap:23px;margin:18px 0;padding:15px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.candidate-price div{min-width:96px}.candidate-price small{display:block;color:var(--muted);font-size:11px}.candidate-price strong{display:block;margin-top:4px;font:24px Georgia,serif;color:var(--teal-dark)}.candidate-price button{margin-left:auto;border:0;background:none;color:var(--teal);font-size:12px;font-weight:650}.form-actions{margin-top:17px}@media(max-width:1050px){.studio-layout{grid-template-columns:1fr}.candidate-stage{min-height:0}.candidate-empty{min-height:340px}}@media(max-width:780px){.studio-head{padding:25px 22px}.studio-orb{right:-58px;top:-96px;opacity:.5}.studio-refresh{position:static;margin-left:auto;align-self:end}.smart-stats{grid-template-columns:1fr 1fr}.smart-stats>div:nth-child(2){border-right:0}.smart-stats>div:nth-child(-n+2){border-bottom:1px solid #edf1ee}.candidate-tabs{grid-template-columns:1fr}.candidate-tabs button{min-height:0}.candidate-price{gap:13px;flex-wrap:wrap}.candidate-price button{margin-left:0;flex-basis:100%;text-align:left}}@media(max-width:500px){.smart-stats{grid-template-columns:1fr}.smart-stats>div{border-right:0;border-bottom:1px solid #edf1ee}.smart-stats>div:last-child{border-bottom:0}.studio-persona-quick>span{flex-basis:100%}.candidate-stage,.smart-form{padding:18px}}@keyframes float-orb{50%{transform:translateY(10px) rotate(5deg)}}
+.brief-panel{display:grid;grid-template-columns:minmax(220px,1fr) minmax(260px,1.4fr) auto;align-items:center;gap:12px;margin:0 0 14px}.brief-panel strong,.brief-panel small{display:block}.brief-panel strong{margin-top:4px;font-size:14px}.brief-panel small{margin-top:3px;color:var(--muted);font-size:10px;line-height:1.5}.brief-chips{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px}.brief-chips span{padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel-soft);color:var(--muted);font-size:10px}.auto-variant{display:grid;align-content:center;min-height:72px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel-soft)}.auto-variant span,.auto-variant small{color:var(--muted);font-size:10px}.auto-variant strong{margin:4px 0;color:var(--ink);font-family:var(--font-mono);font-size:13px}.studio-head{padding:24px 28px;border-radius:12px;background:var(--paper);box-shadow:var(--shadow)}.studio-head h1,.candidate-empty h2,.candidate-stage__head h2{font-family:var(--font-sans);font-weight:650}.studio-orb{display:none}.studio-refresh{position:static;margin-left:auto}.studio-persona-quick{margin:14px 0 10px;border-radius:10px;background:var(--paper)}.studio-persona-quick button{border-radius:7px;background:var(--panel-soft);border-color:var(--line);padding:7px 10px}.studio-persona-quick button:hover,.studio-persona-quick button.active{border-color:#65766f;background:#3d4d48}.smart-stats{margin-bottom:14px;border-radius:10px}.smart-stats strong{font-family:var(--font-mono);font-size:22px}.smart-stats__note{background:var(--panel-soft)}.studio-layout{gap:14px}.smart-form,.candidate-stage{padding:18px}.candidate-stage{min-height:500px}.candidate-tabs{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:7px;margin:13px 0}.candidate-tabs button{min-height:88px;padding:10px;border-radius:8px}.candidate-tabs button:hover,.candidate-tabs button.active{border-color:#9ba8a2;background:var(--panel-soft);box-shadow:none}.candidate-detail{padding:14px 0}.candidate-detail h2{font-size:21px}.candidate-price strong{font-family:var(--font-mono);font-size:20px}.candidate-chips span{border:1px solid var(--line);border-radius:6px;background:var(--panel-soft);color:var(--muted)}@media(max-width:780px){.brief-panel{grid-template-columns:1fr}.brief-panel .el-button{width:100%}.studio-refresh{margin-left:0}.auto-variant{grid-column:1/-1}}
 </style>

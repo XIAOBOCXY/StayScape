@@ -43,28 +43,28 @@ onMounted(load)
     </section>
 
     <section class="tonight-strip">
-      <div class="tonight-title"><div class="eyebrow">TONIGHT IN HANGZHOU</div><h2>今晚的杭州</h2><p>不赶景点，先找到适合此刻的那一套。</p></div>
-      <div class="tonight-fact"><span class="fact-icon">☂</span><div><small>WEATHER MOOD</small><strong>{{ weatherMood }}</strong></div></div>
-      <div class="tonight-fact"><span class="fact-icon">✦</span><div><small>LIVE EXPERIENCES</small><strong>{{ products.length || '—' }} 个可售体验</strong></div></div>
+      <div class="tonight-title"><div class="eyebrow">HANGZHOU THIS WEEKEND</div><h2>今天想去哪里？</h2><p>不赶景点，先挑一段适合此刻的杭州时光。</p></div>
+      <div class="tonight-fact"><span class="fact-icon">✦</span><div><small>WEEKEND MOOD</small><strong>把时间留给喜欢的地方</strong></div></div>
+      <div class="tonight-fact"><span class="fact-icon">⌂</span><div><small>HANGZHOU IDEAS</small><strong>多种玩法，慢慢挑</strong></div></div>
       <div class="tonight-audiences"><span>FAMILY</span><span>COUPLE</span><span>LOCAL WEEKEND</span></div>
     </section>
 
     <section class="home-section">
       <div class="editorial-heading"><div><div class="eyebrow">CURATED FOR THIS MOMENT</div><h2>今晚住哪一段杭州？</h2></div><router-link to="/visitor/products">查看全部 <span>↗</span></router-link></div>
-      <div v-if="loading" class="home-loading"><span /> 正在寻找今天仍然可用的体验…</div>
+      <div v-if="loading" class="home-loading"><span /> 正在寻找今天想去的杭州体验…</div>
       <el-alert v-else-if="error" :title="error" type="error" show-icon />
       <div v-else-if="products.length" class="product-grid product-grid--editorial"><ProductCard v-for="product in products.slice(0, 12)" :key="product.id" :product="product" public-view /></div>
-      <div v-else class="home-empty"><div class="empty-mark">S</div><h3>今晚的公开套餐正在更新</h3><p>酒店确认发布后，体验会立即出现在这里。你也可以先告诉我们想怎么玩。</p><el-button type="primary" plain @click="$router.push('/visitor/recommend')">先获取个性化推荐</el-button></div>
+      <div v-else class="home-empty"><div class="empty-mark">S</div><h3>新的杭州玩法正在准备</h3><p>准备好后会出现在这里。你也可以先告诉我们想怎么玩。</p><el-button type="primary" plain @click="$router.push('/visitor/recommend')">先获取个性化推荐</el-button></div>
     </section>
 
     <section class="story-band">
       <div><div class="eyebrow">THE STAYSCAPE IDEA</div><h2>不把雨天当作<br /><em>行程的暂停键。</em></h2></div>
-      <p>StayScape 把临期房、酒店服务和杭州的文化体验放在同一张实时地图上。你看到的不是一间空房，而是一段已经为今天准备好的生活提案。</p>
+      <p>从西湖晨走到良渚看展，从亲子乐园到城市夜游。挑一段想去的杭州时光，慢慢安排在周末。</p>
     </section>
 
     <section class="home-section home-section--small">
       <div class="editorial-heading"><div><div class="eyebrow">HOW IT FEELS</div><h2>一晚，三个瞬间</h2></div></div>
-      <div class="moment-row"><div><span>01</span><strong>入住</strong><p>先把行李放下，让节奏慢下来。</p></div><div><span>02</span><strong>体验</strong><p>在一张桌子旁，认识杭州的手艺。</p></div><div><span>03</span><strong>回到房间</strong><p>带着一件自己完成的东西入睡。</p></div></div>
+      <div class="moment-row"><div><span>01</span><strong>入住</strong><p>先把行李放下，让节奏慢下来。</p></div><div><span>02</span><strong>出发</strong><p>看展、逛乐园，或沿江边骑一段路。</p></div><div><span>03</span><strong>回到房间</strong><p>带着一件自己完成的东西入睡。</p></div></div>
     </section>
   </div>
 </template>

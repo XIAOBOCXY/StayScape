@@ -29,12 +29,23 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stayscape}:${POSTGRES_PASSWORD:-stayscape}@db:5432/${POSTGRES_DB:-stayscape}
       MODE: ${MODE:-demo}
       AGENT_PROVIDER: ${AGENT_PROVIDER:-mock}
-      AGENT_TIMEOUT_SECONDS: ${AGENT_TIMEOUT_SECONDS:-20}
+      AGENT_TIMEOUT_SECONDS: ${AGENT_TIMEOUT_SECONDS:-90}
       AGENT_MAX_RETRIES: ${AGENT_MAX_RETRIES:-1}
+      # Used only in the server container when an operator requests a Wan image.
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      WAN_IMAGE_ENABLED: ${WAN_IMAGE_ENABLED:-false}
+      WAN_IMAGE_MODEL: ${WAN_IMAGE_MODEL:-wan2.7-image}
+      WAN_IMAGE_WORKSPACE_ID: ${WAN_IMAGE_WORKSPACE_ID:-}
+      WAN_IMAGE_REGION: ${WAN_IMAGE_REGION:-cn-beijing}
+      WAN_IMAGE_API_URL: ${WAN_IMAGE_API_URL:-}
+      WAN_IMAGE_API_KEY: ${WAN_IMAGE_API_KEY:-}
+      WAN_IMAGE_SIZE: ${WAN_IMAGE_SIZE:-1536*2048}
+      WAN_IMAGE_WATERMARK: ${WAN_IMAGE_WATERMARK:-true}
+      WAN_IMAGE_TIMEOUT_SECONDS: ${WAN_IMAGE_TIMEOUT_SECONDS:-90}
       OPENCLAW_BASE_URL: ${OPENCLAW_BASE_URL:-http://openclaw:18789}
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_AGENT_TARGET: ${OPENCLAW_AGENT_TARGET:-openclaw/default}
-      OPENCLAW_PRIMARY_MODEL: ${OPENCLAW_PRIMARY_MODEL:-qwen/qwen3.5-plus}
+      OPENCLAW_PRIMARY_MODEL: ${OPENCLAW_PRIMARY_MODEL:?Set OPENCLAW_PRIMARY_MODEL in .env}
       OPENCLAW_TRANSPORT: ${OPENCLAW_TRANSPORT:-responses}
       OPENCLAW_RESPONSES_PATH: ${OPENCLAW_RESPONSES_PATH:-/v1/responses}
       OPENCLAW_AGENT_ID: ${OPENCLAW_AGENT_ID:-stayscape-main}
@@ -57,6 +68,9 @@ services:
       SEED_ON_STARTUP: ${SEED_ON_STARTUP:-false}
       SEED_DEMO_ON_STARTUP: ${SEED_DEMO_ON_STARTUP:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
+    volumes:
+      # Generated images remain on the server and are ignored by Git.
+      - ./runtime/generated-media:/app/generated_media
     depends_on:
       db:
         condition: service_healthy

@@ -29,12 +29,15 @@ def main() -> None:
     token = env("OPENCLAW_GATEWAY_TOKEN")
     if not token:
         raise SystemExit("OPENCLAW_GATEWAY_TOKEN is required to render a live OpenClaw config")
+    primary_model = env("OPENCLAW_PRIMARY_MODEL").strip()
+    if not primary_model:
+        raise SystemExit("OPENCLAW_PRIMARY_MODEL must be set in .env")
     substitutions = {
         "OPENCLAW_GATEWAY_TOKEN": token,
         "STAYSCAPE_AGENT_TOOL_TOKEN": env("STAYSCAPE_AGENT_TOOL_TOKEN"),
         "STAYSCAPE_API_INTERNAL_URL": env("STAYSCAPE_API_INTERNAL_URL", "http://server:8000"),
         "STAYSCAPE_HOTEL_ID": env("STAYSCAPE_HOTEL_ID", "1"),
-        "OPENCLAW_PRIMARY_MODEL": env("OPENCLAW_PRIMARY_MODEL", "qwen/qwen3.5-plus"),
+        "OPENCLAW_PRIMARY_MODEL": primary_model,
         "OPENCLAW_RUNTIME_PLUGIN_ROOT": env("OPENCLAW_RUNTIME_PLUGIN_ROOT", "/opt/stayscape/runtime-plugins"),
         "FEISHU_APP_ID": env("FEISHU_APP_ID"),
         "FEISHU_APP_SECRET": env("FEISHU_APP_SECRET"),

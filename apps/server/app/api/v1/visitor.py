@@ -16,7 +16,7 @@ from ...repositories.product_repository import get_product, list_products
 from ...schemas.products import ProductRead
 from ...schemas.visitor import VisitorIntentCancelRequest, VisitorIntentCreate, VisitorInterpretRequest, VisitorInterpretResponse, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
 from ...services.inventory_service import reconcile_published_capacity, release_intent_inventory, reserve_product_inventory, sweep_expired_intents
-from ...services.serializers import product_to_dict
+from ...services.public_copy import public_travel_copy, visitor_product_to_dict
 from ...rules.availability_rule import tokens
 from ...rules.crowd_rule import crowd_supported
 from ...rules.time_rule import intervals_overlap
@@ -133,14 +133,18 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     activity_level = "HIGH" if any(word in text for word in ("刺激", "挑战", "运动", "攀岩", "卡丁车")) else "LOW" if any(word in text for word in ("不想走太多路", "少走路", "轻松", "休息", "慢一点")) else None
     if activity_level:
         updates["activity_level"] = activity_level
-    if "明天" in text:
-        updates["target_date"] = date.today() + timedelta(days=1)
-    elif "今天" in text:
-        updates["target_date"] = date.today()
-    else:
-        weekday = parse_weekday(text)
-        if weekday:
-            updates["target_date"] = weekday
+    # A date selected in the UI is explicit and must win over casual wording
+    # such as “tomorrow” in the free-text note.  Only infer a date when none
+    # was supplied by the visitor.
+    if request.target_date is None:
+        if "明天" in text:
+            updates["target_date"] = date.today() + timedelta(days=1)
+        elif "今天" in text:
+            updates["target_date"] = date.today()
+        else:
+            weekday = parse_weekday(text)
+            if weekday:
+                updates["target_date"] = weekday
     weather = "RAIN" if any(word in text for word in ("雨", "下雨", "湿冷")) else "SUNNY" if "晴" in text else "CLOUDY" if any(word in text for word in ("多云", "阴天")) else None
     if weather:
         updates["weather"] = weather
@@ -261,7 +265,7 @@ def safe_product_context(db: Session, product: TravelProduct) -> dict[str, Any]:
     for row in product.resources:
         item: dict[str, Any] = {
             "name": row.resource_name,
-            "type": "住宿" if row.resource_type == "ROOM" else "酒店服务" if row.resource_type == "HOTEL_SERVICE" else "文旅体验",
+            "type": "住宿" if row.resource_type == "ROOM" else "酒店内服务" if row.resource_type == "HOTEL_SERVICE" else "杭州体验",
             "quantity_per_package": row.quantity_per_package,
         }
         source = room if row.resource_type == "ROOM" else db.get(HotelService if row.resource_type == "HOTEL_SERVICE" else PartnerResource, row.resource_id)
@@ -290,6 +294,42 @@ def safe_product_context(db: Session, product: TravelProduct) -> dict[str, Any]:
         "resources": resources,
         "recommendation_reason": product.recommendation_reason,
     }
+
+
+def alternative_products(db: Session, current: TravelProduct | None, request: VisitorRecommendRequest) -> list[TravelProduct]:
+    """Rank visible alternatives without requiring an exact duplicate date.
+
+    A traveller asking "还有什么" should get useful cards even when the same
+    theme is not stocked on the exact date.  We prefer exact date/crowd/budget
+    matches, then relax only the date while retaining the remaining signals.
+    """
+
+    scored: list[tuple[int, TravelProduct]] = []
+    for item in list_products(db, public_only=True):
+        if current and item.id == current.id:
+            continue
+        score = 0
+        if request.target_date:
+            score += 7 if item.target_date == request.target_date else 0
+        if item.target_crowd == request.target_crowd:
+            score += 5
+        elif item.target_crowd == "ALL":
+            score += 2
+        if item.suggested_price <= request.budget:
+            score += 4
+        else:
+            score -= min(4, int((item.suggested_price - request.budget) / Decimal("200")) + 1)
+        child_ok, weather_ok, interest_ok, _ = matches_conditions(db, item, request)
+        score += 3 if child_ok else -3
+        score += 3 if weather_ok else -2
+        score += 3 if interest_ok else 0
+        if current and item.theme != current.theme:
+            score += 1
+        if item.sale_quantity > 3:
+            score += 1
+        scored.append((score, item))
+    scored.sort(key=lambda pair: (pair[0], pair[1].sale_quantity, -float(pair[1].suggested_price)), reverse=True)
+    return [item for _, item in scored[:3]]
 
 
 def matches_conditions(db: Session, product: TravelProduct, request: VisitorRecommendRequest) -> tuple[bool, bool, bool, int]:
@@ -336,19 +376,19 @@ def matches_conditions(db: Session, product: TravelProduct, request: VisitorReco
 
 def build_schedule(db: Session, product: TravelProduct, arrival: time | None = None, preferred: time | None = None) -> list[dict[str, str]]:
     check_in = max(time(15, 0), arrival or time(15, 0))
-    schedule = [{"time": check_in.strftime("%H:%M"), "title": "办理入住", "description": "酒店前台办理入住，领取套餐时间卡"}]
+    schedule = [{"time": check_in.strftime("%H:%M"), "title": "办理入住", "description": "到店后办理入住，稍作休息再出发"}]
     for row in product.resources:
         if row.resource_type == "HOTEL_SERVICE":
             service = db.get(HotelService, row.resource_id)
             if service and service.start_time and (not arrival or service.start_time >= arrival):
-                schedule.append({"time": service.start_time.strftime("%H:%M"), "title": service.service_name, "description": f"每套使用{row.quantity_per_package}份"})
+                schedule.append({"time": service.start_time.strftime("%H:%M"), "title": service.service_name, "description": "可以慢慢享用"})
         elif row.resource_type == "PARTNER_RESOURCE":
             resource = db.get(PartnerResource, row.resource_id)
             if resource and resource.start_time and (not arrival or resource.start_time >= arrival):
                 schedule.append({"time": resource.start_time.strftime("%H:%M"), "title": resource.resource_name, "description": f"地址：{resource.address}"})
     schedule.sort(key=lambda item: item["time"])
     if preferred:
-        schedule.append({"time": preferred.strftime("%H:%M"), "title": "游客偏好时段", "description": "最终场次以商户实时确认结果为准"})
+        schedule.append({"time": preferred.strftime("%H:%M"), "title": "游客偏好时段", "description": "具体时间会在出行前和你确认"})
     return schedule
 
 
@@ -356,7 +396,7 @@ def build_schedule(db: Session, product: TravelProduct, arrival: time | None = N
 def products(query: VisitorProductQuery = Depends(), db: Session = Depends(get_db)):
     if sweep_expired_intents(db):
         db.commit()
-    return [product_to_dict(item) for item in public_items(db, query)]
+    return [visitor_product_to_dict(item) for item in public_items(db, query)]
 
 
 @router.get("/products/{product_id}", response_model=ProductRead)
@@ -366,7 +406,7 @@ def product_detail(product_id: int, db: Session = Depends(get_db)):
     product = get_product(db, product_id)
     if not product or product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0:
         raise AppError("NOT_FOUND", "当前套餐不存在或已下架", status_code=404)
-    return product_to_dict(product)
+    return visitor_product_to_dict(product)
 
 
 @router.post("/consult")
@@ -375,6 +415,8 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
     if product and (product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0):
         product = None
     interpreted_request, _ = enrich_recommend_request(VisitorRecommendRequest(natural_language=request.natural_language or request.question, weather=request.weather, target_crowd=product.target_crowd if product else "FAMILY"))
+    asks_for_alternatives = any(word in request.question for word in ("还有", "其他", "推荐", "别的", "换一个", "类似"))
+    visible_products = list_products(db, public_only=True)
     payload = {
         "question": request.question,
         "natural_language": request.natural_language or request.question,
@@ -382,28 +424,38 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
         "target_crowd": interpreted_request.target_crowd,
         "negative_interests": interpreted_request.negative_interests,
         "activity_level": interpreted_request.activity_level,
-        "products": [safe_product_context(db, product)] if product else [safe_product_context(db, item) for item in public_items(db)],
+        "products": [safe_product_context(db, item) for item in (visible_products if asks_for_alternatives else ([product] if product else visible_products))],
         "allergy_information": "",
     }
     result = AgentOrchestrator(db, hotel_id=product.hotel_id if product else None, source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id=request.conversation_id).match_visitor(payload)
-    answer = getattr(result.value, "answer", "") or "我会结合当前可售库存、预算、客群、天气和体验时间给出推荐；最终库存与价格以系统实时计算为准。"
+    answer = public_travel_copy(
+        getattr(result.value, "answer", ""),
+        "告诉我同行人数、预算和想去的地方，我会为你挑选合适的杭州玩法。",
+    )
     suggestions = []
-    if any(word in request.question for word in ("还有", "其他", "推荐", "别的")):
+    if asks_for_alternatives:
         effective = VisitorRecommendRequest(natural_language=request.question, weather=request.weather, budget=product.visitor_budget_limit if product else Decimal("700"), target_date=product.target_date if product else None, target_crowd=product.target_crowd if product else "FAMILY")
         effective, _ = enrich_recommend_request(effective)
-        candidates = []
-        for item in list_products(db, public_only=True):
-            if product and item.id == product.id:
-                continue
-            if effective.target_date and item.target_date != effective.target_date:
-                continue
-            if item.suggested_price > effective.budget:
-                continue
-            child_ok, weather_ok, interest_ok, _ = matches_conditions(db, item, effective)
-            if child_ok and weather_ok and interest_ok:
-                candidates.append(item)
-        suggestions = [product_to_dict(item) for item in candidates[:3]]
-    return {"trace_id": result.trace_id, "answer": answer, "safety_notes": getattr(result.value, "safety_notes", "") or "AI建议不替代商户对过敏、儿童安全和场次的最终确认。", "product": product_to_dict(product) if product else None, "suggestions": suggestions, "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河还是室内文化体验？", "预算上限和可接受场次是什么？"], "fallback_used": result.fallback_used}
+        ranked = alternative_products(db, product, effective)
+        # Let a live Agent's selections influence order only when they are
+        # still public products; deterministic ranking remains the safe
+        # fallback and guarantees several useful cards.
+        selected_ids = [value for value in getattr(result.value, "selected_product_ids", []) if isinstance(value, int)]
+        selected = [item for item in ranked if item.id in selected_ids]
+        ordered = [*selected, *[item for item in ranked if item.id not in {candidate.id for candidate in selected}]]
+        suggestions = [visitor_product_to_dict(item) for item in ordered[:3]]
+    return {
+        "trace_id": result.trace_id,
+        "answer": answer,
+        "safety_notes": public_travel_copy(
+            getattr(result.value, "safety_notes", ""),
+            "如有饮食、儿童陪同或行动安排方面的需求，提交预约意向时告诉酒店即可。",
+        ),
+        "product": visitor_product_to_dict(product) if product else None,
+        "suggestions": suggestions,
+        "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河、博物馆还是主题乐园？", "这次大约准备花多少？"],
+        "fallback_used": result.fallback_used,
+    }
 
 
 @router.post("/interpret", response_model=VisitorInterpretResponse)
@@ -458,9 +510,20 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
     results = []
     for item in sorted(valid_candidates, key=lambda product: match_meta[product.id][3], reverse=True):
         children_match, weather_match, interest_match, score = match_meta[item.id]
-        reason = output.reasons.get(str(item.id), item.recommendation_reason)
+        reason = public_travel_copy(
+            output.reasons.get(str(item.id), item.recommendation_reason),
+            f"围绕{item.theme or '杭州周末'}安排住宿与在地玩法，适合轻松度过一段杭州时间。",
+        )
+        adjustments = [
+            public_travel_copy(value, "")
+            for value in (output.limited_adjustments.get(str(item.id)) or [])
+        ]
+        adjustments = [value for value in adjustments if value] or [
+            "预约意向中可以备注你更喜欢的玩法。",
+            "出行前留意酒店发来的确认消息。",
+        ]
         results.append({
-            "product": product_to_dict(item),
+            "product": visitor_product_to_dict(item),
             "score": min(100, score),
             "recommendation_reason": reason,
             "budget_match": item.suggested_price <= request.budget,
@@ -468,8 +531,8 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
             "weather_match": weather_match,
             "interest_match": interest_match,
             "schedule": build_schedule(db, item, request.arrival_time, request.preferred_experience_time),
-            "limited_adjustments": output.limited_adjustments.get(str(item.id)) or ["预约意向中可备注希望的体验场次", "实时名额变化后以酒店与商户确认结果为准"],
-            "allergy_warning": output.allergy_warning or None,
+            "limited_adjustments": adjustments,
+            "allergy_warning": public_travel_copy(output.allergy_warning, "") or None,
         })
     return {"results": results, "trace_id": agent_result.trace_id, "fallback_used": agent_result.fallback_used, "interpreted_needs": interpreted, "provider": getattr(agent_result, "provider", "MOCK"), "skill_name": "stayscape-visitor-matcher", "skill_version": getattr(agent_result, "skill_version", "")}
 

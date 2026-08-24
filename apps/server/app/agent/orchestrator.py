@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from .openclaw import OpenClawAgent
 from .schemas import ProductAgentOutput, VisitorAgentOutput
 
 T = TypeVar("T", bound=BaseModel)
+logger = logging.getLogger(__name__)
+
 RETRYABLE_NETWORK_ERRORS = (TimeoutError, httpx.TimeoutException, httpx.TransportError, ConnectionError)
 
 
@@ -209,7 +212,20 @@ class AgentOrchestrator:
                 final_value=None, status=status, validation=validation, error_code=error_code,
                 error_message=error_message, duration_ms=duration_ms, retry_count=retry_count, fallback_used=False,
             )
-            raise AppError("AGENT_UNAVAILABLE", "OpenClaw Gateway或已安装Skill不可用，Live模式不会自动降级到Mock", status_code=503, retryable=True, details={"trace_id": trace_id, "provider": "OPENCLAW"})
+            # Agent calls happen before domain mutations. Commit the diagnostic row so a live-mode
+            # refusal remains visible to operators after FastAPI rolls back the request transaction.
+            self.db.commit()
+            logger.warning(
+                "OpenClaw request failed trace=%s skill=%s status=%s code=%s detail=%s",
+                trace_id, skill_name, status, error_code, (error_message or "")[:500],
+            )
+            raise AppError(
+                "AGENT_UNAVAILABLE",
+                "AI服务暂时未返回可用结果，请稍后重试",
+                status_code=503,
+                retryable=True,
+                details={"trace_id": trace_id, "provider": "OPENCLAW", "status": status, "error_code": error_code},
+            )
 
         if final_value is None:
             fallback_used = True

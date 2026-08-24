@@ -20,10 +20,53 @@ from ..rules.weather_rule import is_weather_supported
 from ..schemas.products import GenerateProductRequest
 from .inventory_service import ensure_publish_capacity, reconcile_published_capacity
 from .poster_service import poster_asset
+from .wan_image_service import WanImageService
 
 
 DEFAULT_QUANTITIES = {"BREAKFAST": 3, "LATE_CHECKOUT": 1}
 NON_EXCLUSIVE_SERVICE_TYPES = {"BREAKFAST", "PARKING", "LUGGAGE_STORAGE", "LATE_CHECKOUT"}
+
+MARKETING_STYLE_GUIDES: dict[str, dict[str, str]] = {
+    "ARTISTIC": {"label": "文艺叙事", "direction": "用有画面感的旅行随笔写法，从具体时刻开场，写光线、声音和动作；克制、温柔，不硬推销。", "visual": "低饱和、留白、晨昏光线与细节特写，像一本杭州周末小刊物"},
+    "PROMOTIONAL": {"label": "直接推荐", "direction": "先说适合谁和怎么玩，再给出真实包含内容与预约提醒；可以利落分点，但不得虚构折扣、限量、评价或价格。", "visual": "明快、干净、突出体验动作和周末出发感"},
+    "EMPATHETIC": {"label": "情绪共鸣", "direction": "从旅行者想放松、想陪伴或想换节奏的心情切入；语气像懂你的朋友，温暖但不煽情。", "visual": "柔和自然光、松弛的陪伴感与安静细节"},
+    "SEEDING": {"label": "轻松种草", "direction": "用朋友分享周末发现的口吻：首句有钩子，接着写2到3个值得去的具体理由与可感知的细节；短句友好。", "visual": "有生活感、色彩轻快、像真实旅行相册，预留海报文字安全区"},
+}
+
+
+def marketing_style_direction(style: str, extra_direction: str = "") -> str:
+    guide = MARKETING_STYLE_GUIDES.get(style, MARKETING_STYLE_GUIDES["SEEDING"])
+    extra = f" 经营者补充方向：{extra_direction.strip()}" if extra_direction.strip() else ""
+    return (
+        f"营销文案风格：{guide['label']}。{guide['direction']} "
+        "面向游客的标题、推荐理由、风险提示和素材中不要出现规则引擎、库存、容量、成本、毛利、Demo、接口、技能或内部校验等后台术语。"
+        "每一套内容都要从同行关系、一个具体体验瞬间和一个可感知的杭州地点切入；标题不超过22个中文字符，正文用2到3句短句形成画面，避免反复使用“住一晚、慢慢玩、刚刚好”等套话。可参考旅行平台、小红书与短视频常见的节奏，但不得模仿具体作者或账号。"
+        f"{extra}"
+    )
+
+
+def marketing_image_prompt(db: Session, product: TravelProduct, output: ProductAgentOutput, style: str) -> str:
+    guide = MARKETING_STYLE_GUIDES.get(style, MARKETING_STYLE_GUIDES["SEEDING"])
+    partner_name, address, description = "杭州在地体验", "杭州", ""
+    for row in product.resources:
+        if row.resource_type != "PARTNER_RESOURCE":
+            continue
+        partner = db.get(PartnerResource, row.resource_id)
+        if partner:
+            partner_name = partner.resource_name
+            address = partner.address or address
+            description = partner.description or ""
+            break
+    poster = next((asset for asset in output.marketing_assets if asset.asset_type == "POSTER"), None)
+    visual_brief = (poster.visual_brief if poster else "") or guide["visual"]
+    return (
+        "为一张杭州旅行产品的竖版宣传主视觉生成图片。"
+        f"产品主题：{product.theme}；适合：{product.target_crowd}；体验：{partner_name}；地点线索：{address}。"
+        f"体验描述：{description}。视觉方向：{visual_brief}。风格：{guide['visual']}。"
+        "真实摄影感、自然光、编辑感旅行杂志构图、3:4 竖版，画面上方或下方预留干净留白给后续 SVG 中文排版。"
+        "只表现合理的杭州城市旅行场景，不虚构地标、门票、价格、服务承诺或品牌合作。"
+        "不要添加可读文字、数字、Logo、二维码、广告牌、商标或拟真的票券；避免可识别的真实人物肖像。"
+    )[:5000]
 
 
 def blocks_schedule(service: HotelService) -> bool:
@@ -150,7 +193,7 @@ class ProductService:
             "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
         }
 
-    def _marketing_assets(self, assets, *, product_name: str, theme: str, target_crowd: str, weather: str, price: Decimal | str, room: RoomInventory, resources: list[ProductResource], variant_index: int = 0) -> list[dict[str, Any]]:
+    def _marketing_assets(self, assets, *, product_name: str, theme: str, target_crowd: str, weather: str, target_date: object, price: Decimal | str, room: RoomInventory, resources: list[ProductResource], variant_index: int = 0, copy_style: str = "SEEDING", generated_image: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Replace only the poster visual with the server-owned media renderer."""
         partner_name = "杭州城市体验"
         address = "杭州体验场地"
@@ -164,9 +207,12 @@ class ProductService:
         rendered: list[dict[str, Any]] = []
         for asset in assets:
             data = asset.model_dump(mode="json") if hasattr(asset, "model_dump") else dict(asset)
+            data["copy_style"] = copy_style
             if data.get("asset_type") == "POSTER":
                 creative_angle = str(data.get("creative_angle") or data.get("visual_brief") or "")
-                data.update(poster_asset(title=data.get("title") or product_name, content=data.get("content") or theme, partner_name=partner_name, room_name=room.room_type, address=address, price=str(price), target_crowd=target_crowd, theme=theme, weather=weather, variant_index=variant_index, creative_angle=creative_angle))
+                data.update(poster_asset(title=data.get("title") or product_name, content=data.get("content") or theme, partner_name=partner_name, room_name=room.room_type, address=address, price=str(price), target_crowd=target_crowd, theme=theme, weather=weather, target_date=str(target_date), variant_index=variant_index, creative_angle=creative_angle, media_url=str((generated_image or {}).get("image_url") or "") or None))
+                if generated_image:
+                    data.update(generated_image)
             rendered.append(data)
         return rendered
 
@@ -242,7 +288,7 @@ class ProductService:
             bottleneck_resource=validation.capacity.bottleneck_resource,
             marketing_title=output.marketing_title,
             marketing_content=output.marketing_content,
-            marketing_assets=self._marketing_assets(output.marketing_assets, product_name=output.product_name, theme=output.theme, target_crowd=request.target_crowd, weather=request.weather, price=validation.pricing.suggested_price, room=room, resources=resource_rows, variant_index=variant_index),
+            marketing_assets=self._marketing_assets(output.marketing_assets, product_name=output.product_name, theme=output.theme, target_crowd=request.target_crowd, weather=request.weather, target_date=request.target_date, price=validation.pricing.suggested_price, room=room, resources=resource_rows, variant_index=variant_index),
             recommendation_reason=output.recommendation_reason,
             risk_message=output.risk_message,
             status="DRAFT",
@@ -261,7 +307,7 @@ class ProductService:
         """
         return [self.generate(request, variant_index=index) for index in range(request.variant_count)]
 
-    def _marketing_payload(self, product: TravelProduct, creative_direction: str = "") -> dict[str, Any]:
+    def _marketing_payload(self, product: TravelProduct, creative_direction: str = "", *, style: str = "SEEDING") -> dict[str, Any]:
         room = self.db.get(RoomInventory, product.room_inventory_id)
         selections = [{"resource_type": row.resource_type, "resource_id": row.resource_id, "quantity_per_package": row.quantity_per_package} for row in product.resources if row.resource_type != "ROOM"]
         request = GenerateProductRequest(
@@ -275,21 +321,24 @@ class ProductService:
             visitor_budget=product.visitor_budget_limit,
             minimum_gross_margin=product.minimum_gross_margin_requirement,
             variant_count=1,
-            creative_direction=creative_direction,
+            creative_direction=marketing_style_direction(style, creative_direction),
         )
         return self._payload(request, room, selections)
 
-    def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "") -> tuple[str, bool]:
-        result = self.orchestrator.generate_product(self._marketing_payload(product, creative_direction))
+    def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "", *, style: str = "SEEDING", generate_image: bool = False, image_model: str | None = None) -> tuple[str, bool]:
+        result = self.orchestrator.generate_product(self._marketing_payload(product, creative_direction, style=style))
         output: ProductAgentOutput = result.value  # type: ignore[assignment]
         room = self.db.get(RoomInventory, product.room_inventory_id)
         if room is None:
             raise AppError("ROOM_NOT_FOUND", "产品关联客房不存在，无法重新生成营销素材")
+        generated_image: dict[str, Any] | None = None
+        if generate_image:
+            generated_image = WanImageService().generate(marketing_image_prompt(self.db, product, output, style), model=image_model)
         product.marketing_title = output.marketing_title
         product.marketing_content = output.marketing_content
         product.recommendation_reason = output.recommendation_reason
         product.risk_message = output.risk_message
-        product.marketing_assets = self._marketing_assets(output.marketing_assets, product_name=product.product_name, theme=product.theme, target_crowd=product.target_crowd, weather=product.weather, price=product.suggested_price, room=room, resources=list(product.resources), variant_index=0)
+        product.marketing_assets = self._marketing_assets(output.marketing_assets, product_name=product.product_name, theme=product.theme, target_crowd=product.target_crowd, weather=product.weather, target_date=product.target_date, price=product.suggested_price, room=room, resources=list(product.resources), variant_index=0, copy_style=style, generated_image=generated_image)
         self.db.flush()
         return result.trace_id, result.fallback_used
 

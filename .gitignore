@@ -17,3 +17,6 @@ coverage/
 .mypy_cache/
 *.log
 .DS_Store
+
+# Server-generated AI media; never version assets or provider URLs.
+runtime/generated-media/

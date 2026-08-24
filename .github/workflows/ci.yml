@@ -81,7 +81,7 @@ jobs:
         env:
           OPENCLAW_GATEWAY_TOKEN: ci-gateway-token
           STAYSCAPE_AGENT_TOOL_TOKEN: ci-tool-token
-          OPENCLAW_PRIMARY_MODEL: qwen/qwen3.5-plus
+          OPENCLAW_PRIMARY_MODEL: qwen/qwen3.7-plus
           FEISHU_ENABLED: "false"
           FEISHU_APP_ID: ci-app
           FEISHU_APP_SECRET: ci-secret
@@ -92,7 +92,7 @@ jobs:
           import json
           from pathlib import Path
           config = json.loads(Path("deploy/generated/ci-openclaw.json").read_text())
-          assert config["agents"]["defaults"]["model"]["primary"] == "qwen/qwen3.5-plus"
+          assert config["agents"]["defaults"]["model"]["primary"] == "qwen/qwen3.7-plus"
           assert config["channels"]["feishu"]["enabled"] is False
           assert "qwen" in config["plugins"]["allow"]
           assert "feishu" in config["plugins"]["allow"]

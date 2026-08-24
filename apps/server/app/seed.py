@@ -61,7 +61,8 @@ def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = Fals
             result.update(seed_showcase_products(db, existing.id, target_date))
         return result
 
-    target_date = date.today() + timedelta(days=1)
+    days_until_saturday = (5 - date.today().weekday()) % 7 or 7
+    target_date = date.today() + timedelta(days=days_until_saturday)
     hotel = Hotel(
         name="StayScape杭州测试酒店",
         city="杭州",

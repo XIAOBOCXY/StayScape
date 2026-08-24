@@ -22,7 +22,17 @@ class GenerateProductRequest(BaseModel):
     resource_selections: list[ResourceSelection] = Field(default_factory=list)
     preferred_price: Decimal = Field(default=Decimal("599"), gt=0)
     variant_count: int = Field(default=1, ge=1, le=5)
-    creative_direction: str = Field(default="", max_length=160)
+    creative_direction: str = Field(default="", max_length=800)
+
+
+class ProductDraftInterpretRequest(BaseModel):
+    natural_language: str = Field(min_length=2, max_length=800)
+
+
+class ProductDraftInterpretResponse(BaseModel):
+    interpreted: dict[str, Any]
+    parsed_fields: list[dict[str, Any]] = Field(default_factory=list)
+    message: str
 
 
 class ProductResourceRead(BaseModel):
@@ -53,6 +63,18 @@ class MarketingAsset(BaseModel):
     poster_svg: str = ""
     creative_angle: str = ""
     poster_style: str = ""
+    copy_style: str = ""
+    image_url: str = ""
+    image_source: str = ""
+    image_model: str = ""
+    image_watermarked: bool = False
+    image_request_id: str = ""
+
+
+class MarketingRegenerationRequest(BaseModel):
+    style: Literal["ARTISTIC", "PROMOTIONAL", "EMPATHETIC", "SEEDING"] = "SEEDING"
+    generate_image: bool = False
+    image_model: Literal["wan2.7-image", "wan2.7-image-pro"] | None = None
 
 
 class Financials(BaseModel):

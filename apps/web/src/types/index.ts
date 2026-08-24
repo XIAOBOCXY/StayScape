@@ -104,6 +104,12 @@ export interface MarketingAsset {
   poster_svg?: string
   creative_angle?: string
   poster_style?: string
+  copy_style?: string
+  image_url?: string
+  image_source?: string
+  image_model?: string
+  image_watermarked?: boolean
+  image_request_id?: string
 }
 
 export interface TravelProduct {
