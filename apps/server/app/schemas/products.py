@@ -51,6 +51,9 @@ class ProductResourceRead(BaseModel):
     end_time: time | None = None
     address: str | None = None
     description: str | None = None
+    image_url: str = ""
+    image_source: str = ""
+    image_attribution: str = ""
 
 
 class MarketingAsset(BaseModel):
@@ -72,9 +75,10 @@ class MarketingAsset(BaseModel):
 
 
 class MarketingRegenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     style: Literal["ARTISTIC", "PROMOTIONAL", "EMPATHETIC", "SEEDING"] = "SEEDING"
     generate_image: bool = False
-    image_model: Literal["wan2.7-image", "wan2.7-image-pro"] | None = None
 
 
 class Financials(BaseModel):
@@ -97,6 +101,7 @@ class ProductRead(BaseModel):
     weather: str
     target_date: date
     room_inventory_id: int
+    listed_quantity: int
     sale_quantity: int
     unit_cost: Decimal
     minimum_allowed_price: Decimal

@@ -20,6 +20,9 @@ export interface Room {
   features: string
   suitable_crowds: string
   tags: string
+  image_url?: string
+  image_source?: string
+  image_attribution?: string
   status: string
   updated_at: string
 }
@@ -37,6 +40,9 @@ export interface HotelService {
   end_time?: string
   suitable_crowds: string
   replaceable: boolean
+  image_url?: string
+  image_source?: string
+  image_attribution?: string
   status: string
 }
 
@@ -70,6 +76,9 @@ export interface PartnerResource {
   address: string
   booking_notice: string
   cancellation_rule: string
+  image_url?: string
+  image_source?: string
+  image_attribution?: string
   package_enabled: boolean
   source_type: string
   status: string
@@ -92,6 +101,9 @@ export interface ProductResource {
   end_time?: string
   address?: string
   description?: string
+  image_url?: string
+  image_source?: string
+  image_attribution?: string
 }
 
 export interface MarketingAsset {
@@ -122,6 +134,7 @@ export interface TravelProduct {
   weather: string
   target_date: string
   room_inventory_id: number
+  listed_quantity: number
   sale_quantity: number
   unit_cost: string
   minimum_allowed_price: string
@@ -171,6 +184,22 @@ export interface Dashboard {
   low_stock_product_count: number
   visitor_intent_count: number
   gross_profit_on_sale: string
+  confirmed_order_count: number
+  confirmed_revenue: string
+  confirmed_gross_profit: string
+  held_order_count: number
+  held_revenue: string
+  available_package_count: number
+  listed_value: string
+  sales_timeline: Array<{
+    date: string
+    confirmed_orders: number
+    confirmed_revenue: string
+    confirmed_gross_profit: string
+    on_sale_products: number
+    available_packages: number
+    listed_value: string
+  }>
   recent_changes: Array<Record<string, unknown>>
 }
 
@@ -188,4 +217,51 @@ export interface Recommendation {
   provider?: string
   skill_name?: string
   fallback_used?: boolean
+}
+
+export interface TripPlanItem {
+  day: number
+  date: string
+  sort_order: number
+  resource_type: 'ROOM' | 'HOTEL_SERVICE' | 'PARTNER_RESOURCE'
+  resource_id: number
+  resource_name: string
+  quantity: number
+  start_time?: string | null
+  end_time?: string | null
+  address?: string
+  description?: string
+  image_url?: string
+  image_source?: string
+  image_attribution?: string
+  unit_price: string
+  subtotal: string
+  available_quantity: number
+  low_stock: boolean
+  category?: string
+}
+
+export interface TripPlanSelection {
+  resource_type: TripPlanItem['resource_type']
+  resource_id: number
+  quantity: number
+  sort_order: number
+}
+
+export interface TripPlan {
+  id?: number | null
+  plan_name: string
+  natural_language: string
+  start_date: string
+  duration_days: number
+  target_crowd: string
+  party_size: number
+  weather?: string
+  budget?: string | null
+  total_price: string
+  status: string
+  reserved_until?: string | null
+  items: TripPlanSelection[]
+  itinerary: TripPlanItem[]
+  low_stock_items: TripPlanItem[]
 }

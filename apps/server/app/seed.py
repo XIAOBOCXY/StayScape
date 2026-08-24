@@ -18,6 +18,7 @@ from .models import (
     TravelProduct,
     User,
     VisitorIntent,
+    VisitorTripPlan,
 )
 from .showcase_catalog import seed_extra_catalog
 from .showcase_seed import seed_showcase_products
@@ -29,6 +30,7 @@ DEMO_PASSWORD = "StayScape123!"
 def clear_all(db: Session) -> None:
     # Explicit order keeps this compatible with PostgreSQL foreign-key checks.
     for model in (
+        VisitorTripPlan,
         VisitorIntent,
         ProductAdjustmentRecord,
         ProductResource,
@@ -57,8 +59,19 @@ def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = Fals
     if existing:
         target_date = db.query(RoomInventory).order_by(RoomInventory.available_date).first().available_date
         result = {"hotel_id": existing.id, "target_date": target_date.isoformat(), "created": False}
+        # Keep a rolling, date-specific inventory pool for the visitor and
+        # merchant calendars.  This is idempotent: each catalog row is keyed
+        # by its real availability date and resource name.
+        dates = [target_date + timedelta(days=offset) for offset in range(10)]
+        for offset, available_date in enumerate(dates):
+            seed_extra_catalog(db, existing.id, available_date, demo_password=DEMO_PASSWORD, variation=offset)
         if include_showcase:
-            result.update(seed_showcase_products(db, existing.id, target_date))
+            created = 0
+            for available_date in dates:
+                created += seed_showcase_products(db, existing.id, available_date).get("created", 0)
+            result.update({"showcase_products": db.query(TravelProduct).filter(TravelProduct.hotel_id == existing.id).count(), "created_showcase_products": created})
+        else:
+            db.commit()
         return result
 
     days_until_saturday = (5 - date.today().weekday()) % 7 or 7
@@ -127,9 +140,14 @@ def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = Fals
     db.add(
         PublicResource(resource_name="西湖博物馆", category="MUSEUM", description="可用于游客免费推荐，不参与正式套餐库存和收入计算。", address="西湖区孤山路", opening_hours="09:00-17:00", suitable_crowds="FAMILY,COUPLE", weather_tags="RAIN,SUNNY,CLOUDY", source="杭州市文化广电旅游局", verified_at=datetime.now(timezone.utc), status="ACTIVE")
     )
-    seed_extra_catalog(db, hotel.id, target_date, demo_password=DEMO_PASSWORD)
+    seed_extra_catalog(db, hotel.id, target_date, demo_password=DEMO_PASSWORD, variation=0)
+    for offset in range(1, 10):
+        seed_extra_catalog(db, hotel.id, target_date + timedelta(days=offset), demo_password=DEMO_PASSWORD, variation=offset)
     db.commit()
     result = {"hotel_id": hotel.id, "target_date": target_date.isoformat(), "created": True}
     if include_showcase:
-        result.update(seed_showcase_products(db, hotel.id, target_date))
+        created = 0
+        for offset in range(10):
+            created += seed_showcase_products(db, hotel.id, target_date + timedelta(days=offset)).get("created", 0)
+        result.update({"showcase_products": db.query(TravelProduct).filter(TravelProduct.hotel_id == hotel.id).count(), "created_showcase_products": created})
     return result

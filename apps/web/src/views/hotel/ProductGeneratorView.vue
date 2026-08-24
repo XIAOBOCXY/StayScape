@@ -124,14 +124,6 @@ function setPersona(crowd: string, theme: string) {
   form.theme = theme
   syncSmartInventory()
 }
-function systemSelections() {
-  const quantity = partySize.value
-  return [
-    form.breakfast_id ? { resource_type: 'HOTEL_SERVICE', resource_id: form.breakfast_id, quantity_per_package: quantity } : null,
-    form.late_id ? { resource_type: 'HOTEL_SERVICE', resource_id: form.late_id, quantity_per_package: 1 } : null,
-    ...form.partner_ids.map(resource_id => ({ resource_type: 'PARTNER_RESOURCE', resource_id, quantity_per_package: quantity })),
-  ].filter(Boolean)
-}
 async function generate() {
   syncSmartInventory()
   if (!form.room_inventory_id || !form.partner_ids.length) {
@@ -153,7 +145,10 @@ async function generate() {
       creative_direction: form.creative_direction,
       variant_count: form.variant_count,
       room_inventory_id: form.room_inventory_id,
-      resource_selections: systemSelections(),
+      // The cards below are alternatives, not a demand to put every activity
+      // in one package. The server chooses one compatible real session for
+      // each variant and keeps all time conflicts out of the creative call.
+      resource_selections: [],
     })
     products.value = response.data.products?.length ? response.data.products : [response.data.product]
     ElMessage.success('已按真实库存生成 ' + products.value.length + ' 套可选方案')
@@ -183,9 +178,9 @@ onMounted(loadData)
 <template>
   <div class="studio-head">
     <div class="studio-head__copy">
-      <div class="eyebrow">智能组包</div>
-      <h1>留一点选择，剩下交给真实库存</h1>
-      <p>选好日期、同行的人和想要的感觉，系统会自动筛选可用房间与体验，生成几套不同风格的杭州周末方案。</p>
+      <div class="eyebrow">产品生成</div>
+      <h1>把一个出行想法变成几套可选方案</h1>
+      <p>填写日期、同行人和偏好，即可生成不同方向的杭州旅居产品；选中后再发布。</p>
     </div>
     <div class="studio-orb" aria-hidden="true"><i /> <span>杭</span></div>
     <el-button plain class="studio-refresh" @click="loadData">更新可用资源</el-button>
@@ -193,7 +188,7 @@ onMounted(loadData)
 
   <div v-if="loadingData" class="panel empty-state">正在读取可用房间与体验…</div>
   <template v-else>
-    <section class="brief-panel panel"><div><div class="eyebrow">一句话组包</div><strong>把同行人、日期、预算和偏好交给系统解析</strong><small>解析只会填入可修改的草稿；房间与体验仍按当前库存自动匹配。</small></div><el-input v-model="naturalBrief" placeholder="例如：周末两个人看展吃饭，预算 1200，想有一点夜游氛围" @keyup.enter="interpretBrief" /><el-button type="primary" :loading="interpreting" @click="interpretBrief">解析</el-button><div v-if="parsedFields.length" class="brief-chips"><span v-for="item in parsedFields" :key="item.label">{{ item.label }}：{{ item.value }}</span></div></section>
+    <section class="brief-panel panel"><div><div class="eyebrow">一句话描述</div><strong>写下日期、同行人、预算和偏好</strong><small>系统会将关键信息带入下方表单，仍可随时改动。</small></div><el-input v-model="naturalBrief" placeholder="例如：周末两个人看展吃饭，预算 1200，想有一点夜游氛围" @keyup.enter="interpretBrief" /><el-button type="primary" :loading="interpreting" @click="interpretBrief">填写到表单</el-button><div v-if="parsedFields.length" class="brief-chips"><span v-for="item in parsedFields" :key="item.label">{{ item.label }}：{{ item.value }}</span></div></section>
     <div class="studio-persona-quick">
       <span>这次想和谁出发？</span>
       <button :class="{ active: form.target_crowd === 'FAMILY' }" @click="setPersona('FAMILY', '亲子探索日')">亲子家庭</button>
@@ -204,17 +199,17 @@ onMounted(loadData)
     </div>
 
     <div class="smart-stats">
-      <div><small>可用房型</small><strong>{{ inventorySummary.rooms }}</strong><span>系统优先安排余量充足的房间</span></div>
-      <div><small>酒店服务</small><strong>{{ inventorySummary.services }}</strong><span>自动匹配早餐、延迟退房等服务</span></div>
-      <div><small>备选体验</small><strong>{{ inventorySummary.experiences }}</strong><span>每套方案会从中选择合适组合</span></div>
-      <div class="smart-stats__note"><i /> 已按日期与客群筛选<br /><span>天气只用于保障体验可执行</span></div>
+      <div><small>可选房型</small><strong>{{ inventorySummary.rooms }}</strong><span>适合当前日期的住宿</span></div>
+      <div><small>可用服务</small><strong>{{ inventorySummary.services }}</strong><span>早餐、延迟退房等</span></div>
+      <div><small>可选体验</small><strong>{{ inventorySummary.experiences }}</strong><span>展览、乐园、运动与城市活动</span></div>
+      <div class="smart-stats__note"><i /> 当前日期可生成<br /><span>每套方案均可单独查看与发布</span></div>
     </div>
 
     <div class="studio-layout">
       <section class="panel smart-form">
         <div class="section-title smart-form__heading">
-          <div><div class="eyebrow">三步开始</div><h2>告诉系统你想要什么</h2></div>
-          <span>不用手动挑库存</span>
+          <div><div class="eyebrow">填写偏好</div><h2>这次产品想怎么安排</h2></div>
+          <span>自动给出多个方向</span>
         </div>
         <el-form label-position="top">
           <div class="form-grid compact-form">
@@ -245,7 +240,7 @@ onMounted(loadData)
         </el-form>
 
         <div class="auto-picks">
-          <div class="auto-picks__head"><div><b>系统已准备好这些内容</b><span>每套按 {{ partySize }} 人出行自动计算</span></div><button @click="showAutoResources = !showAutoResources">{{ showAutoResources ? '收起' : '查看' }}</button></div>
+          <div class="auto-picks__head"><div><b>本次可用内容</b><span>按 {{ partySize }} 人出行准备</span></div><button @click="showAutoResources = !showAutoResources">{{ showAutoResources ? '收起' : '查看' }}</button></div>
           <div class="auto-picks__main">
             <span>{{ selectedRoom?.room_type || '等待可用房间' }}</span>
             <i>＋</i>
@@ -263,8 +258,8 @@ onMounted(loadData)
       <section class="panel candidate-stage">
         <div v-if="!products.length" class="candidate-empty">
           <div class="candidate-empty__visual"><span>✦</span><i /><b>杭州周末</b></div>
-          <h2>先给一个方向，再看不同的答案</h2>
-          <p>系统会从当前真实库存中自动搭配房间、服务和体验。生成后，你可以挑选最适合发布的一套。</p>
+          <h2>输入一个方向，即可生成候选方案</h2>
+          <p>生成后可查看完整内容、挑选合适的一套并发布。</p>
         </div>
         <template v-else>
           <div class="candidate-stage__head"><div><div class="eyebrow">候选方案</div><h2>挑一套最想让客人出发的</h2></div><span>{{ products.length }} 套可选</span></div>

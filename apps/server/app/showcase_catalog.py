@@ -89,7 +89,7 @@ def _resource(merchant_id: int, target_date: date, *, name: str, category: str, 
     )
 
 
-def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_password: str) -> dict[str, int]:
+def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_password: str, variation: int = 0) -> dict[str, int]:
     """Append the rich catalogue to a freshly created demo hotel."""
 
     users = {item.username: item for item in db.scalars(select(User).where(User.role == "MERCHANT")).all()}
@@ -126,6 +126,11 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
             _room(hotel_id, target_date, room_type="影音娱乐房", count=4, normal="639", minimum="499", cost="250", max_guests=4, features="投影、影音会员、桌游收纳", crowds="COUPLE,FRIENDS", tags="电影,桌游,朋友出行"),
             _room(hotel_id, target_date, room_type="亲子联通房", count=2, normal="829", minimum="629", cost="320", max_guests=4, features="相邻双空间、儿童阅读角、家庭储物", crowds="FAMILY", tags="家庭,儿童,联通房"),
         ]
+    # Each date should look like a real operating day, not a copied list.  A
+    # small deterministic variation gives the calendar meaningful capacity
+    # heat without making the seed random or difficult to reproduce.
+    for index, row in enumerate(room_rows):
+        row.available_count = max(1, row.available_count - ((variation + index) % 3))
     existing_room_types = set(
         db.scalars(
             select(RoomInventory.room_type).where(
@@ -158,6 +163,9 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
             _service(hotel_id, target_date, name="客房茶席", service_type="ROOM_TEA_SETUP", quantity=3, cost="25", reference="88", crowds="COUPLE,SOLO,LOCAL_WEEKEND", start=time(16, 0), end=time(18, 0)),
             _service(hotel_id, target_date, name="运动能量包", service_type="SPORT_SNACK", quantity=6, cost="8", reference="30", crowds="FRIENDS,COUPLE,LOCAL_WEEKEND"),
         ]
+    for index, row in enumerate(service_rows):
+        if row.status == "AVAILABLE":
+            row.available_quantity = max(1, row.available_quantity - ((variation + index) % 4))
     existing_services = set(
         db.execute(
             select(HotelService.service_name, HotelService.service_type).where(
@@ -178,6 +186,7 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
     resource_rows = [
         _resource(merchants["merchant_craft"].id, target_date, name="良渚文明探索体验", category="CULTURE", description="在良渚文化灵感中完成一段适合亲子和朋友的文明探索。", start=time(10, 0), end=time(11, 30), capacity=18, settlement="72", market="138", crowds="FAMILY,FRIENDS,SOLO", minimum_age=6, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="良渚文化片区"),
         _resource(merchants["merchant_craft"].id, target_date, name="城市博物馆主题导览", category="CULTURE", description="从一件展品和一段城市故事开始，留出慢慢看的午后。", start=time(14, 0), end=time(15, 30), capacity=16, settlement="65", market="128", crowds="FAMILY,COUPLE,SOLO,LOCAL_WEEKEND", minimum_age=6, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="杭州城市文化场馆"),
+        _resource(merchants["merchant_craft"].id, target_date, name="杭州博物馆开放式导览", category="CULTURE", description="从馆藏线索、建筑空间到一件当代展品，适合朋友结伴慢慢看完一个上午。", start=time(9, 30), end=time(11, 30), capacity=22, settlement="68", market="138", crowds="FAMILY,COUPLE,FRIENDS,SOLO,LOCAL_WEEKEND", minimum_age=6, maximum_age=70, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="杭州博物馆展览区"),
         _resource(merchants["merchant_craft"].id, target_date, name="亲子科学探索实验室", category="KIDS", description="用轻量实验和互动任务，把好奇心装进亲子周末。", start=time(10, 30), end=time(12, 0), capacity=20, settlement="76", market="148", crowds="FAMILY", minimum_age=5, maximum_age=14, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="钱江新城科普场馆"),
         _resource(merchants["merchant_performance"].id, target_date, name="南山路看展漫游", category="CITY_WALK", description="在展览、街景和咖啡间慢慢走，适合不赶行程的下午。", start=time(13, 30), end=time(15, 30), capacity=14, settlement="58", market="118", crowds="COUPLE,SOLO,LOCAL_WEEKEND", minimum_age=12, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="南山路艺术街区"),
         _resource(merchants["merchant_nature"].id, target_date, name="湘湖轻户外探索", category="NATURE", description="在湖畔完成轻量自然观察和散步，不追求打卡速度。", start=time(9, 30), end=time(11, 30), capacity=16, settlement="68", market="128", crowds="FAMILY,COUPLE,FRIENDS,SOLO", minimum_age=6, maximum_age=70, indoor=False, weather="SUNNY,CLOUDY", address="湘湖片区"),
@@ -211,6 +220,9 @@ def seed_extra_catalog(db: Session, hotel_id: int, target_date: date, *, demo_pa
         _resource(merchants["merchant_reference"].id, target_date, name="杭州乐园公开信息", category="THEME_PARK", description="公开资料参考，不代表可售合作名额，不能进入正式套餐。", start=time(10, 0), end=time(10, 30), capacity=0, settlement="0", market="0", crowds="ALL", minimum_age=None, maximum_age=None, indoor=False, weather="SUNNY,CLOUDY", address="公开信息页", source_type="PUBLIC_REFERENCE", package_enabled=False),
         _resource(merchants["merchant_reference"].id, target_date, name="西湖博物馆公开导览", category="CITY_WALK", description="游客自由探索参考，不参与酒店套餐库存和收入计算。", start=time(10, 0), end=time(11, 0), capacity=0, settlement="0", market="0", crowds="FAMILY,COUPLE,SOLO", minimum_age=None, maximum_age=None, indoor=True, weather="RAIN,SUNNY,CLOUDY", address="西湖博物馆", source_type="PUBLIC_REFERENCE", package_enabled=False),
     ]
+    for index, row in enumerate(resource_rows):
+        if row.remaining_capacity > 0:
+            row.remaining_capacity = max(1, row.remaining_capacity - ((variation * 2 + index) % 5))
     existing_resource_names = set(
         db.scalars(
             select(PartnerResource.resource_name)

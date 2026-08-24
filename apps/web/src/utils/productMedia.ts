@@ -60,10 +60,10 @@ const MEDIA_LIBRARY_RAW: Record<string, ProductMediaAsset> = {
   xixi: { id: 'xixi-wetland', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Xixi%20Wetland%20Park%2C%20Hangzhou%2C%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%BA%AA%E6%B9%BF%E5%9C%B0%20-%20panoramio.jpg?width=1800', alt: '杭州西溪湿地景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Xixi_Wetland_Park,_Hangzhou,%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%BA%AA%E6%B9%BF%E5%9C%B0_-_panoramio.jpg', kind: 'nature', attribution: 'Wikimedia Commons · CC BY-SA 3.0', license: 'CC BY-SA 3.0', location: '杭州 · 西溪湿地' },
   longjing: { id: 'longjing-tea-garden', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Tea%20Garden%20Hangzhou.jpg?width=1800', alt: '杭州茶园与山景', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Tea_Garden_Hangzhou.jpg', kind: 'tea', attribution: 'Wikimedia Commons · CC BY 4.0', license: 'CC BY 4.0', location: '杭州 · 龙井茶园' },
   lingyin: { id: 'lingyin-temple', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Lingyin%20Buddhist%20Temple%2C%20Hangzhou%20%283020083374%29.jpg?width=1800', alt: '杭州灵隐寺建筑景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Lingyin_Buddhist_Temple,_Hangzhou_(3020083374).jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY 2.0', license: 'CC BY 2.0', location: '杭州 · 灵隐' },
-  silkMuseum: { id: 'china-national-silk-museum', url: 'https://zh.unesco.org/silkroad/sites/default/files/styles/silkroad_colorbox/public/museum_front.jpg?itok=y1whLB1I', alt: '杭州中国丝绸博物馆外观', source: 'UNESCO Silk Roads', source_url: 'https://zh.unesco.org/silkroad/content/zhongguosichoubowuguan', kind: 'culture', attribution: 'UNESCO Silk Roads · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 中国丝绸博物馆' },
-  liangzhuCctv: { id: 'liangzhu-museum-cctv', url: 'https://p2.img.cctvpic.com/photoworkspace/contentimg/2025/02/07/2025020710435689379.jpg', alt: '杭州良渚博物院建筑与园区', source: '央视网', source_url: 'https://caiyi.cctv.com/2025/02/07/ARTIfQRVTDD9Es3ApjildzUc250207.shtml', kind: 'culture', attribution: '央视网 · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 良渚博物院' },
-  songcheng: { id: 'hangzhou-songcheng-night', url: 'https://youimg1.c-ctrip.com/target/100q040000000b7qhD3B1.jpg', alt: '杭州宋城夜间入口与灯光', source: '携程旅行', source_url: 'https://you.ctrip.com/sight/hangzhou14/4081.html', kind: 'themePark', attribution: '携程旅行 · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 宋城' },
-  animationMuseum: { id: 'china-cartoon-animation-museum', url: 'https://obj.shine.cn/files/2021/06/29/78356371-6dde-4ebf-919f-e82b85c43d8a_0.jpg', alt: '杭州中国动漫博物馆建筑', source: 'Shanghai Daily City News', source_url: 'https://www.citynewsservice.cn/shine/814b1dde-b79e-45d5-a3ca-90d49ddf1e29', kind: 'entertainment', attribution: 'Shanghai Daily City News · 来源页', license: '来源页标注 · 仅作演示参考', location: '杭州 · 中国动漫博物馆' },
+  silkMuseum: { id: 'china-national-silk-museum-reference', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1800', alt: '杭州博物馆建筑参考图', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 博物馆' },
+  liangzhuCctv: { id: 'liangzhu-museum-public', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1600', alt: '杭州良渚博物院建筑参考图', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 良渚' },
+  songcheng: { id: 'theme-park-public-reference', url: 'https://images.pexels.com/photos/1779487/pexels-photo-1779487.jpeg?auto=compress&cs=tinysrgb&w=1800', alt: '主题乐园夜间氛围参考图', source: 'Pexels', source_url: 'https://www.pexels.com/photo/ferris-wheel-under-the-stars-1779487/', kind: 'themePark', attribution: 'Pexels · 来源页', license: 'Pexels License', location: '杭州主题乐园参考' },
+  animationMuseum: { id: 'animation-museum-reference', url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1800&q=85', alt: '城市展演空间参考图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-entertainment', kind: 'entertainment', attribution: 'Unsplash · 来源页', license: 'Unsplash License', location: '杭州展演空间参考' },
   liangzhuMuseum: { id: 'liangzhu-museum', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1800', alt: '杭州良渚博物院建筑', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 良渚' }
 }
 
@@ -127,6 +127,7 @@ function legacyMediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_nam
  * which visual family is allowed. */
 export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null): ProductMediaAsset[] {
   if (!product) return [MEDIA_LIBRARY.hangzhou, MEDIA_LIBRARY.rain, MEDIA_LIBRARY.hotel, MEDIA_LIBRARY.tea]
+  const resourceUploads = product.resources.map((resource) => uploadedMedia(resource)).filter((item): item is ProductMediaAsset => Boolean(item))
   const text = [product.product_name, product.theme, product.target_crowd, ...product.resources.map((item) => `${item.resource_name} ${item.description || ''} ${item.address || ''}`)].join(' ').toLowerCase()
   const tests: Array<[string[], string[]]> = [
     [['博物馆', '良渚', '看展', '美术馆', '科技馆', '展览', '丝绸'], ['silkMuseum', 'liangzhuCctv', 'liangzhuMuseum', 'hotel']],
@@ -153,12 +154,12 @@ export function mediaForProduct(product?: Pick<TravelProduct, 'id' | 'product_na
   const seed = Math.abs(Number(product.id || 0) * 7)
   const catalogItems = keys.map((key) => MEDIA_LIBRARY[key]).filter(Boolean)
   const rotated = [...catalogItems.slice(seed % Math.max(catalogItems.length, 1)), ...catalogItems.slice(0, seed % Math.max(catalogItems.length, 1))]
-  const merged = [...rotated, ...fallback]
+  const merged = [...resourceUploads, ...rotated, ...fallback]
   return merged.filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index).slice(0, 8)
 }
 
 export function heroMedia(product?: Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'> | null) { return mediaForProduct(product)[0] }
-export function experienceLabel(resourceType: string) { return ({ ROOM: 'STAY', HOTEL_SERVICE: 'TASTE', PARTNER_RESOURCE: 'EXPERIENCE' } as Record<string, string>)[resourceType] || 'MOMENT' }
+export function experienceLabel(resourceType: string) { return ({ ROOM: '住宿', HOTEL_SERVICE: '酒店服务', PARTNER_RESOURCE: '在地体验' } as Record<string, string>)[resourceType] || '行程内容' }
 export function experienceLabelZh(resourceType: string) { return ({ ROOM: '住宿', HOTEL_SERVICE: '贴心服务', PARTNER_RESOURCE: '在地体验' } as Record<string, string>)[resourceType] || '旅居内容' }
 export function weatherLabel(weather: string) { return ({ RAIN: 'RAIN FRIENDLY', SUNNY: 'SUNNY DAY', CLOUDY: 'SOFT CLOUDS' } as Record<string, string>)[weather] || weather }
 
@@ -172,8 +173,39 @@ export interface ProductMoment {
 type ProductMediaInput = Pick<TravelProduct, 'id' | 'product_name' | 'theme' | 'target_crowd' | 'weather' | 'resources'>
 type ProductResource = TravelProduct['resources'][number]
 
+export function automaticNetworkMedia(query: string, kind: ProductMediaAsset['kind'] = 'scene'): ProductMediaAsset {
+  const clean = query.trim().slice(0, 160) || '杭州旅行'
+  return {
+    id: `commons-auto-${clean}`,
+    url: `/api/v1/visitor/media/cover?query=${encodeURIComponent(clean)}`,
+    alt: `${clean}参考图片`,
+    source: '网络参考图',
+    source_url: 'https://commons.wikimedia.org/',
+    source_type: 'WIKIMEDIA_COMMONS',
+    attribution: 'Wikimedia Commons 自动检索；可在商户端替换为自有图片',
+    usage_note: '自动检索的公开参考图；商户上传的实拍图会优先显示。',
+    kind,
+  }
+}
+
+function uploadedMedia(resource: ProductResource): ProductMediaAsset | null {
+  if (!resource.image_url) return null
+  return {
+    id: `resource-upload-${resource.id}`,
+    url: resource.image_url,
+    alt: resource.resource_name,
+    source: resource.image_source || '商户图片',
+    source_url: resource.image_attribution || resource.image_url,
+    source_type: 'HOTEL_UPLOAD',
+    attribution: resource.image_attribution || resource.image_source || '商户提供',
+    kind: resource.resource_type === 'ROOM' ? 'room' : resource.resource_type === 'HOTEL_SERVICE' ? 'food' : 'scene',
+  }
+}
+
 function mediaCandidatesForResource(product: ProductMediaInput | null | undefined, resource: ProductResource | undefined, index = 0) {
   if (!resource) return mediaForProduct(product)
+  const upload = uploadedMedia(resource)
+  if (upload) return [upload]
   const text = [resource.resource_name, resource.description || '', resource.address || '', product?.product_name || '', product?.theme || ''].join(' ').toLowerCase()
   let keys: string[]
   if (resource.resource_type === 'ROOM') {
@@ -218,7 +250,11 @@ function mediaCandidatesForResource(product: ProductMediaInput | null | undefine
     keys = mediaForProduct(product).map((item) => item.id === 'hangzhou-water-town' ? 'hangzhou' : Object.entries(MEDIA_LIBRARY).find((entry) => entry[1].id === item.id)?.[0]).filter(Boolean) as string[]
   }
   const assets = keys.map((key) => MEDIA_LIBRARY[key]).filter(Boolean)
-  return rotate(assets, Number(product?.id || 0) + index * 3)
+  const kind = assets[0]?.kind || 'scene'
+  // The server caches a licensed Commons thumbnail per query.  Static
+  // references remain only as a graceful offline fallback, so rooms, services
+  // and experiences no longer all reuse one image host or one photo.
+  return [automaticNetworkMedia(`${resource.resource_name} ${resource.address || '杭州'}`, kind), ...rotate(assets, Number(product?.id || 0) + index * 3)]
 }
 
 export function mediaForResource(product: ProductMediaInput | null | undefined, resource: ProductResource | undefined, index = 0) {

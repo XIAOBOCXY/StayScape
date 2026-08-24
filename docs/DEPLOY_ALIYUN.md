@@ -67,6 +67,19 @@ QWEN_API_KEY=你的百炼服务端Key
 
 飞书不是 Web/H5 启动条件。需要飞书时再填写 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_DM_ALLOW_FROM` 和 `FEISHU_GROUP_ALLOW_FROM`。
 
+如需为宣传海报生成百炼 Wan 主图，只在同一个 `/opt/StayScape/.env` 增加以下字段；模型选择只改 `WAN_IMAGE_MODEL`，页面不会覆盖它：
+
+```env
+WAN_IMAGE_ENABLED=true
+WAN_IMAGE_MODEL=wan2.7-image
+WAN_IMAGE_WORKSPACE_ID=<百炼 Workspace ID>
+WAN_IMAGE_REGION=cn-beijing
+# 留空时复用 QWEN_API_KEY
+WAN_IMAGE_API_KEY=
+```
+
+不要填写或提交 `WAN_IMAGE_API_URL`；程序会从工作空间 ID 和地域计算官方接口。图片只在经营端主动生成时请求，生成结果保存到服务器的 `runtime/generated-media/`，该目录与 `.env` 均不提交 Git。
+
 ## 4. 一键部署
 
 ```bash

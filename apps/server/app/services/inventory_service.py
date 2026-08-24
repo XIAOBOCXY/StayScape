@@ -213,11 +213,16 @@ def sweep_expired_intents(db: Session, hotel_id: int | None = None) -> list[dict
         query = query.join(TravelProduct).where(TravelProduct.hotel_id == hotel_id)
     intents = list(db.scalars(query.with_for_update()).all())
     released = []
+    affected_hotels: set[int] = set()
     for intent in intents:
         result = release_intent_inventory(db, intent)
         intent.intent_status = "EXPIRED"
         intent.reservation_status = "EXPIRED"
         released.append(result)
+        if intent.product:
+            affected_hotels.add(intent.product.hotel_id)
+    for affected_hotel_id in affected_hotels:
+        reconcile_published_capacity(db, affected_hotel_id)
     return released
 
 
@@ -253,7 +258,16 @@ def reconcile_published_capacity(db: Session, hotel_id: int, *, priority_product
         old_quantity = product.sale_quantity
         old_price = product.suggested_price
         capacities = _physical_capacity(db, product)
-        cap = max(0, old_quantity)
+        # Never use the already-reduced live quantity as the next target.  A
+        # temporary hold would otherwise shrink it forever after cancellation.
+        # ``listed_quantity`` is the merchant's ceiling; the source rows are
+        # the live truth below it.
+        listed = max(0, int(product.listed_quantity or 0))
+        if not listed and old_quantity > 0:
+            # Compatibility for records created before migration 0009.
+            listed = old_quantity
+            product.listed_quantity = listed
+        cap = listed
         for key, per_package in _requirements(product).items():
             remaining = max(0, capacities.get(key, 0) - used[key])
             cap = min(cap, remaining // max(1, per_package))
@@ -291,7 +305,9 @@ def ensure_publish_capacity(db: Session, product: TravelProduct) -> list[dict[st
     for other in active:
         _used_by_product(used, other, other.sale_quantity)
     capacities = _physical_capacity(db, product)
-    cap = product.sale_quantity
+    if product.listed_quantity <= 0:
+        product.listed_quantity = max(0, product.sale_quantity)
+    cap = product.listed_quantity
     for key, per_package in _requirements(product).items():
         cap = min(cap, max(0, capacities.get(key, 0) - used[key]) // max(1, per_package))
     if cap <= 0:

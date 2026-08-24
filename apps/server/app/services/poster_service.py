@@ -22,8 +22,8 @@ from ..config import settings
 
 MEDIA_BY_CATEGORY: dict[str, tuple[str, ...]] = {
     "themepark": (
-        "https://youimg1.c-ctrip.com/target/100q040000000b7qhD3B1.jpg",
         "https://images.pexels.com/photos/1779487/pexels-photo-1779487.jpeg?auto=compress&cs=tinysrgb&w=1600",
+        "https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=1600&q=85",
     ),
     "family": (
         "https://images.unsplash.com/photo-1511895426328-dc8714191300?auto=format&fit=crop&w=1600&q=85",
@@ -50,9 +50,8 @@ MEDIA_BY_CATEGORY: dict[str, tuple[str, ...]] = {
         "https://commons.wikimedia.org/wiki/Special:FilePath/Tea%20Garden%20Hangzhou.jpg?width=1600",
     ),
     "museum": (
-        "https://zh.unesco.org/silkroad/sites/default/files/styles/silkroad_colorbox/public/museum_front.jpg?itok=y1whLB1I",
-        "https://p2.img.cctvpic.com/photoworkspace/contentimg/2025/02/07/2025020710435689379.jpg",
         "https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1600",
+        "https://images.unsplash.com/photo-1564399579883-451a5d44ec08?auto=format&fit=crop&w=1600&q=85",
     ),
     "culture": (
         "https://commons.wikimedia.org/wiki/Special:FilePath/Lingyin%20Buddhist%20Temple%2C%20Hangzhou%20%283020083374%29.jpg?width=1600",
@@ -93,8 +92,7 @@ _PALETTES = {
 }
 _ALLOWED_REMOTE_HOSTS = {
     "images.unsplash.com", "images.pexels.com", "upload.wikimedia.org",
-    "commons.wikimedia.org", "zh.unesco.org", "p2.img.cctvpic.com",
-    "youimg1.c-ctrip.com", "obj.shine.cn",
+    "commons.wikimedia.org",
 }
 
 

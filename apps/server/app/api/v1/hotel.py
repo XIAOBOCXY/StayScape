@@ -1,9 +1,9 @@
 from datetime import date
 from decimal import Decimal
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -16,11 +16,12 @@ from ...repositories.resource_repository import list_partner_resources, list_roo
 from ...schemas.dashboard import DashboardResponse
 from ...schemas.products import AdjustmentRead, GenerateProductRequest, MarketingRegenerationRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
 from ...schemas.visitor import VisitorIntentStatusUpdate
-from ...schemas.resources import MerchantRead, PackageToggleRequest, PartnerResourceRead, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
+from ...schemas.resources import MediaImportRequest, MediaSearchRequest, MerchantRead, PackageToggleRequest, PartnerResourceRead, ResourceMediaUpdate, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
 from ...services.product_draft_parser import interpret_product_draft
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
+from ...services.media_library_service import MAX_MEDIA_BYTES, MediaLibraryService
 from ...agent.openclaw import OpenClawAgent
 from ..deps import get_hotel_user, resolve_hotel_id
 from ..websocket_manager import manager
@@ -30,6 +31,27 @@ router = APIRouter(prefix="/hotel", tags=["hotel"])
 
 def hotel_id_for(db: Session, user: User) -> int:
     return resolve_hotel_id(db, user)
+
+
+@router.post("/media/upload")
+async def upload_media(file: UploadFile = File(...), user: User = Depends(get_hotel_user)):
+    _ = user
+    content = await file.read(MAX_MEDIA_BYTES + 1)
+    if len(content) > MAX_MEDIA_BYTES:
+        raise AppError("MEDIA_CONTENT_INVALID", "图片不能超过 12MB。", field="file")
+    return MediaLibraryService().store_upload(content, file.content_type)
+
+
+@router.post("/media/search")
+def search_media(request: MediaSearchRequest, user: User = Depends(get_hotel_user)):
+    _ = user
+    return {"items": MediaLibraryService().search_public(request.query, request.limit)}
+
+
+@router.post("/media/import")
+def import_media(request: MediaImportRequest, user: User = Depends(get_hotel_user)):
+    _ = user
+    return MediaLibraryService().import_remote(request.url, source=request.source, attribution=request.attribution)
 
 
 def room_status(count: int, requested: str | None = None) -> str:
@@ -73,11 +95,73 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_hotel_user
     sweep_expired_intents(db, hotel_id)
     db.commit()
     hotel = db.get(Hotel, hotel_id)
-    target = date.today() + __import__("datetime").timedelta(days=1)
+    today = date.today()
+    target = today + timedelta(days=1)
     rooms = list_rooms(db, hotel_id)
     resources = list_partner_resources(db, hotel_id)
     products = list_products(db, hotel_id)
-    intents = db.scalar(select(func.count(VisitorIntent.id)).join(TravelProduct).where(TravelProduct.hotel_id == hotel_id)) or 0
+    hotel_intents = list(
+        db.scalars(
+            select(VisitorIntent)
+            .join(TravelProduct)
+            .options(selectinload(VisitorIntent.product))
+            .where(TravelProduct.hotel_id == hotel_id)
+        ).all()
+    )
+    intents = len(hotel_intents)
+    active_statuses = {"ON_SALE", "LOW_STOCK"}
+    active_products = [item for item in products if item.status in active_statuses]
+    confirmed = [item for item in hotel_intents if item.reservation_status == "CONFIRMED" and item.product]
+    held = [item for item in hotel_intents if item.reservation_status == "HELD" and item.product]
+    zero = Decimal("0")
+    confirmed_revenue = sum((item.product.suggested_price for item in confirmed if item.product), zero)
+    confirmed_gross_profit = sum((item.product.gross_profit for item in confirmed if item.product), zero)
+    held_revenue = sum((item.product.suggested_price for item in held if item.product), zero)
+    available_package_count = sum(max(0, item.sale_quantity) for item in active_products)
+    listed_value = sum((item.suggested_price * max(0, item.sale_quantity) for item in active_products), zero)
+
+    # Keep the revenue series factual: confirmed bookings are income, while
+    # held reservations remain visible separately and never inflate sales.
+    timeline_dates = {today - timedelta(days=offset) for offset in range(6, -1, -1)}
+    timeline_dates.update(item.target_date for item in active_products if item.target_date >= today)
+    timeline_dates.update(
+        item.confirmed_at.date()
+        for item in confirmed
+        if item.confirmed_at is not None
+    )
+    timeline: dict[date, dict] = {
+        value: {
+            "date": value.isoformat(),
+            "confirmed_orders": 0,
+            "confirmed_revenue": zero,
+            "confirmed_gross_profit": zero,
+            "on_sale_products": 0,
+            "available_packages": 0,
+            "listed_value": zero,
+        }
+        for value in sorted(timeline_dates)
+    }
+    for product in active_products:
+        point = timeline.setdefault(product.target_date, {
+            "date": product.target_date.isoformat(), "confirmed_orders": 0,
+            "confirmed_revenue": zero, "confirmed_gross_profit": zero,
+            "on_sale_products": 0, "available_packages": 0, "listed_value": zero,
+        })
+        point["on_sale_products"] += 1
+        point["available_packages"] += max(0, product.sale_quantity)
+        point["listed_value"] += product.suggested_price * max(0, product.sale_quantity)
+    for intent in confirmed:
+        if not intent.product or not intent.confirmed_at:
+            continue
+        value = intent.confirmed_at.date()
+        point = timeline.setdefault(value, {
+            "date": value.isoformat(), "confirmed_orders": 0,
+            "confirmed_revenue": zero, "confirmed_gross_profit": zero,
+            "on_sale_products": 0, "available_packages": 0, "listed_value": zero,
+        })
+        point["confirmed_orders"] += 1
+        point["confirmed_revenue"] += intent.product.suggested_price
+        point["confirmed_gross_profit"] += intent.product.gross_profit
     changes = list(db.scalars(select(ResourceChangeEvent).where(ResourceChangeEvent.hotel_id == hotel_id).order_by(ResourceChangeEvent.created_at.desc()).limit(6)).all())
     return {
         "hotel_id": hotel_id,
@@ -89,10 +173,18 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_hotel_user
         "partner_resource_count": len(resources),
         "package_enabled_resource_count": sum(1 for item in resources if item.package_enabled and item.status == "AVAILABLE"),
         "product_count": len(products),
-        "on_sale_product_count": sum(1 for item in products if item.status == "ON_SALE"),
+        "on_sale_product_count": len(active_products),
         "low_stock_product_count": sum(1 for item in products if item.status == "LOW_STOCK"),
         "visitor_intent_count": int(intents),
-        "gross_profit_on_sale": sum((item.gross_profit * item.sale_quantity for item in products if item.status in {"ON_SALE", "LOW_STOCK"}), Decimal("0")),
+        "gross_profit_on_sale": sum((item.gross_profit * item.sale_quantity for item in active_products), zero),
+        "confirmed_order_count": len(confirmed),
+        "confirmed_revenue": confirmed_revenue,
+        "confirmed_gross_profit": confirmed_gross_profit,
+        "held_order_count": len(held),
+        "held_revenue": held_revenue,
+        "available_package_count": available_package_count,
+        "listed_value": listed_value,
+        "sales_timeline": [timeline[value] for value in sorted(timeline)],
         "recent_changes": [{"id": item.id, "event_type": item.event_type, "resource_type": item.resource_type, "resource_id": item.resource_id, "reason": item.reason, "processed": item.processed, "created_at": item.created_at} for item in changes],
     }
 
@@ -230,6 +322,24 @@ async def toggle_package(
     return partner_resource_to_dict(resource, int(count))
 
 
+@router.patch("/resources/{resource_id}/media", response_model=PartnerResourceRead)
+async def update_resource_media(resource_id: int, request: ResourceMediaUpdate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    resource = db.scalar(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(PartnerResource.id == resource_id, Merchant.hotel_id == hotel_id).with_for_update())
+    if not resource:
+        raise AppError("NOT_FOUND", "合作资源不存在", status_code=404)
+    resource.image_url = request.image_url
+    resource.image_source = request.image_source
+    resource.image_attribution = request.image_attribution
+    event = ResourceChangeEvent(event_type="PARTNER_RESOURCE_MEDIA_CHANGED", resource_type="PARTNER_RESOURCE", resource_id=resource.id, hotel_id=hotel_id, old_value={}, new_value={"image_url": bool(resource.image_url)}, reason="酒店更新合作资源图片", operator_role=user.role, operator_id=user.id, processed=True)
+    db.add(event)
+    db.commit()
+    await manager.broadcast(hotel_id, {"type": "RESOURCE_CHANGE", "title": "合作资源图片已更新", "message": resource.resource_name, "affectedProducts": []})
+    db.refresh(resource)
+    count = db.scalar(select(func.count(ProductResource.id)).where(ProductResource.resource_type == "PARTNER_RESOURCE", ProductResource.resource_id == resource.id)) or 0
+    return partner_resource_to_dict(resource, int(count))
+
+
 @router.get("/products", response_model=ProductListResponse)
 def products(db: Session = Depends(get_db), user: User = Depends(get_hotel_user), status: str | None = None):
     items = list_products(db, hotel_id_for(db, user))
@@ -339,7 +449,7 @@ def regenerate_marketing_assets(
     if not product or product.hotel_id != hotel_id or product.status == "DELETED":
         raise AppError("NOT_FOUND", "产品不存在", status_code=404)
     options = request or MarketingRegenerationRequest()
-    ProductService(db, hotel_id).regenerate_marketing(product, style=options.style, generate_image=options.generate_image, image_model=options.image_model)
+    ProductService(db, hotel_id).regenerate_marketing(product, style=options.style, generate_image=options.generate_image)
     db.commit()
     return product_to_dict(product)
 
@@ -466,6 +576,8 @@ async def update_intent_status(intent_id: int, request: VisitorIntentStatusUpdat
     else:
         if intent.reservation_status in {"HELD", "CONFIRMED"}:
             release_intent_inventory(db, intent)
+            if intent.product:
+                reconcile_published_capacity(db, intent.product.hotel_id)
         intent.reservation_status = "RELEASED"
         intent.intent_status = "CANCELLED"
         message = "预约意向已取消，底层房量、服务和合作名额已释放"

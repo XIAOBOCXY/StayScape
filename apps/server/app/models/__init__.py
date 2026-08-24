@@ -13,6 +13,7 @@ from .entities import (
     TravelProduct,
     User,
     VisitorIntent,
+    VisitorTripPlan,
 )
 
 __all__ = [
@@ -27,8 +28,8 @@ __all__ = [
     "TravelProduct",
     "ProductResource",
     "VisitorIntent",
+    "VisitorTripPlan",
     "ResourceChangeEvent",
     "ProductAdjustmentRecord",
     "SkillCallLog",
 ]
-

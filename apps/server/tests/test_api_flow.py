@@ -254,6 +254,70 @@ def test_alternative_partner_variants_do_not_conflict_with_each_other(client, ho
     assert set(partner_names) == {"室内非遗手作体验", "儿童茶文化课堂"}
 
 
+def test_automatic_variants_use_one_compatible_session_instead_of_merging_overlaps(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    request["resource_selections"] = []
+    request["variant_count"] = 3
+    response = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    assert response.status_code == 200, response.text
+    products = response.json()["products"]
+    assert len(products) == 3
+    assert all(sum(item["resource_type"] == "PARTNER_RESOURCE" for item in product["resources"]) == 1 for product in products)
+
+
+def test_custom_multi_day_plan_holds_and_releases_real_inventory(client, hotel_token):
+    dates = sorted({item["available_date"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()})
+    assert len(dates) >= 2
+    proposal = client.post(
+        "/api/v1/visitor/trip-plans/propose",
+        json={
+            "natural_language": "两个人第一天看展吃饭，第二天去博物馆和西湖，不要太赶。",
+            "start_date": dates[0],
+            "duration_days": 2,
+            "party_size": 2,
+            "target_crowd": "COUPLE",
+            "weather": "CLOUDY",
+            "include_breakfast": True,
+            "plan_name": "两天杭州看展行程",
+        },
+    )
+    assert proposal.status_code == 200, proposal.text
+    draft = proposal.json()["plans"][0]
+    rooms = [item for item in draft["items"] if item["resource_type"] == "ROOM"]
+    assert len(rooms) == 2
+    second_day_experiences = [
+        item["resource_name"]
+        for item in draft["itinerary"]
+        if item["resource_type"] == "PARTNER_RESOURCE" and item["day"] == 2
+    ]
+    assert any("博物馆" in name for name in second_day_experiences)
+    before = {item["id"]: item["available_count"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()}
+    held = client.post(
+        "/api/v1/visitor/trip-plans/hold",
+        json={
+            "natural_language": "两个人第一天看展吃饭，第二天去博物馆和西湖，不要太赶。",
+            "start_date": dates[0],
+            "duration_days": 2,
+            "party_size": 2,
+            "target_crowd": "COUPLE",
+            "weather": "CLOUDY",
+            "include_breakfast": True,
+            "plan_name": "两天杭州看展行程",
+            "items": draft["items"],
+            "contact_name": "王五",
+            "contact_phone": "13600136000",
+        },
+    )
+    assert held.status_code == 200, held.text
+    assert held.json()["status"] == "HELD"
+    after_hold = {item["id"]: item["available_count"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()}
+    assert all(after_hold[item["resource_id"]] == before[item["resource_id"]] - 1 for item in rooms)
+    released = client.post(f"/api/v1/visitor/trip-plans/{held.json()['id']}/cancel", json={"contact_phone": "13600136000"})
+    assert released.status_code == 200, released.text
+    after_release = {item["id"]: item["available_count"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()}
+    assert all(after_release[item["resource_id"]] == before[item["resource_id"]] for item in rooms)
+
+
 def test_natural_language_interpretation_returns_confirmable_requirement_card(client):
     response = client.post("/api/v1/visitor/interpret", json={"natural_language": "两大两小，孩子6岁和9岁，周六去西湖和运河，预算1000元，花生过敏，不吃辣"})
     assert response.status_code == 200, response.text
@@ -342,6 +406,11 @@ def test_confirmed_intent_cancellation_releases_reserved_inventory(client, hotel
     assert intent.status_code == 200, intent.text
     confirmed = client.patch(f"/api/v1/hotel/intents/{intent.json()['id']}", headers=auth(hotel_token), json={"status": "CONFIRMED"})
     assert confirmed.status_code == 200, confirmed.text
+    dashboard = client.get("/api/v1/hotel/dashboard", headers=auth(hotel_token))
+    assert dashboard.status_code == 200, dashboard.text
+    assert dashboard.json()["confirmed_order_count"] >= 1
+    assert float(dashboard.json()["confirmed_revenue"]) >= float(product["suggested_price"])
+    assert dashboard.json()["sales_timeline"]
     cancelled = client.post(f"/api/v1/visitor/intents/{intent.json()['id']}/cancel", json={"contact_phone": "13700137000"})
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["reservation_status"] == "RELEASED"

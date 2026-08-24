@@ -18,6 +18,7 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
         "weather": product.weather,
         "target_date": product.target_date,
         "room_inventory_id": product.room_inventory_id,
+        "listed_quantity": product.listed_quantity,
         "sale_quantity": product.sale_quantity,
         "unit_cost": product.unit_cost,
         "minimum_allowed_price": product.minimum_allowed_price,
@@ -51,6 +52,9 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
                 "end_time": _resource_end(item),
                 "address": _resource_address(item),
                 "description": _resource_description(item),
+                "image_url": _resource_image_url(item),
+                "image_source": _resource_image_source(item),
+                "image_attribution": _resource_image_attribution(item),
             }
             for item in product.resources
         ],
@@ -120,6 +124,18 @@ def _resource_description(item: ProductResource):
     return getattr(source, "description", None)
 
 
+def _resource_image_url(item: ProductResource) -> str:
+    return str(getattr(_resource_object(item), "image_url", "") or "")
+
+
+def _resource_image_source(item: ProductResource) -> str:
+    return str(getattr(_resource_object(item), "image_source", "") or "")
+
+
+def _resource_image_attribution(item: ProductResource) -> str:
+    return str(getattr(_resource_object(item), "image_attribution", "") or "")
+
+
 def partner_resource_to_dict(resource: PartnerResource, referenced_product_count: int = 0) -> dict[str, Any]:
     return {
         "id": resource.id,
@@ -141,6 +157,9 @@ def partner_resource_to_dict(resource: PartnerResource, referenced_product_count
         "address": resource.address,
         "booking_notice": resource.booking_notice,
         "cancellation_rule": resource.cancellation_rule,
+        "image_url": resource.image_url,
+        "image_source": resource.image_source,
+        "image_attribution": resource.image_attribution,
         "package_enabled": resource.package_enabled,
         "source_type": resource.source_type,
         "status": resource.status,

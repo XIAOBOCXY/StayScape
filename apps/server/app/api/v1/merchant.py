@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ...core.exceptions import AppError
 from ...db import get_db
 from ...models import Merchant, PartnerResource, ProductResource, ResourceChangeEvent, TravelProduct, User
-from ...schemas.resources import PartnerResourceCreate, PartnerResourceRead, PartnerResourceUpdate
+from ...schemas.resources import MediaImportRequest, MediaSearchRequest, PartnerResourceCreate, PartnerResourceRead, PartnerResourceUpdate
 from ...services.product_service import ProductService
 from ...services.serializers import partner_resource_to_dict
+from ...services.media_library_service import MAX_MEDIA_BYTES, MediaLibraryService
 from ..deps import get_merchant_user
 from ..websocket_manager import manager
 
@@ -19,6 +20,27 @@ def merchant_for(db: Session, user: User) -> Merchant:
     if not merchant:
         raise AppError("MERCHANT_NOT_FOUND", "当前账号未绑定合作商户", status_code=404)
     return merchant
+
+
+@router.post("/media/upload")
+async def upload_media(file: UploadFile = File(...), user: User = Depends(get_merchant_user)):
+    _ = user
+    content = await file.read(MAX_MEDIA_BYTES + 1)
+    if len(content) > MAX_MEDIA_BYTES:
+        raise AppError("MEDIA_CONTENT_INVALID", "图片不能超过 12MB。", field="file")
+    return MediaLibraryService().store_upload(content, file.content_type)
+
+
+@router.post("/media/search")
+def search_media(request: MediaSearchRequest, user: User = Depends(get_merchant_user)):
+    _ = user
+    return {"items": MediaLibraryService().search_public(request.query, request.limit)}
+
+
+@router.post("/media/import")
+def import_media(request: MediaImportRequest, user: User = Depends(get_merchant_user)):
+    _ = user
+    return MediaLibraryService().import_remote(request.url, source=request.source, attribution=request.attribution)
 
 
 def snapshot(resource: PartnerResource) -> dict:

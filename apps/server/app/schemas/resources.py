@@ -19,6 +19,9 @@ class RoomRead(BaseModel):
     features: str
     suitable_crowds: str
     tags: str
+    image_url: str = ""
+    image_source: str = ""
+    image_attribution: str = ""
     status: str
     updated_at: object
 
@@ -34,6 +37,9 @@ class RoomCreate(BaseModel):
     features: str = ""
     suitable_crowds: str = "ALL"
     tags: str = ""
+    image_url: str = ""
+    image_source: str = ""
+    image_attribution: str = ""
 
 
 class RoomUpdate(BaseModel):
@@ -47,6 +53,9 @@ class RoomUpdate(BaseModel):
     features: str | None = None
     suitable_crowds: str | None = None
     tags: str | None = None
+    image_url: str | None = None
+    image_source: str | None = None
+    image_attribution: str | None = None
     status: str | None = None
     reason: str = "经营库存调整"
 
@@ -66,6 +75,9 @@ class ServiceRead(BaseModel):
     end_time: time | None
     suitable_crowds: str
     replaceable: bool
+    image_url: str = ""
+    image_source: str = ""
+    image_attribution: str = ""
     status: str
 
 
@@ -80,6 +92,9 @@ class ServiceCreate(BaseModel):
     end_time: time | None = None
     suitable_crowds: str = "ALL"
     replaceable: bool = True
+    image_url: str = ""
+    image_source: str = ""
+    image_attribution: str = ""
 
 
 class ServiceUpdate(BaseModel):
@@ -90,6 +105,9 @@ class ServiceUpdate(BaseModel):
     start_time: time | None = None
     end_time: time | None = None
     status: str | None = None
+    image_url: str | None = None
+    image_source: str | None = None
+    image_attribution: str | None = None
     reason: str = "酒店服务调整"
 
 
@@ -127,6 +145,9 @@ class PartnerResourceRead(BaseModel):
     address: str
     booking_notice: str
     cancellation_rule: str
+    image_url: str = ""
+    image_source: str = ""
+    image_attribution: str = ""
     package_enabled: bool
     source_type: str
     status: str
@@ -153,6 +174,9 @@ class PartnerResourceCreate(BaseModel):
     address: str = ""
     booking_notice: str = ""
     cancellation_rule: str = ""
+    image_url: str = ""
+    image_source: str = ""
+    image_attribution: str = ""
     package_enabled: bool = False
     source_type: str = "PARTNER"
 
@@ -184,6 +208,9 @@ class PartnerResourceUpdate(BaseModel):
     address: str | None = None
     booking_notice: str | None = None
     cancellation_rule: str | None = None
+    image_url: str | None = None
+    image_source: str | None = None
+    image_attribution: str | None = None
     source_type: str | None = None
     status: str | None = None
     reason: str = "合作资源更新"
@@ -191,3 +218,20 @@ class PartnerResourceUpdate(BaseModel):
 
 class PackageToggleRequest(BaseModel):
     package_enabled: bool
+
+
+class MediaImportRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    source: str = Field(default="网络图片", max_length=120)
+    attribution: str = Field(default="", max_length=500)
+
+
+class MediaSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=180)
+    limit: int = Field(default=8, ge=1, le=12)
+
+
+class ResourceMediaUpdate(BaseModel):
+    image_url: str = Field(default="", max_length=500)
+    image_source: str = Field(default="", max_length=120)
+    image_attribution: str = Field(default="", max_length=500)

@@ -109,7 +109,7 @@ class ProductService:
             raise AppError("ROOM_INVENTORY_INSUFFICIENT", "客房库存不足或已停用", field="room_inventory_id", retryable=True)
         return room
 
-    def _default_selections(self, request: GenerateProductRequest, room: RoomInventory) -> list[dict[str, Any]]:
+    def _default_selections(self, request: GenerateProductRequest, room: RoomInventory, *, variant_index: int = 0) -> list[dict[str, Any]]:
         selections: list[dict[str, Any]] = []
         services = list(self.db.scalars(select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.available_date == request.target_date, HotelService.status == "AVAILABLE").order_by(HotelService.id)).all())
         breakfast = next((item for item in services if item.service_type == "BREAKFAST"), None)
@@ -158,10 +158,76 @@ class ProductService:
             eligible.sort(key=lambda item: (item.category not in preferred_categories, item.indoor, item.settlement_price, item.id))
         else:
             eligible.sort(key=lambda item: (item.category not in preferred_categories, not item.indoor, item.settlement_price, item.id))
-        selected = eligible[0] if eligible else None
+        # A variant gets a different already-compatible experience.  The model
+        # receives this bounded set and writes the story around it; it must not
+        # select arbitrary overlapping activities from the whole resource pool.
+        selected = eligible[variant_index % len(eligible)] if eligible else None
         if selected:
             selections.append({"resource_type": "PARTNER_RESOURCE", "resource_id": selected.id, "quantity_per_package": 3 if selected.category == "CULTURE" else 1})
         return selections
+
+    def _variant_manual_selections(
+        self,
+        request: GenerateProductRequest,
+        selections: list[dict[str, Any]],
+        *,
+        variant_index: int,
+    ) -> list[dict[str, Any]]:
+        """Turn a hand-picked *set of options* into one compatible variant.
+
+        Operators commonly tick several sessions as alternatives.  Treating
+        every checked session as a compulsory part of the same itinerary made
+        otherwise valid proposals fail with a time-conflict error.  Services
+        stay selected; overlapping partner sessions are rotated across the
+        requested variants.  Non-overlapping activities can still coexist in
+        one itinerary when an operator intentionally selects them.
+        """
+        service_rows = [item for item in selections if item["resource_type"] == "HOTEL_SERVICE"]
+        partner_rows = [item for item in selections if item["resource_type"] == "PARTNER_RESOURCE"]
+        if len(partner_rows) <= 1:
+            return selections
+
+        service_ids = [int(item["resource_id"]) for item in service_rows]
+        services = {
+            item.id: item
+            for item in self.db.scalars(
+                select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.id.in_(service_ids))
+            ).all()
+        }
+        slots: list[tuple[time | None, time | None, str]] = [
+            (service.start_time, service.end_time, service.service_name)
+            for row in service_rows
+            if (service := services.get(int(row["resource_id"]))) and blocks_schedule(service)
+        ]
+
+        partner_ids = [int(item["resource_id"]) for item in partner_rows]
+        partners = {
+            item.id: item
+            for item in self.db.scalars(
+                select(PartnerResource)
+                .join(Merchant)
+                .options(selectinload(PartnerResource.merchant))
+                .where(PartnerResource.id.in_(partner_ids), Merchant.hotel_id == self.hotel_id)
+            ).unique().all()
+        }
+        # Rotate the order while preserving the operator's deliberate ordering.
+        offset = variant_index % len(partner_rows)
+        rotated = partner_rows[offset:] + partner_rows[:offset]
+        accepted: list[dict[str, Any]] = []
+        for row in rotated:
+            partner = partners.get(int(row["resource_id"]))
+            if not partner:
+                # Let the authoritative validation below report an invalid ID.
+                accepted.append(row)
+                continue
+            if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in slots):
+                continue
+            accepted.append(row)
+            slots.append((partner.start_time, partner.end_time, partner.resource_name))
+
+        # Preserve the original payload if there is no valid alternative; the
+        # normal validation will return a concrete operator-facing reason.
+        return service_rows + (accepted or partner_rows)
 
     def _partner_candidate(self, resource: PartnerResource, request: GenerateProductRequest) -> bool:
         merchant = resource.merchant
@@ -176,6 +242,7 @@ class ProductService:
     def _payload(self, request: GenerateProductRequest, room: RoomInventory, selections: list[dict[str, Any]], *, variant_index: int = 0) -> dict[str, Any]:
         services = list(self.db.scalars(select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.available_date == request.target_date)).all())
         partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date)).unique().all())
+        allowed_ids = {(str(item["resource_type"]), int(item["resource_id"])) for item in selections}
         return {
             "hotel_id": self.hotel_id,
             "target_date": request.target_date.isoformat(),
@@ -189,8 +256,8 @@ class ProductService:
             "preferred_price": str(request.preferred_price),
             "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests, "features": room.features, "suitable_crowds": room.suitable_crowds, "tags": room.tags, "available_count": room.available_count},
             "requested_selections": selections,
-            "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE"],
-            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
+            "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE" and ("HOTEL_SERVICE", item.id) in allowed_ids],
+            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if ("PARTNER_RESOURCE", item.id) in allowed_ids and item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
         }
 
     def _marketing_assets(self, assets, *, product_name: str, theme: str, target_crowd: str, weather: str, target_date: object, price: Decimal | str, room: RoomInventory, resources: list[ProductResource], variant_index: int = 0, copy_style: str = "SEEDING", generated_image: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -218,20 +285,30 @@ class ProductService:
 
     def generate(self, request: GenerateProductRequest, *, variant_index: int = 0) -> tuple[TravelProduct, dict[str, Any], str, bool]:
         room = self._room(request)
-        selections = [item.model_dump() for item in request.resource_selections] or self._default_selections(request, room)
+        manual_selections = [item.model_dump() for item in request.resource_selections]
+        # The inventory choice is made before the creative call.  In automatic
+        # mode every variant gets one compatible partner experience, rather
+        # than sending a whole list of overlapping "back-up" sessions to the
+        # model and later failing the package time check.
+        selections = (
+            self._variant_manual_selections(request, manual_selections, variant_index=variant_index)
+            if manual_selections
+            else self._default_selections(request, room, variant_index=variant_index)
+        )
         payload = self._payload(request, room, selections, variant_index=variant_index)
         agent_result = self.orchestrator.generate_product(payload)
         output: ProductAgentOutput = agent_result.value  # type: ignore[assignment]
-        if output.room_inventory_id != room.id:
-            raise AppError("AGENT_RESOURCE_ID_INVALID", "Agent选择了不在请求范围内的客房资源", field="room_inventory_id")
+        # The agent is responsible for travel copy, not for authoritative
+        # allocation IDs.  A malformed or stale model ID must never turn a
+        # valid stock-backed automatic plan into a failed request.
         requested_by_type = {(item["resource_type"], item["resource_id"]): item for item in selections}
-        selected_services = [item.id for item in self.db.scalars(select(HotelService).where(HotelService.id.in_(output.hotel_service_ids), HotelService.hotel_id == self.hotel_id)).all()] if output.hotel_service_ids else []
-        selected_partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(PartnerResource.id.in_(output.partner_resource_ids), Merchant.hotel_id == self.hotel_id)).unique().all()) if output.partner_resource_ids else []
-        if set(selected_services) != set(output.hotel_service_ids) or set(item.id for item in selected_partners) != set(output.partner_resource_ids):
-            raise AppError("AGENT_RESOURCE_ID_INVALID", "Agent返回了不存在或不属于当前酒店的资源ID", field="resource_ids")
-        for resource_type, resource_id in [("HOTEL_SERVICE", item) for item in selected_services] + [("PARTNER_RESOURCE", item.id) for item in selected_partners]:
-            if requested_by_type and (resource_type, resource_id) not in requested_by_type and request.resource_selections:
-                raise AppError("AGENT_RESOURCE_ID_INVALID", "Agent选择了未授权的资源ID", field="resource_ids")
+        # Resource selection is deterministic and locked before the LLM is
+        # called.  Treat model IDs as content hints only: allowing the model to
+        # substitute arbitrary IDs was the source of time-overlap failures.
+        selected_services = [item.id for item in self.db.scalars(select(HotelService).where(HotelService.id.in_([resource_id for resource_type, resource_id in requested_by_type if resource_type == "HOTEL_SERVICE"]), HotelService.hotel_id == self.hotel_id)).all()]
+        selected_partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(PartnerResource.id.in_([resource_id for resource_type, resource_id in requested_by_type if resource_type == "PARTNER_RESOURCE"]), Merchant.hotel_id == self.hotel_id)).unique().all())
+        if len(selected_services) != sum(1 for resource_type, _ in requested_by_type if resource_type == "HOTEL_SERVICE") or len(selected_partners) != sum(1 for resource_type, _ in requested_by_type if resource_type == "PARTNER_RESOURCE"):
+            raise AppError("RESOURCE_SELECTION_INVALID", "选择的资源不存在或不属于当前酒店", field="resource_selections")
 
         services = [self.db.get(HotelService, item) for item in selected_services]
         resource_rows: list[ProductResource] = [ProductResource(resource_type="ROOM", resource_id=room.id, resource_name=room.room_type, quantity_per_package=1, unit_cost=room.accounting_cost, replaceable=False, required=True)]
@@ -242,7 +319,8 @@ class ProductService:
         for service in services:
             if service is None:
                 continue
-            q = output.resource_quantities.get(str(service.id), requested_by_type.get(("HOTEL_SERVICE", service.id), {}).get("quantity_per_package", DEFAULT_QUANTITIES.get(service.service_type, 1)))
+            requested_quantity = requested_by_type.get(("HOTEL_SERVICE", service.id), {}).get("quantity_per_package", DEFAULT_QUANTITIES.get(service.service_type, 1))
+            q = requested_quantity if not manual_selections else output.resource_quantities.get(str(service.id), requested_quantity)
             self._validate_service(service, request, q)
             if blocks_schedule(service) and any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
                 raise AppError("TIME_CONFLICT", f"酒店服务{service.service_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
@@ -252,7 +330,8 @@ class ProductService:
             if blocks_schedule(service):
                 schedule_slots.append((service.start_time, service.end_time, service.service_name))
         for partner in selected_partners:
-            q = output.resource_quantities.get(str(partner.id), requested_by_type.get(("PARTNER_RESOURCE", partner.id), {}).get("quantity_per_package", 1))
+            requested_quantity = requested_by_type.get(("PARTNER_RESOURCE", partner.id), {}).get("quantity_per_package", 1)
+            q = requested_quantity if not manual_selections else output.resource_quantities.get(str(partner.id), requested_quantity)
             self._validate_partner(partner, request, q)
             if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in schedule_slots):
                 raise AppError("TIME_CONFLICT", f"文化体验{partner.resource_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
@@ -276,6 +355,7 @@ class ProductService:
             weather=request.weather,
             target_date=request.target_date,
             room_inventory_id=room.id,
+            listed_quantity=validation.capacity.sale_quantity,
             sale_quantity=validation.capacity.sale_quantity,
             unit_cost=validation.pricing.unit_cost,
             minimum_allowed_price=validation.pricing.minimum_allowed_price,
@@ -325,7 +405,7 @@ class ProductService:
         )
         return self._payload(request, room, selections)
 
-    def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "", *, style: str = "SEEDING", generate_image: bool = False, image_model: str | None = None) -> tuple[str, bool]:
+    def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "", *, style: str = "SEEDING", generate_image: bool = False) -> tuple[str, bool]:
         result = self.orchestrator.generate_product(self._marketing_payload(product, creative_direction, style=style))
         output: ProductAgentOutput = result.value  # type: ignore[assignment]
         room = self.db.get(RoomInventory, product.room_inventory_id)
@@ -333,7 +413,7 @@ class ProductService:
             raise AppError("ROOM_NOT_FOUND", "产品关联客房不存在，无法重新生成营销素材")
         generated_image: dict[str, Any] | None = None
         if generate_image:
-            generated_image = WanImageService().generate(marketing_image_prompt(self.db, product, output, style), model=image_model)
+            generated_image = WanImageService().generate(marketing_image_prompt(self.db, product, output, style))
         product.marketing_title = output.marketing_title
         product.marketing_content = output.marketing_content
         product.recommendation_reason = output.recommendation_reason
@@ -505,7 +585,11 @@ class ProductService:
             product.sale_quantity = 0
             product.status = "PAUSED"
             return self._record_adjustment(product, event, old_quantity, old_price, "PAUSE_PRODUCT", exc.message, replacement_id)
-        product.sale_quantity = validation.capacity.sale_quantity
+        # A resource change may reduce what can be sold today, but it must not
+        # overwrite the merchant's original listing ceiling.  When a temporary
+        # hold later expires, the capacity reconciler can safely restore this
+        # ceiling (subject to all real source rows).
+        product.sale_quantity = min(max(0, product.listed_quantity), validation.capacity.sale_quantity)
         product.unit_cost = validation.pricing.unit_cost
         product.minimum_allowed_price = validation.pricing.minimum_allowed_price
         product.suggested_price = validation.pricing.suggested_price

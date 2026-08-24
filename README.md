@@ -102,7 +102,7 @@ FEISHU_ENABLED=false
 
 ### 可选：百炼 Wan AI 配图
 
-SVG 海报中的文字继续由本站的 SVG 排版生成，便于编辑并避免 AI 文字失真；需要新的主视觉时，再由经营端点击“生成宣传素材”并勾选 AI 视觉配图。默认使用更快的 `wan2.7-image`；需要精品主视觉时可在页面选择 `wan2.7-image-pro`。每次操作只请求 1 张图，不会在 Seed、部署或游客浏览时自动调用。
+SVG 海报中的文字继续由本站的 SVG 排版生成，便于编辑并避免 AI 文字失真；需要新的主视觉时，再由经营端点击“生成宣传素材”并勾选 AI 视觉配图。每次操作只请求 1 张图，不会在 Seed、部署或游客浏览时自动调用。
 
 在同一个服务器 `.env` 中追加（`WAN_IMAGE_API_KEY` 留空即可复用上面的 Standard Key）：
 
@@ -116,7 +116,7 @@ WAN_IMAGE_SIZE=1536*2048
 WAN_IMAGE_WATERMARK=true
 ```
 
-Wan 2.7 使用与 API Key 同地域的工作空间地址，程序会根据 `WAN_IMAGE_WORKSPACE_ID` 与 `WAN_IMAGE_REGION` 自动拼出官方接口；不需要填写或维护 `WAN_IMAGE_API_URL`。百炼返回的临时图片链接会在服务器上下载保存到 `runtime/generated-media/`；该目录和 `.env` 都被 Git 忽略。浏览器只会拿到本站的图片地址，不会拿到百炼 Key、Qwen Key 或临时供应商链接。图像生成按成功图片数计费，请在生产前确认你的百炼价格与余额。
+Wan 2.7 使用与 API Key 同地域的工作空间地址，程序会根据 `WAN_IMAGE_WORKSPACE_ID` 与 `WAN_IMAGE_REGION` 自动拼出官方接口；不需要填写或维护 `WAN_IMAGE_API_URL`。模型也只由 `WAN_IMAGE_MODEL` 这一项控制：想从 `wan2.7-image` 切到 `wan2.7-image-pro` 时，只改服务器 `.env` 后重新部署，页面和接口都不能覆盖该选择。百炼返回的临时图片链接会在服务器上下载保存到 `runtime/generated-media/`；该目录和 `.env` 都被 Git 忽略。浏览器只会拿到本站的图片地址，不会拿到百炼 Key、Qwen Key 或临时供应商链接。图像生成按成功图片数计费，请在生产前确认你的百炼价格与余额。
 
 飞书不是 Web/H5 的启动前置条件。如需启用飞书，再在同一个 `.env` 中填写：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_DM_ALLOW_FROM`、`FEISHU_GROUP_ALLOW_FROM`、`FEISHU_GROUP_SENDER_ALLOW_FROM`、`FEISHU_OPERATOR_ALLOW_FROM` 和 `FEISHU_SUPPORT_ALLOW_FROM`。
 

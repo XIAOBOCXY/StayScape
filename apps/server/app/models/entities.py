@@ -72,6 +72,11 @@ class RoomInventory(TimestampMixin, Base):
     features: Mapped[str] = mapped_column(Text, default="", nullable=False)
     suitable_crowds: Mapped[str] = mapped_column(String(120), default="ALL", nullable=False)
     tags: Mapped[str] = mapped_column(String(240), default="", nullable=False)
+    # A merchant-owned upload or a cached, attributed public image.  The UI
+    # never needs to hotlink arbitrary travel-site assets directly.
+    image_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    image_source: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    image_attribution: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="AVAILABLE", nullable=False)
 
     hotel: Mapped[Hotel] = relationship(back_populates="rooms")
@@ -92,6 +97,9 @@ class HotelService(TimestampMixin, Base):
     end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     suitable_crowds: Mapped[str] = mapped_column(String(120), default="ALL", nullable=False)
     replaceable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    image_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    image_source: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    image_attribution: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="AVAILABLE", nullable=False)
 
     hotel: Mapped[Hotel] = relationship(back_populates="services")
@@ -119,6 +127,9 @@ class PartnerResource(TimestampMixin, Base):
     address: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     booking_notice: Mapped[str] = mapped_column(Text, default="", nullable=False)
     cancellation_rule: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    image_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    image_source: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    image_attribution: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     package_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     source_type: Mapped[str] = mapped_column(String(30), default="PARTNER", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="DRAFT", nullable=False)
@@ -153,6 +164,12 @@ class TravelProduct(TimestampMixin, Base):
     target_crowd: Mapped[str] = mapped_column(String(60), nullable=False)
     weather: Mapped[str] = mapped_column(String(20), default="RAIN", nullable=False)
     target_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Merchant-approved upper bound.  ``sale_quantity`` is the live, volatile
+    # projection after temporary visitor holds and shared-source allocation.
+    # Keeping the two values separate lets a cancelled/expired hold restore
+    # the public quantity without silently raising it above what the merchant
+    # originally chose to sell.
+    listed_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     room_inventory_id: Mapped[int] = mapped_column(ForeignKey("room_inventories.id"), nullable=False)
     sale_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
@@ -223,6 +240,36 @@ class VisitorIntent(TimestampMixin, Base):
     contact_phone: Mapped[str] = mapped_column(String(40), nullable=False)
 
     product: Mapped[TravelProduct] = relationship(back_populates="visitor_intents")
+
+
+class VisitorTripPlan(TimestampMixin, Base):
+    """A visitor-editable, multi-day quote whose physical inventory is held atomically.
+
+    Published products remain merchant-approved one-click offers.  This object
+    handles the separate "tell us how you want to play" journey without
+    pretending that an arbitrary draft already has guaranteed availability.
+    """
+
+    __tablename__ = "visitor_trip_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotel_id: Mapped[int] = mapped_column(ForeignKey("hotels.id"), nullable=False, index=True)
+    source_product_id: Mapped[int | None] = mapped_column(ForeignKey("travel_products.id"), nullable=True, index=True)
+    plan_name: Mapped[str] = mapped_column(String(180), default="杭州自定义行程", nullable=False)
+    natural_language: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    target_crowd: Mapped[str] = mapped_column(String(60), default="FRIENDS", nullable=False)
+    party_size: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    itinerary: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    total_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT")
+    reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    allocation_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    contact_name: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    contact_phone: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ResourceChangeEvent(TimestampMixin, Base):

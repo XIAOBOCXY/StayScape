@@ -36,41 +36,94 @@ class WanImageService:
             )
         return url
 
-    def generate(self, prompt: str, *, model: str | None = None) -> dict[str, str | bool]:
+    @staticmethod
+    def _safe_retry_prompt() -> str:
+        """A neutral fallback for rare output-side safety false positives.
+
+        The normal request remains product-specific.  This is only used after
+        BaiLian has already accepted the request but rejected its own rendered
+        result, so a merchant does not have to retry a perfectly ordinary
+        travel campaign by hand.
+        """
+        return (
+            "A calm, family-safe editorial travel photograph in Hangzhou, China. "
+            "Show only architecture, landscape, museum interiors, craft objects, "
+            "food still life, or scenic streets. No people, faces, body parts, text, "
+            "watermarks, logos, posters, graffiti, or signage. Vertical composition "
+            "with generous clean space and natural daylight."
+        )
+
+    @staticmethod
+    def _provider_failure(response: httpx.Response) -> tuple[str, str, str]:
+        try:
+            failure = response.json()
+        except ValueError:
+            failure = {}
+        return (
+            str(failure.get("code") or f"HTTP_{response.status_code}")[:80],
+            str(failure.get("message") or "服务暂时未完成")[:260],
+            str(failure.get("request_id") or response.headers.get("x-request-id") or "")[:120],
+        )
+
+    @staticmethod
+    def _payload(model: str, prompt: str) -> dict:
+        return {
+            "model": model,
+            "input": {"messages": [{"role": "user", "content": [{"text": prompt[:5000]}]}]},
+            "parameters": {"size": settings.wan_image_size, "n": 1, "watermark": settings.wan_image_watermark, "thinking_mode": True},
+        }
+
+    @staticmethod
+    def _post(api_url: str, api_key: str, payload: dict) -> httpx.Response:
+        return httpx.post(
+            api_url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=settings.wan_image_timeout_seconds,
+        )
+
+    def generate(self, prompt: str) -> dict[str, str | bool]:
         api_key = self._api_key()
         if not settings.wan_image_enabled or not api_key:
             raise AppError("WAN_IMAGE_NOT_CONFIGURED", "AI 配图尚未启用。请在服务器 .env 配置 WAN_IMAGE_ENABLED=true 和百炼 Standard API Key。", status_code=503, retryable=True)
-        selected_model = (model or settings.wan_image_model).strip()
+        # Model choice deliberately lives only in the server .env.  Neither
+        # the browser nor an API request may override it.
+        selected_model = settings.wan_image_model.strip()
         if selected_model not in SUPPORTED_WAN_MODELS:
             raise AppError("WAN_IMAGE_MODEL_INVALID", "仅支持 wan2.7-image 或 wan2.7-image-pro。", field="image_model")
 
         api_url = self._api_url()
-        payload = {
-            "model": selected_model,
-            "input": {"messages": [{"role": "user", "content": [{"text": prompt[:5000]}]}]},
-            "parameters": {"size": settings.wan_image_size, "n": 1, "watermark": settings.wan_image_watermark, "thinking_mode": True},
-        }
         try:
-            response = httpx.post(api_url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=payload, timeout=settings.wan_image_timeout_seconds)
+            response = self._post(api_url, api_key, self._payload(selected_model, prompt))
         except httpx.HTTPError as exc:
             raise AppError("WAN_IMAGE_REQUEST_FAILED", "百炼 AI 配图暂时无法连接，请稍后再试。", status_code=503, retryable=True) from exc
+
+        safety_retried = False
         if not response.is_success:
-            try:
-                failure = response.json()
-            except ValueError:
-                failure = {}
-            provider_code = str(failure.get("code") or f"HTTP_{response.status_code}")[:80]
-            provider_message = str(failure.get("message") or "服务暂时未完成")[:260]
-            request_id = str(failure.get("request_id") or response.headers.get("x-request-id") or "")[:120]
-            logger.warning("Wan image request failed: code=%s request_id=%s", provider_code, request_id or "-")
-            raise AppError(
-                "WAN_IMAGE_PROVIDER_ERROR",
-                f"百炼万相未完成出图：{provider_message}",
-                status_code=502,
-                retryable=response.status_code >= 500,
-                suggestion="请核对 Workspace ID、API Key 与地域是否一致，然后重试。",
-                details={"provider_code": provider_code, "request_id": request_id},
-            )
+            provider_code, provider_message, request_id = self._provider_failure(response)
+            if provider_code == "DataInspectionFailed":
+                safety_retried = True
+                logger.info("Wan output safety check retried with neutral visual prompt: request_id=%s", request_id or "-")
+                try:
+                    response = self._post(api_url, api_key, self._payload(selected_model, self._safe_retry_prompt()))
+                except httpx.HTTPError as exc:
+                    raise AppError("WAN_IMAGE_REQUEST_FAILED", "百炼 AI 配图暂时无法连接，请稍后再试。", status_code=503, retryable=True) from exc
+                if response.is_success:
+                    provider_code = provider_message = request_id = ""
+                else:
+                    provider_code, provider_message, request_id = self._provider_failure(response)
+            if response.is_success:
+                pass
+            else:
+                logger.warning("Wan image request failed: code=%s request_id=%s", provider_code, request_id or "-")
+                raise AppError(
+                    "WAN_IMAGE_PROVIDER_ERROR",
+                    f"百炼万相未完成出图：{provider_message}",
+                    status_code=502,
+                    retryable=response.status_code >= 500,
+                    suggestion="请核对 Workspace ID、API Key 与地域是否一致，然后重试。",
+                    details={"provider_code": provider_code, "request_id": request_id},
+                )
         try:
             result = response.json()
         except ValueError as exc:
@@ -82,6 +135,7 @@ class WanImageService:
             "image_source": "百炼万相 AI 配图",
             "image_model": selected_model,
             "image_watermarked": bool(settings.wan_image_watermark),
+            "image_safety_retry": safety_retried,
             "image_request_id": str(result.get("request_id") or ""),
         }
 

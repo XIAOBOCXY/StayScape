@@ -81,7 +81,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      # First boot may run Alembic plus the rich demo seed.  Give it enough
+      # room before dependent web/OpenClaw services decide it is unhealthy.
+      start_period: 90s
 
   web:
     build:
