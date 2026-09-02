@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["target_date", "weather", "target_crowd", "room_inventory", "allowed_hotel_services", "allowed_partner_resources"],
+  "properties": {
+    "target_date": {"type": "string"},
+    "weather": {"type": "string"},
+    "target_crowd": {"type": "string"},
+    "theme": {"type": "string"},
+    "creative_direction": {"type": "string"},
+    "visitor_budget": {"type": "string"},
+    "preferred_price": {"type": "string"},
+    "room_inventory": {"type": "object", "required": ["id", "room_type"]},
+    "requested_selections": {"type": "array"},
+    "allowed_hotel_services": {"type": "array"},
+    "allowed_partner_resources": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer"}, "resource_name": {"type": "string"}, "category": {"type": "string"}, "description": {"type": "string"}, "address": {"type": "string"}, "source_type": {"enum": ["PARTNER", "DEMO", "PUBLIC_REFERENCE"]}, "package_enabled": {"type": "boolean"}, "remaining_capacity": {"type": "integer"}}}}
+  }
+}

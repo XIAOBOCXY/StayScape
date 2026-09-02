@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["marketing_title", "marketing_content", "marketing_assets", "creative_angle", "poster_style"],
+  "properties": {
+    "marketing_title": {"type": "string", "minLength": 1},
+    "marketing_content": {"type": "string"},
+    "creative_angle": {"type": "string"},
+    "poster_style": {"type": "string"},
+    "marketing_assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["asset_type", "platform", "title", "content"],
+        "properties": {
+          "asset_type": {"enum": ["POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT", "STORE_CARD"]},
+          "platform": {"type": "string"},
+          "title": {"type": "string"},
+          "content": {"type": "string"},
+          "visual_brief": {"type": "string"},
+          "call_to_action": {"type": "string"},
+          "poster_svg": {"type": "string"},
+          "creative_angle": {"type": "string"},
+          "poster_style": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

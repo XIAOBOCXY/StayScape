@@ -1,0 +1,12 @@
+{
+  "marketing_title": "雨天也能把杭州住成一段文化记忆",
+  "marketing_content": "一间亲子房，串起家庭早餐与室内非遗手作体验；雨天不改行程，按真实场次在拱宸桥非遗工坊完成一件可带走的手作。",
+  "creative_angle": "室内非遗手作的具体城市体验主视觉：亲子房 + 拱宸桥非遗工坊",
+  "poster_style": "culture-editorial",
+  "marketing_assets": [
+    {"asset_type": "POSTER", "platform": "StayScape / 小红书封面", "title": "雨天也能好好玩｜杭州雨天亲子非遗文化宿", "content": "亲子房 + 家庭早餐 + 室内非遗手作，雨天不改行程。", "visual_brief": "以室内非遗手作为主视觉，画面包含亲子房与真实场次信息，不使用空泛纯色背景。", "creative_angle": "室内非遗手作的具体城市体验主视觉", "poster_style": "culture-editorial", "call_to_action": "查看场次 · 提交预约意向", "poster_svg": ""},
+    {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": "雨天杭州：非遗手作值得住一晚", "content": "雨天的杭州，也值得住一晚。\n\n把亲子房、家庭早餐和室内非遗手作排成一张轻松的时间卡，不用赶很多景点。\n\n#杭州非遗 #亲子手作 #雨天去哪儿 #StayScape", "visual_brief": "首图突出非遗手作具体体验，后续展示房间、场次和余量。", "call_to_action": "收藏这段杭州行程"},
+    {"asset_type": "SHORT_VIDEO_SCRIPT", "platform": "短视频 30 秒", "title": "30秒讲清雨天亲子非遗宿", "content": "0-3秒：雨天城市/酒店窗景；3-8秒：亲子房与家庭早餐；8-18秒：室内非遗手作真实体验画面；18-25秒：字幕显示场次与地址；25-30秒：展示价格与余量，提示先查看场次再提交预约意向。", "visual_brief": "镜头必须出现房间、服务、体验现场和时间地点四类具体画面。", "call_to_action": "立即查看可售套餐"},
+    {"asset_type": "STORE_CARD", "platform": "OTA / 酒店前台", "title": "雨天亲子非遗产品卖点卡", "content": "雨天友好 · 亲子房 · 家庭早餐 · 室内非遗手作\n场次以商户确认为准 · 拱宸桥非遗工坊\n适合亲子家庭 · ¥599 / 套", "visual_brief": "用房间、服务、体验、场次四块信息替代大段宣传语。", "call_to_action": "查看详情"}
+  ]
+}

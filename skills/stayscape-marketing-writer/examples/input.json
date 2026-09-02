@@ -1,0 +1,15 @@
+{
+  "target_date": "2026-08-30",
+  "weather": "RAIN",
+  "target_crowd": "FAMILY",
+  "theme": "雨天亲子非遗",
+  "creative_direction": "营销文案风格：轻松种草。用朋友分享周末发现的口吻，首句有钩子。",
+  "preferred_price": "599",
+  "room_inventory": {"id": 1, "room_type": "亲子房"},
+  "requested_selections": [
+    {"resource_type": "HOTEL_SERVICE", "resource_id": 1, "quantity_per_package": 3},
+    {"resource_type": "PARTNER_RESOURCE", "resource_id": 1, "quantity_per_package": 3}
+  ],
+  "allowed_hotel_services": [{"id": 1, "service_name": "家庭早餐"}],
+  "allowed_partner_resources": [{"id": 1, "resource_name": "室内非遗手作体验", "category": "CULTURE", "address": "拱宸桥非遗工坊", "package_enabled": true, "status": "AVAILABLE", "remaining_capacity": 12}]
+}

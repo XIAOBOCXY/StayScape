@@ -3,7 +3,7 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILLS = ["stayscape-product-generator", "stayscape-visitor-matcher"]
+SKILLS = ["stayscape-product-generator", "stayscape-visitor-matcher", "stayscape-marketing-writer"]
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".crt"}
 SENSITIVE_NAMES = {"credentials.json", "secrets.json", "service-account.json"}
 SECRET_ASSIGNMENT = re.compile(r"(?im)^\s*(?:api[_-]?key|secret|access[_-]?token|password)\s*[:=]\s*['\"]?(?!your[-_ ]|change[-_ ]|example|placeholder|none|null)[^\s'\"]{8,}")

@@ -14,7 +14,7 @@ from ..models import SkillCallLog
 from .context import RequestContext
 from .mock_agent import MockAgent
 from .openclaw import OpenClawAgent
-from .schemas import ProductAgentOutput, VisitorAgentOutput
+from .schemas import MarketingAgentOutput, ProductAgentOutput, VisitorAgentOutput
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
@@ -263,4 +263,13 @@ class AgentOrchestrator:
             payload=payload,
             schema=VisitorAgentOutput,
             fallback_factory=lambda: MockAgent()._visitor(payload),
+        )
+
+    def generate_marketing(self, payload: dict[str, Any]) -> AgentCallResult:
+        return self._call(
+            skill_name="stayscape-marketing-writer",
+            scene="marketing_generation",
+            payload=payload,
+            schema=MarketingAgentOutput,
+            fallback_factory=lambda: MockAgent()._marketing(payload),
         )

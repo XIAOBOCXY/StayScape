@@ -7,7 +7,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..agent import AgentOrchestrator
-from ..agent.schemas import ProductAgentOutput
+from ..agent.schemas import MarketingAgentOutput, ProductAgentOutput
 from ..core.exceptions import AppError
 from ..models import HotelService, Merchant, PartnerResource, ProductAdjustmentRecord, ProductResource, ResourceChangeEvent, RoomInventory, TravelProduct
 from ..repositories.product_repository import products_referencing
@@ -45,7 +45,7 @@ def marketing_style_direction(style: str, extra_direction: str = "") -> str:
     )
 
 
-def marketing_image_prompt(db: Session, product: TravelProduct, output: ProductAgentOutput, style: str) -> str:
+def marketing_image_prompt(db: Session, product: TravelProduct, output: MarketingAgentOutput, style: str) -> str:
     guide = MARKETING_STYLE_GUIDES.get(style, MARKETING_STYLE_GUIDES["SEEDING"])
     partner_name, address, description = "杭州在地体验", "杭州", ""
     for row in product.resources:
@@ -406,8 +406,12 @@ class ProductService:
         return self._payload(request, room, selections)
 
     def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "", *, style: str = "SEEDING", generate_image: bool = False) -> tuple[str, bool]:
-        result = self.orchestrator.generate_product(self._marketing_payload(product, creative_direction, style=style))
-        output: ProductAgentOutput = result.value  # type: ignore[assignment]
+        # Marketing refresh is a dedicated Skill, not a re-run of product
+        # generation: stayscape-marketing-writer rewrites only the creative
+        # packaging, and never touches recommendation_reason / risk_message
+        # (those stay product-level and are set once at generation time).
+        result = self.orchestrator.generate_marketing(self._marketing_payload(product, creative_direction, style=style))
+        output: MarketingAgentOutput = result.value  # type: ignore[assignment]
         room = self.db.get(RoomInventory, product.room_inventory_id)
         if room is None:
             raise AppError("ROOM_NOT_FOUND", "产品关联客房不存在，无法重新生成营销素材")
@@ -416,8 +420,6 @@ class ProductService:
             generated_image = WanImageService().generate(marketing_image_prompt(self.db, product, output, style))
         product.marketing_title = output.marketing_title
         product.marketing_content = output.marketing_content
-        product.recommendation_reason = output.recommendation_reason
-        product.risk_message = output.risk_message
         product.marketing_assets = self._marketing_assets(output.marketing_assets, product_name=product.product_name, theme=product.theme, target_crowd=product.target_crowd, weather=product.weather, target_date=product.target_date, price=product.suggested_price, room=room, resources=list(product.resources), variant_index=0, copy_style=style, generated_image=generated_image)
         self.db.flush()
         return result.trace_id, result.fallback_used

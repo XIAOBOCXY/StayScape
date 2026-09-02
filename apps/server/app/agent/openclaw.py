@@ -26,6 +26,15 @@ _WORKFLOW_RULES = {
         "invent product IDs, promise allergy safety, or expose backend operations. Write concise, "
         "natural Chinese for travellers."
     ),
+    "stayscape-marketing-writer": (
+        "Refresh the marketing copy for an already-validated travel product. Use only the supplied "
+        "product facts: name, theme, crowd, weather, date, room, services, partner resources and "
+        "price. Write four channel-appropriate assets (poster brief, social post, short-video script, "
+        "store card) in natural traveller-facing Chinese. Keep the poster a visual brief only with "
+        "creative_angle and poster_style hints; never return an internet image URL as a supplied asset. "
+        "Do not rewrite recommendation_reason or risk_message. Preserve allergy, child-age, weather and "
+        "time risks without promising safety or availability."
+    ),
 }
 _OUTPUT_CONTRACTS = {
     "stayscape-product-generator": (
@@ -44,6 +53,13 @@ _OUTPUT_CONTRACTS = {
         '"limited_adjustments":{"123":["string"]},"allergy_warning":"string"}. '
         "Use product ID strings as the keys in reasons, schedule_notes, and limited_adjustments. "
         "Do not use arrays for safety_notes, reasons, schedule_notes, or limited_adjustments."
+    ),
+    "stayscape-marketing-writer": (
+        "Return exactly one JSON object. marketing_title, marketing_content, creative_angle, and "
+        "poster_style are strings; marketing_assets is an array of objects with platform, title, "
+        "content, visual_brief, call_to_action, creative_angle, and poster_style fields. Each "
+        "asset_type must be exactly one of POSTER, SOCIAL_POST, SHORT_VIDEO_SCRIPT, or STORE_CARD; "
+        "never use Chinese type labels. Do not return recommendation_reason or risk_message."
     ),
 }
 
@@ -136,6 +152,8 @@ class OpenClawAgent:
         workflow_id = (
             "visitor_matching"
             if skill_name == "stayscape-visitor-matcher"
+            else "marketing_writing"
+            if skill_name == "stayscape-marketing-writer"
             else "product_generation"
         )
         task: dict[str, Any] = {
@@ -171,7 +189,7 @@ class OpenClawAgent:
             "instructions": instructions,
             "store": False,
             "tool_choice": "none",
-            "max_output_tokens": 3200,
+            "max_output_tokens": 6400 if skill_name == "stayscape-marketing-writer" else 3200,
             "metadata": {"trace_id": trace_id or "", "skill_name": skill_name, "skill_version": self.skill_version},
         }
 

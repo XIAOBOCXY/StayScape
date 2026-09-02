@@ -63,13 +63,15 @@ def main() -> None:
         # node user (GID 1000), so grant that group read-only access without
         # making the token-bearing rendered config world-readable.
         OUTPUT.chmod(0o640)
+        # os.chown is not available on Windows; ownership is a POSIX concern
+        # handled by the Linux container at mount time.
         os.chown(OUTPUT, -1, int(env("OPENCLAW_CONFIG_GROUP_ID", "1000")))
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         pass
     print(f"Rendered OpenClaw config: {OUTPUT}")
     print(f"Feishu channel: {'enabled' if feishu_enabled else 'disabled (credentials not supplied)'}")
     print("Agent: stayscape-main")
-    print("Skills: stayscape-product-generator, stayscape-visitor-matcher")
+    print("Skills: stayscape-product-generator, stayscape-visitor-matcher, stayscape-marketing-writer")
 
 
 if __name__ == "__main__":

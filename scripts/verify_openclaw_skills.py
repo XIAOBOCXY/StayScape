@@ -6,7 +6,7 @@ import json
 import sys
 from typing import Any
 
-REQUIRED = {"stayscape-product-generator", "stayscape-visitor-matcher"}
+REQUIRED = {"stayscape-product-generator", "stayscape-visitor-matcher", "stayscape-marketing-writer"}
 
 
 def strings(value: Any):

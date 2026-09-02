@@ -49,11 +49,15 @@ class MockAgent:
             return "not-json"
         if skill_name == "stayscape-product-generator":
             return json.dumps(self._product(payload), ensure_ascii=False)
+        if skill_name == "stayscape-marketing-writer":
+            return json.dumps(self._marketing(payload), ensure_ascii=False)
         return json.dumps(self._visitor(payload), ensure_ascii=False)
 
     def repair_json(self, skill_name: str, payload: dict[str, Any], raw_response: str) -> str:
         if skill_name == "stayscape-product-generator":
             return json.dumps(self._product(payload), ensure_ascii=False)
+        if skill_name == "stayscape-marketing-writer":
+            return json.dumps(self._marketing(payload), ensure_ascii=False)
         return json.dumps(self._visitor(payload), ensure_ascii=False)
 
     @classmethod
@@ -242,6 +246,17 @@ class MockAgent:
             ],
             "recommendation_reason": f"以{room_name}为休息地，把{service_names}和{partner_name}安排进同一天，适合{audience}慢慢体验{profile['label']}。",
             "risk_message": "如有饮食、儿童陪同或行动安排方面的需求，提交预约意向时告诉我们即可。",
+        }
+
+    @classmethod
+    def _marketing(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        full = cls._product(payload)
+        return {
+            "marketing_title": full["marketing_title"],
+            "marketing_content": full["marketing_content"],
+            "creative_angle": full["creative_angle"],
+            "poster_style": full["poster_style"],
+            "marketing_assets": full["marketing_assets"],
         }
 
     @staticmethod

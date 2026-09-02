@@ -319,9 +319,13 @@ class TripPlanService:
     def _matches_literal_terms(partner: PartnerResource, terms: list[str]) -> bool:
         if not terms:
             return False
+        # Match the experience itself (name/description), not the merchant's
+        # address: "江南香囊制作" held at 西湖茶事体验馆 is not a "西湖" wish,
+        # and letting the address match steals slots from the real 西湖/博物馆
+        # experiences the visitor asked for.
         searchable = " ".join(
             str(value or "")
-            for value in (partner.resource_name, partner.description, partner.address)
+            for value in (partner.resource_name, partner.description)
         ).lower()
         return any(term.lower() in searchable for term in terms)
 

@@ -46,7 +46,7 @@ class MarketingAssetOutput(BaseModel):
     call_to_action: str = Field(default="", max_length=180)
     poster_svg: str = Field(default="", max_length=300000)
     creative_angle: str = Field(default="", max_length=260)
-    poster_style: str = Field(default="", max_length=80)
+    poster_style: str = Field(default="", max_length=200)
 
     @field_validator("asset_type", mode="before")
     @classmethod
@@ -82,9 +82,23 @@ class ProductAgentOutput(BaseModel):
     marketing_content: str = ""
     marketing_assets: list[MarketingAssetOutput] = Field(default_factory=list)
     creative_angle: str = Field(default="", max_length=260)
-    poster_style: str = Field(default="", max_length=80)
+    poster_style: str = Field(default="", max_length=200)
     recommendation_reason: str = ""
     risk_message: str = ""
+
+
+class MarketingAgentOutput(BaseModel):
+    """Output contract for the standalone stayscape-marketing-writer Skill.
+
+    Recommendation reason and risk message stay product-level (owned by the
+    product generator), so a marketing refresh never rewrites them.
+    """
+
+    marketing_title: str = Field(min_length=1, max_length=220)
+    marketing_content: str = ""
+    marketing_assets: list[MarketingAssetOutput] = Field(default_factory=list)
+    creative_angle: str = Field(default="", max_length=260)
+    poster_style: str = Field(default="", max_length=200)
 
 
 class VisitorAgentOutput(BaseModel):

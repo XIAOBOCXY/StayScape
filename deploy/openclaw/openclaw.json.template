@@ -131,7 +131,8 @@
       },
       "skills": [
         "stayscape-product-generator",
-        "stayscape-visitor-matcher"
+        "stayscape-visitor-matcher",
+        "stayscape-marketing-writer"
       ]
     },
     "list": [
@@ -141,7 +142,8 @@
         "workspace": "/home/node/.openclaw/workspace",
         "skills": [
           "stayscape-product-generator",
-          "stayscape-visitor-matcher"
+          "stayscape-visitor-matcher",
+          "stayscape-marketing-writer"
         ]
       }
     ]

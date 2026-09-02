@@ -124,6 +124,15 @@ def enrich_trip_plan_request(request: TripPlanRequest) -> tuple[TripPlanRequest,
         "budget": effective.budget,
     }
     text = request.natural_language
+    # Generic party size: 三个人 / 3人 / 两位. enrich_recommend_request has no
+    # "X个人" rule, so "两个人" only marks COUPLE but leaves adult_count at the
+    # UI default; parse it here so a written headcount actually drives the plan.
+    party_match = re.search(r"([\d一二两三四五六七八九十]+)\s*(?:个|位)?\s*人", text)
+    if party_match:
+        party = number_value(party_match.group(1), 0)
+        if party >= 1:
+            updates["party_size"] = min(8, party)
+    parsed_start_date: date | None = None
     explicit_date = re.search(r"(?<!\d)(\d{1,2})月(\d{1,2})(?:日|号)", text)
     if explicit_date:
         try:
@@ -132,12 +141,27 @@ def enrich_trip_plan_request(request: TripPlanRequest) -> tuple[TripPlanRequest,
             # than a date from the previous trip season.
             if candidate < date.today() - timedelta(days=1):
                 candidate = date(request.start_date.year + 1, candidate.month, candidate.day)
-            updates["start_date"] = candidate
+            parsed_start_date = candidate
         except ValueError:
             pass
-    duration = re.search(r"(\d+)\s*(?:天|晚)", text)
+    # A concrete date written in the sentence (周末/周X/明天/后天/今天) must win
+    # over the UI default, otherwise edits to the free text never re-plan.
+    if parsed_start_date is None:
+        if "后天" in text:
+            parsed_start_date = date.today() + timedelta(days=2)
+        elif "明天" in text:
+            parsed_start_date = date.today() + timedelta(days=1)
+        elif "今天" in text:
+            parsed_start_date = date.today()
+        else:
+            parsed_start_date = parse_weekday(text)
+    if parsed_start_date is not None:
+        updates["start_date"] = parsed_start_date
+    # "(?<!第)" keeps "第一天/第二天" itinerary wording from being read as a
+    # duration; only a plain "玩三天 / 住两晚 / 2天" changes the day count.
+    duration = re.search(r"(?<!第)([\d一二两三四五六七八九十]+)\s*(?:天|晚)", text)
     if duration:
-        updates["duration_days"] = min(5, max(1, int(duration.group(1))))
+        updates["duration_days"] = min(5, max(1, number_value(duration.group(1), 1)))
     elif any(token in text for token in ("两天一夜", "两日", "两晚")):
         updates["duration_days"] = 2
     elif any(token in text for token in ("三天两夜", "三日", "三晚")):

@@ -623,5 +623,6 @@ def agent_diagnostics(db: Session = Depends(get_db), user: User = Depends(get_ho
         "skills": [
             {"name": "stayscape-product-generator", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
             {"name": "stayscape-visitor-matcher", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
+            {"name": "stayscape-marketing-writer", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
         ],
     }
