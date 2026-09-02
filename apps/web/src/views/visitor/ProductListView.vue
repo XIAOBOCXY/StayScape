@@ -26,12 +26,12 @@ onMounted(load)
 
 <template>
   <main class="product-list">
-    <header class="product-list__head"><div><span>杭州产品</span><h1>挑一组直接出发，或自己改一份。</h1></div><router-link to="/visitor/recommend">说说想怎么玩</router-link></header>
+    <header class="product-list__head"><div><span>杭州产品</span><h1>挑一组由酒店审核上架的杭州体验。</h1></div></header>
     <section class="product-filter"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" type="date" placeholder="出发日期" /><el-input v-model="form.interest" placeholder="想玩什么：博物馆、乐园、看展、运动" clearable @keyup.enter="load" /><el-input v-model="form.budget" placeholder="预算上限" inputmode="numeric" /><el-button type="primary" @click="load">筛选</el-button></section>
     <el-alert v-if="error" :title="error" type="error" show-icon />
     <div v-if="loading" class="home-loading"><span /> 正在查看可预约产品…</div>
     <div v-else-if="items.length" class="product-grid product-grid--editorial product-grid--wide"><ProductCard v-for="product in items" :key="product.id" :product="product" public-view /></div>
-    <div v-else class="list-empty"><h2>没有完全一样的现成产品</h2><p>可以放宽筛选，或把具体日期和想法写进自定义行程。</p><div><el-button type="primary" @click="$router.push('/visitor/recommend')">定制行程</el-button><el-button plain @click="clear">清除筛选</el-button></div></div>
+    <div v-else class="list-empty"><h2>暂时没有匹配的产品</h2><p>可以放宽日期、预算或偏好后再试。</p><div><el-button plain @click="clear">清除筛选</el-button></div></div>
   </main>
 </template>
 

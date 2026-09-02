@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { visitorApi } from '../../api'
 import { errorMessage } from '../../api/client'
 import ProductCard from '../../components/ProductCard.vue'
@@ -9,6 +10,7 @@ const products = ref<TravelProduct[]>([])
 const loading = ref(true)
 const error = ref('')
 const quickText = ref('')
+const router = useRouter()
 const dateHint = computed(() => products.value.length ? `${products.value.length} 组可预约安排正在更新` : '正在查看可预约安排')
 
 async function load() {
@@ -19,8 +21,7 @@ async function load() {
   finally { loading.value = false }
 }
 function startPlan() {
-  const query = quickText.value.trim() ? { q: quickText.value.trim() } : undefined
-  window.location.href = `/visitor/recommend${query ? `?${new URLSearchParams(query).toString()}` : ''}`
+  router.push({ path: '/visitor/products', query: quickText.value.trim() ? { interest: quickText.value.trim() } : undefined })
 }
 
 onMounted(load)
@@ -30,11 +31,11 @@ onMounted(load)
   <main class="visitor-home">
     <section class="home-top">
       <div class="home-top__ticker"><span /> {{ dateHint }}<i>·</i> 房型、体验和价格以当前日期为准</div>
-      <div class="home-top__title"><div><h1>杭州，怎么安排都可以。</h1><p>选一组已上架的产品，或把第一天、第二天想做的事直接说出来。</p></div><router-link to="/visitor/products">查看全部</router-link></div>
-      <div class="quick-plan"><input v-model="quickText" placeholder="说说想怎么玩，例如：周六两个人看展吃饭，第二天去博物馆" @keyup.enter="startPlan" /><button @click="startPlan">开始定制</button></div>
+      <div class="home-top__title"><div><h1>杭州周末，从一组好产品开始。</h1><p>所有体验都由酒店审核上架；写下偏好，可以更快筛到适合的产品。</p></div><router-link to="/visitor/products">查看全部</router-link></div>
+      <div class="quick-plan"><input v-model="quickText" placeholder="说说偏好，例如：亲子看展、博物馆、轻松吃饭" @keyup.enter="startPlan" /><button @click="startPlan">查找产品</button></div>
     </section>
 
-    <section class="home-products"><div class="home-products__head"><h2>可预约产品</h2><span>按日期、同行人和玩法筛选</span></div><div v-if="loading" class="home-loading"><span /> 正在读取杭州的可预约安排…</div><el-alert v-else-if="error" :title="error" type="error" show-icon /><div v-else-if="products.length" class="product-grid product-grid--editorial home-product-grid"><ProductCard v-for="product in products.slice(0, 10)" :key="product.id" :product="product" public-view /></div><div v-else class="home-empty"><h3>暂时没有上架产品</h3><p>可以先直接写下日期和玩法，我们会按当前可用资源帮你组合。</p><button @click="startPlan">去定制行程</button></div></section>
+    <section class="home-products"><div class="home-products__head"><h2>可预约产品</h2><span>按日期和偏好筛选</span></div><div v-if="loading" class="home-loading"><span /> 正在读取杭州的可预约安排…</div><el-alert v-else-if="error" :title="error" type="error" show-icon /><div v-else-if="products.length" class="product-grid product-grid--editorial home-product-grid"><ProductCard v-for="product in products.slice(0, 10)" :key="product.id" :product="product" public-view /></div><div v-else class="home-empty"><h3>暂时没有上架产品</h3><p>酒店正在更新可预约产品，请稍后再看。</p><button @click="$router.push('/visitor/products')">查看产品</button></div></section>
   </main>
 </template>
 

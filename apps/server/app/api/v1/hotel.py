@@ -1,7 +1,5 @@
-from datetime import date
-from decimal import Decimal
-
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
 from sqlalchemy import func, or_, select
@@ -10,19 +8,25 @@ from sqlalchemy.orm import Session, selectinload
 from ...core.exceptions import AppError
 from ...config import settings
 from ...db import get_db
-from ...models import Hotel, HotelService, Merchant, PartnerResource, ProductResource, ResourceChangeEvent, RoomInventory, SkillCallLog, TravelProduct, User, VisitorIntent
+from ...models import AgentConversation, Hotel, HotelService, Merchant, PartnerResource, ProductProposal, ProductResource, ResourceChangeEvent, RoomInventory, SkillCallLog, TravelProduct, User, VisitorIntent
 from ...repositories.product_repository import get_product, list_products
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
-from ...schemas.products import AdjustmentRead, GenerateProductRequest, MarketingRegenerationRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
+from ...schemas.products import AdjustmentRead, BatchMarketingRefinementRequest, GenerateProductRequest, MarketingRegenerationRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
+from ...schemas.ai_operations import AssistantConversationCreate, AssistantMessageCreate, AgentConversationRead, AssistantTaskResponse, ProductProposalRead, ProposalConfirmRequest
 from ...schemas.visitor import VisitorIntentStatusUpdate
 from ...schemas.resources import MediaImportRequest, MediaSearchRequest, MerchantRead, PackageToggleRequest, PartnerResourceRead, ResourceMediaUpdate, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
+from ...services.product_proposal_service import ProductProposalService
 from ...services.product_draft_parser import interpret_product_draft
+from ...services.operations_insight_service import OperationsInsightService
+from ...services.knowledge_service import KnowledgeService
+from ...services.weather_service import WeatherService
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
 from ...services.media_library_service import MAX_MEDIA_BYTES, MediaLibraryService
 from ...agent.openclaw import OpenClawAgent
+from ...agent.context import RequestContext
 from ..deps import get_hotel_user, resolve_hotel_id
 from ..websocket_manager import manager
 
@@ -31,6 +35,100 @@ router = APIRouter(prefix="/hotel", tags=["hotel"])
 
 def hotel_id_for(db: Session, user: User) -> int:
     return resolve_hotel_id(db, user)
+
+
+def proposal_to_dict(db: Session, proposal: ProductProposal) -> dict:
+    """Serialize only auditable task state, never an Agent reasoning trace."""
+    product = get_product(db, proposal.product_id)
+    return {
+        "id": proposal.id,
+        "hotel_id": proposal.hotel_id,
+        "conversation_id": proposal.conversation_id,
+        "product_id": proposal.product_id,
+        "source_channel": proposal.source_channel,
+        "status": proposal.status,
+        "trace_ids": proposal.trace_ids or [],
+        "insight_snapshot": proposal.insight_snapshot,
+        "weather_snapshot": proposal.weather_snapshot,
+        "knowledge_snapshot": proposal.knowledge_snapshot or [],
+        "execution_steps": proposal.execution_steps or [],
+        "confirmation_action": proposal.confirmation_action,
+        "confirmed_by": proposal.confirmed_by,
+        "confirmed_at": proposal.confirmed_at,
+        "created_at": proposal.created_at,
+        "updated_at": proposal.updated_at,
+        "product": product_to_dict(product) if product else None,
+    }
+
+
+def _hotel_conversation_or_404(db: Session, hotel_id: int, conversation_id: int) -> AgentConversation:
+    conversation = db.scalar(select(AgentConversation).where(AgentConversation.id == conversation_id, AgentConversation.hotel_id == hotel_id))
+    if not conversation:
+        raise AppError("NOT_FOUND", "AI 运营任务不存在", status_code=404)
+    return conversation
+
+
+@router.post("/ai/conversations", response_model=AgentConversationRead)
+def create_ai_conversation(request: AssistantConversationCreate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    service = ProductProposalService(db, hotel_id, RequestContext(source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR", hotel_id=hotel_id, user_id=user.id))
+    conversation = service.conversation(title=request.title)
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+@router.get("/ai/conversations", response_model=list[AgentConversationRead])
+def ai_conversations(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    return list(db.scalars(select(AgentConversation).where(AgentConversation.hotel_id == hotel_id).order_by(AgentConversation.updated_at.desc()).limit(30)).all())
+
+
+@router.get("/ai/conversations/{conversation_id}", response_model=AgentConversationRead)
+def ai_conversation(conversation_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    return _hotel_conversation_or_404(db, hotel_id_for(db, user), conversation_id)
+
+
+@router.post("/ai/conversations/{conversation_id}/messages", response_model=AssistantTaskResponse)
+def ai_conversation_message(conversation_id: int, request: AssistantMessageCreate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    conversation = _hotel_conversation_or_404(db, hotel_id, conversation_id)
+    context = RequestContext(source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR", hotel_id=hotel_id, user_id=user.id, conversation_id=str(conversation.id))
+    proposals = ProductProposalService(db, hotel_id, context).create_from_language(request.natural_language, conversation=conversation)
+    db.commit()
+    db.refresh(conversation)
+    return {"conversation": conversation, "proposals": [proposal_to_dict(db, item) for item in proposals], "message": "已生成待确认候选；确认后才会进入草稿或对游客发布。"}
+
+
+@router.get("/ai/proposals", response_model=list[ProductProposalRead])
+def ai_proposals(status: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    context = RequestContext(source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR", hotel_id=hotel_id, user_id=user.id)
+    return [proposal_to_dict(db, item) for item in ProductProposalService(db, hotel_id, context).list_proposals(status=status)]
+
+
+@router.post("/ai/proposals/{proposal_id}/confirm", response_model=ProductProposalRead)
+def confirm_ai_proposal(proposal_id: int, request: ProposalConfirmRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    service = ProductProposalService(db, hotel_id, RequestContext(source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR", hotel_id=hotel_id, user_id=user.id))
+    proposal = service.confirm(proposal_id, action=request.action, confirmed_by=f"web-user:{user.id}")
+    db.commit()
+    return proposal_to_dict(db, proposal)
+
+
+@router.get("/ai/overview")
+def ai_overview(target_date: date | None = None, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """One compact, review-friendly view of facts used by hotel AI tasks."""
+    hotel_id = hotel_id_for(db, user)
+    selected_date = target_date or date.today()
+    proposals = list(db.scalars(select(ProductProposal).where(ProductProposal.hotel_id == hotel_id, ProductProposal.status == "PENDING_CONFIRMATION")).all())
+    return {
+        "operations_insights": OperationsInsightService(db, hotel_id).snapshot(target_date=selected_date),
+        "weather": WeatherService(db).get_forecast("杭州", selected_date),
+        "knowledge": KnowledgeService(db).search(limit=12),
+        "pending_confirmation_count": len(proposals),
+        "disclosure": "执行面板只展示可审计步骤与数据来源，不展示模型内部推理。",
+    }
 
 
 @router.post("/media/upload")
@@ -345,6 +443,10 @@ def products(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)
     items = list_products(db, hotel_id_for(db, user))
     if status:
         items = [item for item in items if item.status == status]
+    else:
+        # A generated candidate is not a hotel product yet. It becomes visible
+        # in this list only after the operator confirms draft or publish.
+        items = [item for item in items if item.status != "PENDING_CONFIRMATION"]
     return {"items": [product_to_dict(item) for item in items], "total": len(items)}
 
 
@@ -422,6 +524,13 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
         changed["target_date"] = target_date
     if request.room_inventory_id is not None or target_date != product.target_date:
         changed["room_inventory_id"] = room_id
+    if target_date != product.target_date:
+        forecast = WeatherService(db).get_forecast("杭州", target_date)
+        if forecast.get("usable"):
+            changed["weather"] = str(forecast.get("scenario") or product.weather)
+        else:
+            note = "天气信息需确认，请以出发前最新预报为准。"
+            changed["risk_message"] = f"{product.risk_message} {note}".strip()
     weather_or_context_changed = any(key in changed for key in ("target_date", "room_inventory_id", "weather", "target_crowd"))
     for key, value in changed.items():
         setattr(product, key, value)
@@ -454,6 +563,39 @@ def regenerate_marketing_assets(
     return product_to_dict(product)
 
 
+@router.post("/products/refine-marketing", response_model=list[ProductRead])
+def refine_generated_product_marketing(
+    request: BatchMarketingRefinementRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
+    """Apply one operator instruction to several generated product candidates.
+
+    This is deliberately constrained to the creative surface.  The hotel can
+    use language such as “改成更适合带娃的轻松种草口吻”，while FastAPI keeps
+    all real allocations and prices untouched and therefore still valid.
+    """
+
+    hotel_id = hotel_id_for(db, user)
+    ordered_ids = list(dict.fromkeys(request.product_ids))
+    if len(ordered_ids) != len(request.product_ids):
+        raise AppError("VALIDATION_ERROR", "请不要重复选择同一套候选产品", field="product_ids")
+    products = [get_product(db, product_id) for product_id in ordered_ids]
+    if any(not product or product.hotel_id != hotel_id or product.status == "DELETED" for product in products):
+        raise AppError("NOT_FOUND", "存在不可编辑的产品候选", status_code=404)
+
+    service = ProductService(db, hotel_id)
+    for product in products:
+        service.regenerate_marketing(
+            product,
+            creative_direction=request.natural_language,
+            style=request.style,
+            generate_image=request.generate_image,
+        )
+    db.commit()
+    return [product_to_dict(product) for product in products]
+
+
 @router.delete("/products/{product_id}")
 def delete_product(product_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     hotel_id = hotel_id_for(db, user)
@@ -475,6 +617,8 @@ def product_status(product_id: int, request: ProductStatusRequest, db: Session =
     product = get_product(db, product_id)
     if not product or product.hotel_id != hotel_id_for(db, user):
         raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    if product.status == "PENDING_CONFIRMATION":
+        raise AppError("PROPOSAL_CONFIRMATION_REQUIRED", "请先在 AI 运营任务中确认该候选，再调整产品状态。", status_code=409)
     if request.status == "ON_SALE":
         ProductService(db, hotel_id_for(db, user)).ensure_publish_capacity(product)
         if product.sale_quantity <= 0:

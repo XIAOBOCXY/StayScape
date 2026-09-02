@@ -53,7 +53,13 @@ RUN mkdir -p /opt/stayscape/runtime-plugins \
     && if [ -d /app/node_modules/openclaw ] && [ ! -e /opt/stayscape/runtime-plugins/node_modules/openclaw ]; then ln -s /app/node_modules/openclaw /opt/stayscape/runtime-plugins/node_modules/openclaw; fi \
     && if [ -d /usr/local/lib/node_modules/openclaw ] && [ ! -e /opt/stayscape/runtime-plugins/node_modules/openclaw ]; then ln -s /usr/local/lib/node_modules/openclaw /opt/stayscape/runtime-plugins/node_modules/openclaw; fi
 
+# Windows-originated build contexts can preserve group/other write bits.  Keep
+# this after the costly official-plugin layer so a permission-only repair does
+# not invalidate its cache; OpenClaw refuses insecure local plugin sources.
+RUN chmod -R go-w /opt/stayscape/openclaw-plugin
+
 COPY skills /opt/stayscape/skills
+COPY deploy/openclaw/workspace /opt/stayscape/workspace
 COPY deploy/openclaw/entrypoint.sh /opt/stayscape/entrypoint.sh
 RUN chmod +x /opt/stayscape/entrypoint.sh \
     && mkdir -p /home/node/.openclaw/workspace/skills \

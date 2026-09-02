@@ -4,7 +4,7 @@ StayScape 的正式运行时是自托管 OpenClaw，不是 ClawHive 云端实例
 
 ClawHive 在本项目中保留三个用途：
 
-1. 上传和发布 `stayscape-product-generator`、`stayscape-visitor-matcher` 两个 Skill ZIP
+1. 上传和发布 `stayscape-product-generator`、`stayscape-visitor-matcher`、`stayscape-marketing-writer` 三个 Skill ZIP
 2. 在 SkillHub 中展示、管理和验证 Skill
 3. 作为比赛生态材料的一部分，证明 Skill 符合平台上传规范
 
@@ -25,7 +25,7 @@ ClawHive 在本项目中保留三个用途：
 
 ```text
 StayScape Web/H5 -> FastAPI -> self-hosted OpenClaw -> stayscape-main -> Skill
-Feishu           -> OpenClaw Feishu Channel -> stayscape-main -> Skill/Tool
+Feishu           -> OpenClaw Feishu Channel -> stayscape-main -> Skill/Tool -> FastAPI
 ```
 
-因此不要再填写 `AGENT_PROVIDER=clawhive`、`CLAWHIVE_BASE_URL`、`CLAWHIVE_AGENT_ID` 等旧变量，也不要把 ClawHive 实例 ID、VM ID 或客户端实例 ID 当作 HTTP Agent 路由地址。
+因此不要再填写 `AGENT_PROVIDER=clawhive`、`CLAWHIVE_BASE_URL`、`CLAWHIVE_AGENT_ID` 等旧变量，也不要把 ClawHive 实例 ID、VM ID 或客户端实例 ID 当作 HTTP Agent 路由地址。即使 ClawHive 也支持 IM 机器人，Skill 的发布本身不会把它变成 StayScape 的受控业务运行时；本项目的飞书运营入口固定走 ECS OpenClaw。

@@ -15,6 +15,7 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
         "product_name": product.product_name,
         "theme": product.theme,
         "target_crowd": product.target_crowd,
+        "party_size": product.party_size,
         "weather": product.weather,
         "target_date": product.target_date,
         "room_inventory_id": product.room_inventory_id,

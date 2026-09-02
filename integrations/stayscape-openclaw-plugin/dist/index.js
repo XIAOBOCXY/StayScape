@@ -7,6 +7,7 @@ const configSchema = Type.Object({
 });
 const emptyParameters = Type.Object({}, { additionalProperties: false });
 const requestSchema = Type.Object({
+    natural_language: Type.Optional(Type.String({ minLength: 2, maxLength: 1200 })),
     target_date: Type.Optional(Type.String()),
     weather: Type.Optional(Type.String()),
     target_crowd: Type.Optional(Type.String()),
@@ -22,6 +23,17 @@ const requestSchema = Type.Object({
         resource_id: Type.Integer({ minimum: 1 }),
         quantity_per_package: Type.Integer({ minimum: 1, maximum: 100 }),
     }, { additionalProperties: false }))),
+}, { additionalProperties: false });
+const insightSchema = Type.Object({ target_date: Type.Optional(Type.String()) }, { additionalProperties: false });
+const knowledgeSchema = Type.Object({
+    query: Type.Optional(Type.String()),
+    target_crowd: Type.Optional(Type.String()),
+    weather: Type.Optional(Type.String()),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+}, { additionalProperties: false });
+const proposalConfirmSchema = Type.Object({
+    proposal_id: Type.Integer({ minimum: 1 }),
+    action: Type.Union([Type.Literal("DRAFT"), Type.Literal("PUBLISH")]),
 }, { additionalProperties: false });
 function runtimeRequester(context) {
     const requesterId = context.requesterSenderId;
@@ -92,7 +104,7 @@ async function callApi(path, body, config, context) {
 export default defineToolPlugin({
     id: "stayscape-openclaw-plugin",
     name: "StayScape Business Tools",
-    description: "Allowlisted hotel context, public product lookup and validated product drafts for StayScape Feishu operators.",
+    description: "Allowlisted hotel facts, reviewed tourism knowledge, and explicit-confirmation product proposals for StayScape Feishu operators.",
     configSchema,
     tools: (tool) => [
         tool({
@@ -118,14 +130,47 @@ export default defineToolPlugin({
             },
         }),
         tool({
-            name: "stayscape_create_product_draft",
-            label: "StayScape Product Draft",
-            description: "Create a DRAFT only after FastAPI validates resources, capacity, date, weather and margin.",
-            parameters: requestSchema,
-            outputSchema: Type.Object({ product_id: Type.Integer(), product: Type.Unknown(), products: Type.Array(Type.Unknown()), trace_ids: Type.Array(Type.String()) }, { additionalProperties: true }),
+            name: "stayscape_get_operations_insights",
+            label: "StayScape Operating Insights",
+            description: "Read privacy-safe recent sales aggregates and live opportunity signals for the bound hotel.",
+            parameters: insightSchema,
+            outputSchema: Type.Object({ target_date: Type.String(), recommendation_signals: Type.Array(Type.Unknown()) }, { additionalProperties: true }),
             optional: true,
             async execute(params, config, context) {
-                return callApi("product-draft", { hotel_id: Number(config.hotelId), payload: params }, config, context);
+                return callApi("operations-insights", { hotel_id: Number(config.hotelId), payload: params }, config, context);
+            },
+        }),
+        tool({
+            name: "stayscape_search_travel_knowledge",
+            label: "StayScape Travel Knowledge",
+            description: "Search curated Hangzhou tourism facts with source and verification state. Unverified facts are never bookable resources.",
+            parameters: knowledgeSchema,
+            outputSchema: Type.Object({ items: Type.Array(Type.Unknown()) }, { additionalProperties: true }),
+            optional: true,
+            async execute(params, config, context) {
+                return callApi("travel-knowledge", { hotel_id: Number(config.hotelId), payload: params }, config, context);
+            },
+        }),
+        tool({
+            name: "stayscape_create_product_proposal",
+            label: "StayScape Product Proposal",
+            description: "Create only PENDING_CONFIRMATION product candidates after FastAPI validates current inventory, dates, weather, time and margin. Ask the operator to confirm next.",
+            parameters: requestSchema,
+            outputSchema: Type.Object({ proposal_ids: Type.Array(Type.Integer()), proposals: Type.Array(Type.Unknown()) }, { additionalProperties: true }),
+            optional: true,
+            async execute(params, config, context) {
+                return callApi("product-proposal", { hotel_id: Number(config.hotelId), payload: params }, config, context);
+            },
+        }),
+        tool({
+            name: "stayscape_confirm_product_proposal",
+            label: "StayScape Confirm Product Proposal",
+            description: "Only after the Feishu operator explicitly says so, confirm a pending proposal into DRAFT or PUBLISH. PUBLISH rechecks live inventory immediately.",
+            parameters: proposalConfirmSchema,
+            outputSchema: Type.Object({ proposal_id: Type.Integer(), status: Type.String(), product: Type.Unknown() }, { additionalProperties: true }),
+            optional: true,
+            async execute(params, config, context) {
+                return callApi("proposal-confirm", { hotel_id: Number(config.hotelId), payload: params }, config, context);
             },
         }),
     ],

@@ -19,8 +19,11 @@ from ..rules.time_rule import intervals_overlap, validate_interval
 from ..rules.weather_rule import is_weather_supported
 from ..schemas.products import GenerateProductRequest
 from .inventory_service import ensure_publish_capacity, reconcile_published_capacity
+from .knowledge_service import KnowledgeService
+from .operations_insight_service import OperationsInsightService
 from .poster_service import poster_asset
 from .wan_image_service import WanImageService
+from .weather_service import WeatherService
 
 
 DEFAULT_QUANTITIES = {"BREAKFAST": 3, "LATE_CHECKOUT": 1}
@@ -59,13 +62,17 @@ def marketing_image_prompt(db: Session, product: TravelProduct, output: Marketin
             break
     poster = next((asset for asset in output.marketing_assets if asset.asset_type == "POSTER"), None)
     visual_brief = (poster.visual_brief if poster else "") or guide["visual"]
+    visual_seed = f"{product.product_code}:{product.target_date}:{style}:{partner_name}"
     return (
-        "为一张杭州旅行产品的竖版宣传主视觉生成图片。"
-        f"产品主题：{product.theme}；适合：{product.target_crowd}；体验：{partner_name}；地点线索：{address}。"
-        f"体验描述：{description}。视觉方向：{visual_brief}。风格：{guide['visual']}。"
-        "真实摄影感、自然光、编辑感旅行杂志构图、3:4 竖版，画面上方或下方预留干净留白给后续 SVG 中文排版。"
-        "只表现合理的杭州城市旅行场景，不虚构地标、门票、价格、服务承诺或品牌合作。"
-        "不要添加可读文字、数字、Logo、二维码、广告牌、商标或拟真的票券；避免可识别的真实人物肖像。"
+        "Create one distinct photographic hero image for a Hangzhou travel product, not a generic tourism stock photo. "
+        f"Creative seed: {visual_seed}. Theme: {product.theme}. Audience: {product.target_crowd}. "
+        f"Featured verified partner experience: {partner_name}; location cue: {address}. "
+        f"Experience description: {description}. Visual brief: {visual_brief}. Style: {guide['visual']}. "
+        "Use a believable, editorial travel-magazine photograph with a clear subject, natural light, tactile local details, "
+        "and a 3:4 vertical composition. Keep the centre-left or lower third visually quiet for a separate SVG text layer. "
+        "Show only a plausible Hangzhou setting; do not invent landmarks, tickets, prices, service promises or partnerships. "
+        "No readable words, digits, logos, QR codes, watermarks, signage, fake posters, or recognisable faces. "
+        "Vary camera angle, time of day, material texture and composition between products while preserving factual relevance."
     )[:5000]
 
 
@@ -90,10 +97,11 @@ def json_safe(value):
 
 
 class ProductService:
-    def __init__(self, db: Session, hotel_id: int, orchestrator: AgentOrchestrator | None = None) -> None:
+    def __init__(self, db: Session, hotel_id: int, orchestrator: AgentOrchestrator | None = None, *, intelligence_context: dict[str, Any] | None = None) -> None:
         self.db = db
         self.hotel_id = hotel_id
         self.orchestrator = orchestrator or AgentOrchestrator(db, hotel_id=hotel_id, source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR")
+        self.intelligence_context = intelligence_context or {}
 
     def ensure_publish_capacity(self, product: TravelProduct) -> list[dict[str, Any]]:
         return ensure_publish_capacity(self.db, product)
@@ -102,11 +110,24 @@ class ProductService:
         query = select(RoomInventory).where(RoomInventory.hotel_id == self.hotel_id, RoomInventory.available_date == request.target_date)
         if request.room_inventory_id:
             query = query.where(RoomInventory.id == request.room_inventory_id)
+        else:
+            # An automatically generated candidate must choose a room that can
+            # actually host its declared package size.  Keep an explicitly
+            # chosen incompatible room visible to the validator below, so the
+            # hotel receives a precise correction instead of a silent swap.
+            query = query.where(RoomInventory.max_guests >= request.party_size)
         room = self.db.scalar(query.order_by(RoomInventory.available_count.desc()))
         if not room:
             raise AppError("ROOM_INVENTORY_INSUFFICIENT", "没有找到符合入住日期的临期客房", field="room_inventory_id", retryable=True)
         if room.available_count <= 0 or room.status in {"SOLD_OUT", "DISABLED"}:
             raise AppError("ROOM_INVENTORY_INSUFFICIENT", "客房库存不足或已停用", field="room_inventory_id", retryable=True)
+        if request.party_size > room.max_guests:
+            raise AppError(
+                "PARTY_SIZE_NOT_SUPPORTED",
+                f"{room.room_type}最多接待 {room.max_guests} 人，请减少套餐人数或选择其他房型",
+                field="party_size",
+                retryable=True,
+            )
         return room
 
     def _default_selections(self, request: GenerateProductRequest, room: RoomInventory, *, variant_index: int = 0) -> list[dict[str, Any]]:
@@ -115,7 +136,7 @@ class ProductService:
         breakfast = next((item for item in services if item.service_type == "BREAKFAST"), None)
         late_checkout = next((item for item in services if item.service_type == "LATE_CHECKOUT"), None)
         if breakfast:
-            selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": breakfast.id, "quantity_per_package": 3})
+            selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": breakfast.id, "quantity_per_package": request.party_size})
         if late_checkout:
             selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": late_checkout.id, "quantity_per_package": 1})
         partners = list(self.db.scalars(select(PartnerResource).join(Merchant).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date).order_by(PartnerResource.id)).all())
@@ -163,7 +184,10 @@ class ProductService:
         # select arbitrary overlapping activities from the whole resource pool.
         selected = eligible[variant_index % len(eligible)] if eligible else None
         if selected:
-            selections.append({"resource_type": "PARTNER_RESOURCE", "resource_id": selected.id, "quantity_per_package": 3 if selected.category == "CULTURE" else 1})
+            # Partner capacity is maintained in people, not in a vague
+            # "package" unit.  This makes a couple, a family and a friends
+            # package consume the right amount of real capacity.
+            selections.append({"resource_type": "PARTNER_RESOURCE", "resource_id": selected.id, "quantity_per_package": request.party_size})
         return selections
 
     def _variant_manual_selections(
@@ -235,6 +259,7 @@ class ProductService:
             merchant
             and resource.available_date == request.target_date
             and resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=resource.package_enabled, resource_status=resource.status, capacity=resource.remaining_capacity, source_type=resource.source_type)
+            and resource.remaining_capacity >= request.party_size
             and crowd_supported(resource.suitable_crowds, request.target_crowd, minimum_age=resource.minimum_age, maximum_age=resource.maximum_age)
             and is_weather_supported(resource.weather_tags, request.weather)
         )
@@ -248,6 +273,7 @@ class ProductService:
             "target_date": request.target_date.isoformat(),
             "weather": request.weather,
             "target_crowd": request.target_crowd,
+            "party_size": request.party_size,
             "theme": request.theme,
             "creative_direction": request.creative_direction,
             "variant_index": variant_index,
@@ -258,6 +284,11 @@ class ProductService:
             "requested_selections": selections,
             "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE" and ("HOTEL_SERVICE", item.id) in allowed_ids],
             "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if ("PARTNER_RESOURCE", item.id) in allowed_ids and item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
+            # These facts are advisory context only. IDs, capacities, prices and
+            # constraints remain selected and checked below in FastAPI.
+            "weather_forecast": self.intelligence_context.get("weather"),
+            "operations_insights": self.intelligence_context.get("insights"),
+            "travel_knowledge": self.intelligence_context.get("knowledge", []),
         }
 
     def _marketing_assets(self, assets, *, product_name: str, theme: str, target_crowd: str, weather: str, target_date: object, price: Decimal | str, room: RoomInventory, resources: list[ProductResource], variant_index: int = 0, copy_style: str = "SEEDING", generated_image: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -283,7 +314,7 @@ class ProductService:
             rendered.append(data)
         return rendered
 
-    def generate(self, request: GenerateProductRequest, *, variant_index: int = 0) -> tuple[TravelProduct, dict[str, Any], str, bool]:
+    def generate(self, request: GenerateProductRequest, *, variant_index: int = 0, initial_status: str = "DRAFT") -> tuple[TravelProduct, dict[str, Any], str, bool]:
         room = self._room(request)
         manual_selections = [item.model_dump() for item in request.resource_selections]
         # The inventory choice is made before the creative call.  In automatic
@@ -352,6 +383,7 @@ class ProductService:
             product_name=output.product_name,
             theme=output.theme,
             target_crowd=request.target_crowd,
+            party_size=request.party_size,
             weather=request.weather,
             target_date=request.target_date,
             room_inventory_id=room.id,
@@ -371,21 +403,47 @@ class ProductService:
             marketing_assets=self._marketing_assets(output.marketing_assets, product_name=output.product_name, theme=output.theme, target_crowd=request.target_crowd, weather=request.weather, target_date=request.target_date, price=validation.pricing.suggested_price, room=room, resources=resource_rows, variant_index=variant_index),
             recommendation_reason=output.recommendation_reason,
             risk_message=output.risk_message,
-            status="DRAFT",
+            status=initial_status,
             resources=resource_rows,
         )
         self.db.add(product)
         self.db.flush()
         return product, validation.as_dict(), agent_result.trace_id, agent_result.fallback_used
 
-    def generate_many(self, request: GenerateProductRequest) -> list[tuple[TravelProduct, dict[str, Any], str, bool]]:
+    def resolve_intelligence(self, request: GenerateProductRequest, *, natural_language: str = "") -> tuple[GenerateProductRequest, dict[str, Any]]:
+        """Resolve factual context once before a multi-variant Agent task.
+
+        Forecast and knowledge failures never become invented facts: callers get
+        a visible `VERIFY_REQUIRED` marker and a neutral compatibility tag.
+        """
+        weather = WeatherService(self.db).get_forecast("杭州", request.target_date)
+        scenario = str(weather.get("scenario") or "CLOUDY") if weather.get("usable") else (request.weather or "CLOUDY")
+        resolved = request.model_copy(update={"weather": scenario})
+        insights = OperationsInsightService(self.db, self.hotel_id).snapshot(target_date=request.target_date)
+        knowledge_query = " ".join(part for part in (natural_language, request.theme, request.target_crowd) if part)
+        knowledge = KnowledgeService(self.db).search(knowledge_query, target_crowd=request.target_crowd, weather=scenario)
+        context = {"weather": weather, "insights": insights, "knowledge": knowledge}
+        self.intelligence_context = context
+        return resolved, context
+
+    def generate_many(
+        self,
+        request: GenerateProductRequest,
+        *,
+        initial_status: str = "DRAFT",
+        natural_language: str = "",
+        resolve_intelligence: bool = True,
+    ) -> list[tuple[TravelProduct, dict[str, Any], str, bool]]:
         """Generate several creative candidates over the same real inventory snapshot.
 
         Each candidate is independently validated and persisted as a draft. The
         business numbers remain deterministic and identical when the resource
         selections are identical; only the creative packaging varies.
         """
-        return [self.generate(request, variant_index=index) for index in range(request.variant_count)]
+        resolved_request = request
+        if resolve_intelligence:
+            resolved_request, _ = self.resolve_intelligence(request, natural_language=natural_language)
+        return [self.generate(resolved_request, variant_index=index, initial_status=initial_status) for index in range(resolved_request.variant_count)]
 
     def _marketing_payload(self, product: TravelProduct, creative_direction: str = "", *, style: str = "SEEDING") -> dict[str, Any]:
         room = self.db.get(RoomInventory, product.room_inventory_id)
@@ -394,6 +452,7 @@ class ProductService:
             target_date=product.target_date,
             weather=product.weather,
             target_crowd=product.target_crowd,
+            party_size=product.party_size,
             theme=product.theme,
             room_inventory_id=product.room_inventory_id,
             resource_selections=selections,

@@ -11,7 +11,11 @@
 | 临期客房 | GET/POST/PATCH | `/hotel/rooms`、`/hotel/rooms/{id}` | 维护房型、日期、库存、价格和入住人数 |
 | 酒店服务 | GET/PATCH | `/hotel/services`、`/hotel/services/{id}` | 维护早餐、延迟退房及其他服务 |
 | 合作资源 | GET/PATCH | `/hotel/resources`、`/hotel/resources/{id}/package` | 查看资源、切换组包许可 |
-| 产品生成 | POST | `/hotel/products/generate` | 调用 Product Skill，随后由规则引擎计算库存和价格 |
+| 产品生成 | POST | `/hotel/products/generate` | 调用 Product Skill，按产品类型、人数套餐与真实库存生成候选；随后由规则引擎计算库存和价格 |
+| 候选批量改稿 | POST | `/hotel/products/refine-marketing` | 经营者用一句自然语言同时调整多套候选的文案、SVG 海报与可选 AI 配图；不触碰库存、价格或发布状态 |
+| AI 运营任务 | POST/GET | `/hotel/ai/conversations`、`/hotel/ai/conversations/{id}/messages` | Web 与飞书共用的自然语言酒店运营任务；生成待确认候选 |
+| AI 候选确认 | GET/POST | `/hotel/ai/proposals`、`/hotel/ai/proposals/{id}/confirm` | 明确加入草稿或发布；发布前再次校验实时库存 |
+| AI 事实面板 | GET | `/hotel/ai/overview` | 聚合经营信号、天气、文旅知识和待确认数量；不返回内部推理 |
 | 产品维护 | GET/PATCH/DELETE | `/hotel/products/{id}` | 查看、编辑、删除产品 |
 | 营销素材 | POST | `/hotel/products/{id}/marketing-assets` | 生成或刷新海报、社媒文案、短视频脚本和门店卖点 |
 | 产品状态 | PATCH | `/hotel/products/{id}/status` | 模拟发布、暂停和下架 |
@@ -32,9 +36,12 @@
 |---|---|---|---|
 | POST | `/agent-tools/hotel-context` | HOTEL_OPERATOR/HOTEL_SUPPORT | 返回房间、服务和合作资源的运营字段 |
 | POST | `/agent-tools/available-products` | HOTEL_OPERATOR/HOTEL_SUPPORT | 返回游客安全的当前产品摘要 |
-| POST | `/agent-tools/product-draft` | HOTEL_OPERATOR | 创建 DRAFT；资源、库存、容量、时间和利润仍由 FastAPI 校验 |
+| POST | `/agent-tools/operations-insights` | HOTEL_OPERATOR/HOTEL_SUPPORT | 返回隐私安全的近 14 天经营聚合和实时机会信号 |
+| POST | `/agent-tools/travel-knowledge` | HOTEL_OPERATOR/HOTEL_SUPPORT | 返回带来源和核验状态的杭州文旅知识；不等于可售资源 |
+| POST | `/agent-tools/product-proposal` | HOTEL_OPERATOR | 创建 `PENDING_CONFIRMATION` 产品候选，资源、库存、容量、时间和利润仍由 FastAPI 校验 |
+| POST | `/agent-tools/proposal-confirm` | HOTEL_OPERATOR | 仅在飞书明确确认后加入草稿或发布；发布时重新复核实时库存 |
 
-Tool 不提供删除、发布、改库存、改成本、改价格、SQL、Shell 或任意 HTTP 能力。
+Tool 不提供删除、改库存、改成本、改价格、SQL、Shell 或任意 HTTP 能力；唯一的发布入口是允许名单经营者对某个已校验候选进行显式确认。
 
 ## 错误结构
 

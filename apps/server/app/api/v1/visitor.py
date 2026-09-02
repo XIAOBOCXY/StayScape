@@ -12,15 +12,13 @@ from ...agent import AgentOrchestrator
 from ...config import settings
 from ...core.exceptions import AppError
 from ...db import get_db
-from ...models import Hotel, HotelService, PartnerResource, ProductAdjustmentRecord, ProductResource, PublicResource, ResourceChangeEvent, RoomInventory, TravelProduct, VisitorIntent, VisitorTripPlan
+from ...models import HotelService, PartnerResource, ProductAdjustmentRecord, ProductResource, PublicResource, ResourceChangeEvent, RoomInventory, TravelProduct, VisitorIntent
 from ...repositories.product_repository import get_product, list_products
 from ...schemas.products import ProductRead
-from ...schemas.trip_plans import TripPlanHoldRequest, TripPlanRequest, TripPlanUpdateRequest
 from ...schemas.visitor import VisitorIntentCancelRequest, VisitorIntentCreate, VisitorInterpretRequest, VisitorInterpretResponse, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
 from ...services.inventory_service import reconcile_published_capacity, release_intent_inventory, reserve_product_inventory, sweep_expired_intents
 from ...services.media_library_service import MediaLibraryService
 from ...services.public_copy import public_travel_copy, visitor_product_to_dict
-from ...services.trip_plan_service import TripPlanService, sweep_expired_trip_plans
 from ...rules.availability_rule import tokens
 from ...rules.crowd_rule import crowd_supported
 from ...rules.time_rule import intervals_overlap
@@ -37,7 +35,12 @@ def public_cover_image(query: str = Query(min_length=2, max_length=180)):
         media = MediaLibraryService().automatic_cover(query)
     except AppError:
         return Response(status_code=204)
-    return RedirectResponse(media["image_url"], status_code=302)
+    # Browsers request the stable query URL on every card render.  Cache the
+    # redirect as well as the server-owned file so a known resource never has
+    # to repeat the Commons lookup before its image appears.
+    response = RedirectResponse(media["image_url"], status_code=302)
+    response.headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800"
+    return response
 
 
 CN_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
@@ -86,87 +89,6 @@ def parse_clock(prefix: str | None, value: str, default: int = 15) -> time:
     if prefix and prefix in {"下午", "晚上"} and hour < 12:
         hour += 12
     return time(min(hour, 23), 0)
-
-
-def visitor_plan_hotel_id(db: Session, source_product_id: int | None = None) -> int:
-    """Keep custom plans inside a real hotel's inventory boundary."""
-    if source_product_id:
-        product = db.get(TravelProduct, source_product_id)
-        if product:
-            return product.hotel_id
-    hotel_id = db.scalar(select(Hotel.id).where(Hotel.status == "ACTIVE").order_by(Hotel.id))
-    if not hotel_id:
-        raise AppError("HOTEL_NOT_AVAILABLE", "当前没有可用的杭州酒店库存", retryable=True)
-    return int(hotel_id)
-
-
-def enrich_trip_plan_request(request: TripPlanRequest) -> tuple[TripPlanRequest, dict[str, object]]:
-    """Use the same explainable natural-language parser as recommendations.
-
-    The explicit date and day count selected by the visitor remain authoritative;
-    free text only fills the crowd, party size, weather and budget defaults.
-    """
-    profile = VisitorRecommendRequest(
-        natural_language=request.natural_language,
-        structured_confirmed=False,
-        target_date=request.start_date,
-        weather=request.weather,
-        target_crowd=request.target_crowd,
-        adult_count=max(1, request.party_size),
-        child_count=0,
-        budget=request.budget or Decimal("1200"),
-    )
-    effective, interpreted = enrich_recommend_request(profile)
-    updates: dict[str, Any] = {
-        "target_crowd": effective.target_crowd,
-        "weather": effective.weather,
-        "party_size": min(8, max(1, effective.adult_count + effective.child_count)),
-        "budget": effective.budget,
-    }
-    text = request.natural_language
-    # Generic party size: 三个人 / 3人 / 两位. enrich_recommend_request has no
-    # "X个人" rule, so "两个人" only marks COUPLE but leaves adult_count at the
-    # UI default; parse it here so a written headcount actually drives the plan.
-    party_match = re.search(r"([\d一二两三四五六七八九十]+)\s*(?:个|位)?\s*人", text)
-    if party_match:
-        party = number_value(party_match.group(1), 0)
-        if party >= 1:
-            updates["party_size"] = min(8, party)
-    parsed_start_date: date | None = None
-    explicit_date = re.search(r"(?<!\d)(\d{1,2})月(\d{1,2})(?:日|号)", text)
-    if explicit_date:
-        try:
-            candidate = date(request.start_date.year, int(explicit_date.group(1)), int(explicit_date.group(2)))
-            # A past month/day normally refers to the next occurrence rather
-            # than a date from the previous trip season.
-            if candidate < date.today() - timedelta(days=1):
-                candidate = date(request.start_date.year + 1, candidate.month, candidate.day)
-            parsed_start_date = candidate
-        except ValueError:
-            pass
-    # A concrete date written in the sentence (周末/周X/明天/后天/今天) must win
-    # over the UI default, otherwise edits to the free text never re-plan.
-    if parsed_start_date is None:
-        if "后天" in text:
-            parsed_start_date = date.today() + timedelta(days=2)
-        elif "明天" in text:
-            parsed_start_date = date.today() + timedelta(days=1)
-        elif "今天" in text:
-            parsed_start_date = date.today()
-        else:
-            parsed_start_date = parse_weekday(text)
-    if parsed_start_date is not None:
-        updates["start_date"] = parsed_start_date
-    # "(?<!第)" keeps "第一天/第二天" itinerary wording from being read as a
-    # duration; only a plain "玩三天 / 住两晚 / 2天" changes the day count.
-    duration = re.search(r"(?<!第)([\d一二两三四五六七八九十]+)\s*(?:天|晚)", text)
-    if duration:
-        updates["duration_days"] = min(5, max(1, number_value(duration.group(1), 1)))
-    elif any(token in text for token in ("两天一夜", "两日", "两晚")):
-        updates["duration_days"] = 2
-    elif any(token in text for token in ("三天两夜", "三日", "三晚")):
-        updates["duration_days"] = 3
-    return request.model_copy(update=updates), interpreted_needs(effective, text)
 
 
 def interpreted_needs(request: VisitorRecommendRequest, text: str | None = None) -> dict[str, object]:
@@ -489,14 +411,14 @@ def build_schedule(db: Session, product: TravelProduct, arrival: time | None = N
 
 @router.get("/products", response_model=list[ProductRead])
 def products(query: VisitorProductQuery = Depends(), db: Session = Depends(get_db)):
-    if sweep_expired_intents(db) or sweep_expired_trip_plans(db):
+    if sweep_expired_intents(db):
         db.commit()
     return [visitor_product_to_dict(item) for item in public_items(db, query)]
 
 
 @router.get("/products/{product_id}", response_model=ProductRead)
 def product_detail(product_id: int, db: Session = Depends(get_db)):
-    if sweep_expired_intents(db) or sweep_expired_trip_plans(db):
+    if sweep_expired_intents(db):
         db.commit()
     product = get_product(db, product_id)
     if not product or product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0:
@@ -506,7 +428,7 @@ def product_detail(product_id: int, db: Session = Depends(get_db)):
 
 @router.post("/consult")
 def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
-    if sweep_expired_intents(db) or sweep_expired_trip_plans(db):
+    if sweep_expired_intents(db):
         db.commit()
     product = get_product(db, request.product_id) if request.product_id else None
     if product and (product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0):
@@ -561,90 +483,9 @@ def interpret(request: VisitorInterpretRequest):
     return {"interpreted_needs": interpreted, "follow_up_questions": follow_up_questions(effective, interpreted)}
 
 
-@router.post("/trip-plans/propose")
-def propose_trip_plans(request: TripPlanRequest, db: Session = Depends(get_db)):
-    """Create several editable multi-day drafts from current source stock.
-
-    This endpoint deliberately has no side effect: visitors can compare,
-    remove and reorder the returned rows first.  Only the explicit hold call
-    below locks inventory.
-    """
-    if sweep_expired_intents(db) or sweep_expired_trip_plans(db):
-        db.commit()
-    effective, interpreted = enrich_trip_plan_request(request)
-    hotel_id = visitor_plan_hotel_id(db, effective.source_product_id)
-    plans = TripPlanService(db, hotel_id).propose(effective)
-    return {"plans": plans, "interpreted_needs": interpreted, "inventory_note": "价格与余量按当前可用资源计算，确认暂留后会锁定所选内容。"}
-
-
-@router.post("/trip-plans/hold")
-async def hold_trip_plan(request: TripPlanHoldRequest, db: Session = Depends(get_db)):
-    if sweep_expired_intents(db) or sweep_expired_trip_plans(db):
-        db.commit()
-    effective, _ = enrich_trip_plan_request(request)
-    hotel_id = visitor_plan_hotel_id(db, effective.source_product_id)
-    service = TripPlanService(db, hotel_id)
-    plan = service.hold(effective, request.items, contact_name=request.contact_name, contact_phone=request.contact_phone)
-    db.commit()
-    db.refresh(plan)
-    await manager.broadcast(
-        hotel_id,
-        {
-            "type": "VISITOR_TRIP_PLAN_HELD",
-            "title": "游客暂留了一份自定义行程",
-            "message": f"{plan.plan_name} 已锁定至 {plan.reserved_until.strftime('%H:%M') if plan.reserved_until else ''}",
-            "affectedProducts": service.last_capacity_adjustments,
-        },
-    )
-    return {**service.to_dict(plan), "message": "已暂留所选房型与体验；在保留时间内可以继续调整。"}
-
-
-@router.patch("/trip-plans/{plan_id}")
-async def update_trip_plan(plan_id: int, request: TripPlanUpdateRequest, db: Session = Depends(get_db)):
-    if sweep_expired_trip_plans(db):
-        db.commit()
-    plan = db.scalar(select(VisitorTripPlan).where(VisitorTripPlan.id == plan_id).with_for_update())
-    if not plan:
-        raise AppError("NOT_FOUND", "行程暂留不存在或已结束", status_code=404)
-    if request.contact_phone and request.contact_phone != plan.contact_phone:
-        raise AppError("NOT_FOUND", "联系方式不匹配，无法修改这份行程", status_code=404)
-    effective, _ = enrich_trip_plan_request(request)
-    service = TripPlanService(db, plan.hotel_id)
-    plan = service.replace(plan, effective, request.items, contact_name=request.contact_name, contact_phone=request.contact_phone)
-    db.commit()
-    db.refresh(plan)
-    await manager.broadcast(
-        plan.hotel_id,
-        {"type": "VISITOR_TRIP_PLAN_UPDATED", "title": "游客更新了自定义行程", "message": plan.plan_name, "affectedProducts": service.last_capacity_adjustments},
-    )
-    return {**service.to_dict(plan), "message": "行程已更新，价格、路线和库存暂留已同步刷新。"}
-
-
-@router.post("/trip-plans/{plan_id}/cancel")
-async def cancel_trip_plan(plan_id: int, request: VisitorIntentCancelRequest, db: Session = Depends(get_db)):
-    if sweep_expired_trip_plans(db):
-        db.commit()
-    plan = db.scalar(select(VisitorTripPlan).where(VisitorTripPlan.id == plan_id).with_for_update())
-    if not plan or plan.contact_phone != request.contact_phone:
-        raise AppError("NOT_FOUND", "行程暂留不存在或联系方式不匹配", status_code=404)
-    service = TripPlanService(db, plan.hotel_id)
-    result = service.release(plan)
-    db.commit()
-    await manager.broadcast(
-        plan.hotel_id,
-        {
-            "type": "VISITOR_TRIP_PLAN_RELEASED",
-            "title": "游客释放了一份自定义行程",
-            "message": plan.plan_name,
-            "affectedProducts": service.last_capacity_adjustments,
-        },
-    )
-    return {**service.to_dict(plan), "message": "已释放暂留的房型与体验名额。", "inventory": result}
-
-
 @router.post("/recommend")
 def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
-    if sweep_expired_intents(db) or sweep_expired_trip_plans(db):
+    if sweep_expired_intents(db):
         db.commit()
     if request.structured_confirmed:
         interpreted = interpreted_needs(request)
@@ -719,7 +560,7 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
 
 @router.post("/intents")
 async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
-    if sweep_expired_intents(db) or sweep_expired_trip_plans(db):
+    if sweep_expired_intents(db):
         db.commit()
     product = db.scalar(
         select(TravelProduct)

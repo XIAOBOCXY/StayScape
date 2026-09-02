@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     wan_image_max_bytes: int = 20 * 1024 * 1024
     generated_media_dir: str = "/app/generated_media"
     generated_media_url_path: str = "/generated-media"
+    # Weather is a server-side planning signal.  It is never accepted from a
+    # browser as an authoritative forecast and never exposes an API key.
+    weather_enabled: bool = True
+    weather_provider: str = "open_meteo"
+    weather_forecast_days: int = 16
+    weather_cache_hours: int = 6
+    knowledge_review_days: int = 90
     visitor_intent_hold_minutes: int = 30
 
     cors_origins: str = "http://localhost:5173,http://localhost:8080"

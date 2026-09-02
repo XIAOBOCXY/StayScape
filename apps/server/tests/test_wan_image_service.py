@@ -38,6 +38,27 @@ def test_wan_image_is_downloaded_to_server_owned_path(monkeypatch, tmp_path: Pat
     assert list(tmp_path.iterdir())[0].read_bytes() == b"png-bytes"
 
 
+def test_wan_uses_image_magic_bytes_when_cdn_reports_generic_mime(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(settings, "wan_image_enabled", True)
+    monkeypatch.setattr(settings, "qwen_api_key", "test-key")
+    monkeypatch.setattr(settings, "wan_image_workspace_id", "workspace-test")
+    monkeypatch.setattr(settings, "wan_image_region", "cn-beijing")
+    monkeypatch.setattr(settings, "wan_image_api_url", "")
+    monkeypatch.setattr(settings, "generated_media_dir", str(tmp_path))
+
+    def fake_post(*_args, **_kwargs):
+        return FakeResponse(payload={"request_id": "req-mime", "output": {"choices": [{"message": {"content": [{"type": "image", "image": "https://dashscope-test.oss-cn-beijing.aliyuncs.com/result"}]}}]}})
+
+    png = b"\x89PNG\r\n\x1a\nimage-data"
+    monkeypatch.setattr("app.services.wan_image_service.httpx.post", fake_post)
+    monkeypatch.setattr("app.services.wan_image_service.httpx.get", lambda *_args, **_kwargs: FakeResponse(content=png, content_type="application/octet-stream"))
+
+    result = WanImageService().generate("杭州博物馆亲子产品主视觉")
+
+    assert result["image_url"].endswith(".png")
+    assert list(tmp_path.iterdir())[0].read_bytes() == png
+
+
 def test_wan_retries_once_with_a_neutral_visual_after_output_safety_block(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(settings, "wan_image_enabled", True)
     monkeypatch.setattr(settings, "qwen_api_key", "test-key")

@@ -169,10 +169,10 @@ if [[ "$MODE" == "live" ]]; then
   log "Verifying the single stayscape-main Agent"
   docker compose --env-file .env --profile live exec -T openclaw openclaw agents list --json \
     | python3 scripts/verify_openclaw_agent.py
-  log "Discovering both Skills through the OpenClaw CLI"
+  log "Discovering all three Skills through the OpenClaw CLI"
   docker compose --env-file .env --profile live exec -T openclaw openclaw skills list --agent stayscape-main --json \
     | python3 scripts/verify_openclaw_skills.py
-  log "Checking that both Skills are visible to stayscape-main"
+  log "Checking that all three Skills are visible to stayscape-main"
   docker compose --env-file .env --profile live exec -T openclaw openclaw skills check --agent stayscape-main --json \
     | python3 scripts/verify_openclaw_skills.py
   log "Verifying official OpenClaw provider and StayScape Tool Plugin"
@@ -235,6 +235,6 @@ fi
 log "Deployment complete: http://127.0.0.1:${port}"
 log "Hotel demo username: hotel_demo (enter the password manually; it is not embedded in the web bundle)"
 if [[ "$MODE" == "live" ]]; then
-  log "Live runtime: one private OpenClaw Gateway, Agent stayscape-main, two Skills"
+  log "Live runtime: one private OpenClaw Gateway, Agent stayscape-main, three Skills"
   log "If a model provider needs first-time OAuth/API authorization, complete that one provider-specific step now."
 fi

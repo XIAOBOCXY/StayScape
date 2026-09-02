@@ -131,6 +131,7 @@ export interface TravelProduct {
   product_name: string
   theme: string
   target_crowd: string
+  party_size: number
   weather: string
   target_date: string
   room_inventory_id: number
@@ -217,51 +218,4 @@ export interface Recommendation {
   provider?: string
   skill_name?: string
   fallback_used?: boolean
-}
-
-export interface TripPlanItem {
-  day: number
-  date: string
-  sort_order: number
-  resource_type: 'ROOM' | 'HOTEL_SERVICE' | 'PARTNER_RESOURCE'
-  resource_id: number
-  resource_name: string
-  quantity: number
-  start_time?: string | null
-  end_time?: string | null
-  address?: string
-  description?: string
-  image_url?: string
-  image_source?: string
-  image_attribution?: string
-  unit_price: string
-  subtotal: string
-  available_quantity: number
-  low_stock: boolean
-  category?: string
-}
-
-export interface TripPlanSelection {
-  resource_type: TripPlanItem['resource_type']
-  resource_id: number
-  quantity: number
-  sort_order: number
-}
-
-export interface TripPlan {
-  id?: number | null
-  plan_name: string
-  natural_language: string
-  start_date: string
-  duration_days: number
-  target_crowd: string
-  party_size: number
-  weather?: string
-  budget?: string | null
-  total_price: string
-  status: string
-  reserved_until?: string | null
-  items: TripPlanSelection[]
-  itinerary: TripPlanItem[]
-  low_stock_items: TripPlanItem[]
 }

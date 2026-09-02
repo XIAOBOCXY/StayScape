@@ -15,6 +15,22 @@ from app.models import Base  # noqa: E402
 from app.seed import seed_demo  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolated_runtime(monkeypatch):
+    """Keep integration tests deterministic even when run inside a Live image.
+
+    Production configuration intentionally forbids an OpenClaw-to-Mock
+    fallback.  Tests exercise the FastAPI validation and persistence boundary
+    with the deterministic adapter instead, while dedicated adapter tests mock
+    their own HTTP calls explicitly.
+    """
+    monkeypatch.setattr(settings, "app_env", "test")
+    monkeypatch.setattr(settings, "mode", "demo")
+    monkeypatch.setattr(settings, "agent_provider", "mock")
+    monkeypatch.setattr(settings, "openclaw_live_ready", False)
+    monkeypatch.setattr(settings, "weather_enabled", False)
+
+
 @pytest.fixture()
 def client():
     configure_database("sqlite:///:memory:")

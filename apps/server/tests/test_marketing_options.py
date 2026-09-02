@@ -5,10 +5,10 @@ from app.schemas.products import MarketingRegenerationRequest
 from app.services.product_service import marketing_style_direction
 
 
-def test_marketing_style_request_defaults_to_seeding_without_image():
+def test_marketing_style_request_defaults_to_seeding_with_an_explicit_generated_image():
     request = MarketingRegenerationRequest()
     assert request.style == "SEEDING"
-    assert request.generate_image is False
+    assert request.generate_image is True
 
 
 def test_marketing_style_direction_uses_public_facing_copy_guardrails():

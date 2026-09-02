@@ -3,10 +3,11 @@
 The Feishu channel reaches the same ``stayscape-main`` Agent, but it does not
 inherit the browser's FastAPI context.  These endpoints are the only bridge
 from the plugin back to StayScape business data.  They deliberately expose no
-SQL, shell, arbitrary HTTP, inventory mutation, price mutation, or publishing
-operation.
+SQL, shell or arbitrary HTTP. Product creation and publishing remain gated by
+FastAPI validation and an explicit allowlisted hotel-operator confirmation.
 """
 
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -15,15 +16,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ...agent import AgentOrchestrator
 from ...agent.context import RequestContext
 from ...config import settings
 from ...core.exceptions import AppError
 from ...db import get_db
-from ...models import Hotel, HotelService, Merchant, PartnerResource, RoomInventory
+from ...models import Hotel, HotelService, Merchant, PartnerResource, RoomInventory, TravelProduct
 from ...repositories.product_repository import list_products
 from ...schemas.products import GenerateProductRequest
-from ...services.product_service import ProductService
+from ...services.product_proposal_service import ProductProposalService
+from ...services.operations_insight_service import OperationsInsightService
+from ...services.knowledge_service import KnowledgeService
 
 router = APIRouter(prefix="/agent-tools", tags=["agent-tools"])
 
@@ -262,28 +264,129 @@ def available_products(
     }
 
 
+@router.post("/operations-insights")
+def operations_insights(
+    request: ToolRequest,
+    context: RequestContext = Depends(_tool_context),
+    db: Session = Depends(get_db),
+):
+    """Read aggregated sales signals; no guest PII or hidden reasoning."""
+    _assert_hotel_context(context, request.hotel_id)
+    _hotel_or_404(db, request.hotel_id)
+    target_date = request.payload.get("target_date")
+    try:
+        selected_date = GenerateProductRequest.model_validate({"target_date": target_date or date.today().isoformat()}).target_date
+    except Exception as exc:
+        raise AppError("VALIDATION_ERROR", "target_date must be an ISO date", field="target_date") from exc
+    return OperationsInsightService(db, request.hotel_id).snapshot(target_date=selected_date)
+
+
+@router.post("/travel-knowledge")
+def travel_knowledge(
+    request: ToolRequest,
+    context: RequestContext = Depends(_tool_context),
+    db: Session = Depends(get_db),
+):
+    _assert_hotel_context(context, request.hotel_id)
+    _hotel_or_404(db, request.hotel_id)
+    payload = request.payload
+    items = KnowledgeService(db).search(
+        str(payload.get("query") or ""),
+        target_crowd=str(payload.get("target_crowd") or ""),
+        weather=str(payload.get("weather") or ""),
+        limit=min(12, max(1, int(payload.get("limit") or 8))),
+    )
+    return {
+        "items": items,
+        "notice": "知识库仅提供带来源的参考信息；未确认项不可作为已预约或可售资源承诺。",
+    }
+
+
+def _create_product_proposal(
+    request: ToolRequest,
+    context: RequestContext,
+    db: Session,
+):
+    _assert_hotel_context(context, request.hotel_id)
+    if context.actor_role != "HOTEL_OPERATOR":
+        raise AppError("FORBIDDEN", "Only an allowlisted hotel operator can create a product proposal", status_code=403)
+    try:
+        payload = dict(request.payload)
+        natural_language = str(payload.pop("natural_language", "")).strip()
+        generate_request = GenerateProductRequest.model_validate(payload) if payload else None
+    except Exception as exc:
+        raise AppError("VALIDATION_ERROR", "Product proposal parameters are invalid", details=str(exc)) from exc
+    if generate_request is None and not natural_language:
+        raise AppError("VALIDATION_ERROR", "请提供 natural_language 或完整的产品候选参数。", field="payload")
+    service = ProductProposalService(db, request.hotel_id, context)
+    conversation = service.conversation(external_id=context.conversation_id or "", title="飞书酒店 AI 运营任务")
+    proposals = (
+        service.create_from_language(natural_language, conversation=conversation)
+        if natural_language and generate_request is None
+        else service.create_from_request(generate_request, conversation=conversation, natural_language=natural_language)
+    )
+    db.commit()
+    return {
+        "conversation_id": conversation.id,
+        "proposal_ids": [item.id for item in proposals],
+        "proposals": [
+            {
+                "proposal_id": item.id,
+                "status": item.status,
+                "product": _draft_summary(db.get(TravelProduct, item.product_id)),
+                "trace_ids": item.trace_ids,
+                "execution_steps": item.execution_steps,
+            }
+            for item in proposals
+        ],
+        "message": "候选尚未加入草稿或发布。请明确确认：加入草稿，或确认发布第 N 个候选。",
+        "web_url": "/hotel/products",
+    }
+
+
+@router.post("/product-proposal")
+def create_product_proposal(
+    request: ToolRequest,
+    context: RequestContext = Depends(_tool_context),
+    db: Session = Depends(get_db),
+):
+    return _create_product_proposal(request, context, db)
+
+
 @router.post("/product-draft")
-def create_product_draft(
+def create_product_draft_legacy(
+    request: ToolRequest,
+    context: RequestContext = Depends(_tool_context),
+    db: Session = Depends(get_db),
+):
+    """Compatibility path; intentionally returns a pending proposal, not a draft."""
+    return _create_product_proposal(request, context, db)
+
+
+@router.post("/proposal-confirm")
+def confirm_product_proposal(
     request: ToolRequest,
     context: RequestContext = Depends(_tool_context),
     db: Session = Depends(get_db),
 ):
     _assert_hotel_context(context, request.hotel_id)
     if context.actor_role != "HOTEL_OPERATOR":
-        raise AppError("FORBIDDEN", "Only an allowlisted hotel operator can create a product draft", status_code=403)
+        raise AppError("FORBIDDEN", "Only an allowlisted hotel operator can confirm a product proposal", status_code=403)
     try:
-        generate_request = GenerateProductRequest.model_validate(request.payload)
-    except Exception as exc:
-        raise AppError("VALIDATION_ERROR", "Product draft parameters are invalid", details=str(exc)) from exc
-    orchestrator = AgentOrchestrator(db, hotel_id=request.hotel_id, context=context)
-    generated = ProductService(db, request.hotel_id, orchestrator=orchestrator).generate_many(generate_request)
+        proposal_id = int(request.payload.get("proposal_id"))
+        action = str(request.payload.get("action") or "").upper()
+    except (TypeError, ValueError) as exc:
+        raise AppError("VALIDATION_ERROR", "proposal_id and action are required", status_code=422) from exc
+    proposal = ProductProposalService(db, request.hotel_id, context).confirm(
+        proposal_id,
+        action=action,
+        confirmed_by=f"feishu:{context.conversation_id or 'operator'}",
+    )
     db.commit()
-    products = [item[0] for item in generated]
+    product = db.get(TravelProduct, proposal.product_id)
     return {
-        "product_id": products[0].id,
-        "product": _draft_summary(products[0]),
-        "products": [_draft_summary(item) for item in products],
-        "trace_ids": [item[2] for item in generated],
-        "fallback_used": any(item[3] for item in generated),
-        "web_url": f"/hotel/products/{products[0].id}",
+        "proposal_id": proposal.id,
+        "status": proposal.status,
+        "product": _draft_summary(product),
+        "message": "已发布并再次完成实时库存复核。" if action == "PUBLISH" else "已加入酒店草稿，尚未对游客展示。",
     }

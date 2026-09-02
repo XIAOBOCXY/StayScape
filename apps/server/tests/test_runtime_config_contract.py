@@ -6,7 +6,11 @@ import uuid
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[3]
+HERE = Path(__file__).resolve()
+ROOT = next(
+    (parent for parent in HERE.parents if (parent / "scripts" / "render_openclaw_config.py").is_file()),
+    HERE.parents[1],
+)
 RENDER = ROOT / "scripts" / "render_openclaw_config.py"
 
 
@@ -78,6 +82,9 @@ def test_qwen_standard_provider_and_tool_boundary_are_explicit():
     assert set(tools["allow"]) == {
         "stayscape_get_hotel_context",
         "stayscape_list_available_products",
-        "stayscape_create_product_draft",
+        "stayscape_get_operations_insights",
+        "stayscape_search_travel_knowledge",
+        "stayscape_create_product_proposal",
+        "stayscape_confirm_product_proposal",
     }
     assert {"group:runtime", "group:fs", "group:ui", "group:nodes", "group:agents", "group:automation"} <= set(tools["deny"])

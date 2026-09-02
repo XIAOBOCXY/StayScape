@@ -123,7 +123,10 @@
 .media-image--card { aspect-ratio: 1.42 / 1; }
 .media-image--gallery { aspect-ratio: .86 / 1; }
 .media-image--poster { aspect-ratio: 3 / 4; }
-.media-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .7s cubic-bezier(.2,.7,.2,1), filter .35s ease; }
+.media-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .18s ease, transform .7s cubic-bezier(.2,.7,.2,1), filter .35s ease; }
+.media-image.is-loading img { opacity: 0; }
+.media-image.is-loading::before { content: ''; position: absolute; inset: 0; z-index: 1; background: linear-gradient(110deg, rgba(255,255,255,.04) 25%, rgba(255,255,255,.34) 42%, rgba(255,255,255,.04) 58%); transform: translateX(-100%); animation: media-shimmer 1.15s ease-in-out infinite; }
+.media-image.is-loaded::before { display: none; }
 .product-card:hover .media-image img, .moments-grid .media-image:hover img { transform: scale(1.045); }
 .media-image::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(0deg, rgba(9,38,32,.22), transparent 38%); }
 .media-source { position: absolute; right: 10px; bottom: 9px; z-index: 1; color: rgba(255,255,255,.85); font-size: 9px; text-shadow: 0 1px 5px rgba(0,0,0,.45); }
@@ -131,6 +134,8 @@
 .media-fallback__mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 15px; background: var(--teal-dark); color: #f7edda; font: 28px Georgia,serif; }
 .media-fallback strong { font: 11px Inter,sans-serif; letter-spacing: .13em; }
 .media-fallback small { color: #70857d; font-size: 10px; }
+@keyframes media-shimmer { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .media-image.is-loading::before { animation: none; } }
 .home-loading { min-height: 130px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 .story-band { display: grid; grid-template-columns: 1fr 1fr; gap: 12%; padding: 78px 8%; margin-top: 70px; background: #173f39; color: #edf6ef; }
 .story-band h2 { font-family: Georgia,'Songti SC',serif; font-size: 43px; font-weight: 500; line-height: 1.15; margin: 14px 0 0; }

@@ -53,9 +53,9 @@ Live 模式使用同一个 `stayscape-main` Agent：
 
 ```text
 酒店经理：明天还有哪些临期亲子房？杭州下雨，预算700左右，帮我做一个适合一家三口的产品。
-Agent：调用 stayscape_get_hotel_context → Product Skill → 返回候选草稿。
-酒店经理：创建这个草稿。
-Agent：调用 stayscape_create_product_draft → FastAPI 校验 → 返回产品 ID 和 Web URL。
+Agent：调用 stayscape_get_hotel_context、stayscape_get_operations_insights、stayscape_search_travel_knowledge → Product Skill → 返回待确认候选。
+酒店经理：把第一个加入草稿。 / 确认发布第一个。
+Agent：调用 stayscape_confirm_product_proposal → FastAPI 再次校验 → 返回产品 ID 和 Web URL。
 客服：2大1小，孩子6岁，下雨，预算700，不喝茶，有什么推荐？
 Agent：调用 stayscape_list_available_products → Visitor Skill → 返回不含茶资源的合法产品。
 ```

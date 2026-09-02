@@ -6,6 +6,7 @@
     "target_date": {"type": "string"},
     "weather": {"type": "string"},
     "target_crowd": {"type": "string"},
+    "party_size": {"type": "integer", "minimum": 1, "description": "每套产品覆盖的真实同行人数。文案要与此人数一致，不能擅自改变资源数量。"},
     "theme": {"type": "string"},
     "variant_index": {"type": "integer", "minimum": 0},
     "variant_total": {"type": "integer", "minimum": 1},

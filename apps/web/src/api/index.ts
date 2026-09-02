@@ -1,5 +1,5 @@
 import api from './client'
-import type { Dashboard, HotelService, Merchant, PartnerResource, Room, TravelProduct, User, Recommendation, TripPlan } from '../types'
+import type { Dashboard, HotelService, Merchant, PartnerResource, Room, TravelProduct, User, Recommendation } from '../types'
 
 export const authApi = {
   login: (payload: { username: string; password: string }) => api.post<{ access_token: string; user: User }>('/auth/login', payload),
@@ -23,6 +23,7 @@ export const hotelApi = {
   products: (status?: string) => api.get<{ items: TravelProduct[]; total: number }>('/hotel/products', { params: status ? { status } : undefined }),
   generateProduct: (payload: Record<string, unknown>) => api.post<{ product: TravelProduct; products: TravelProduct[]; trace_id: string; trace_ids: string[]; validation: Record<string, unknown>; fallback_used: boolean; provider: string; transport: string; agent_id: string; skill_name: string; skill_version: string }>('/hotel/products/generate', payload),
   interpretProductDraft: (natural_language: string) => api.post<{ interpreted: Record<string, unknown>; parsed_fields: Array<{ field: string; label: string; value: unknown }>; message: string }>('/hotel/products/interpret', { natural_language }),
+  refineProductMarketing: (payload: { product_ids: number[]; natural_language: string; style?: 'ARTISTIC' | 'PROMOTIONAL' | 'EMPATHETIC' | 'SEEDING'; generate_image?: boolean }) => api.post<TravelProduct[]>('/hotel/products/refine-marketing', payload),
   product: (id: number) => api.get<TravelProduct>(`/hotel/products/${id}`),
   updateProduct: (id: number, payload: Record<string, unknown>) => api.patch<TravelProduct>(`/hotel/products/${id}`, payload),
   deleteProduct: (id: number) => api.delete<{ deleted: boolean; archived: boolean; message: string }>(`/hotel/products/${id}`),
@@ -32,7 +33,13 @@ export const hotelApi = {
   intents: () => api.get<Array<Record<string, unknown>>>('/hotel/intents'),
   updateIntent: (id: number, status: 'CONFIRMED' | 'CANCELLED') => api.patch<Record<string, unknown>>(`/hotel/intents/${id}`, { status }),
   skillLogs: () => api.get<Array<Record<string, unknown>>>('/hotel/skill-logs'),
-  agentDiagnostics: () => api.get<Record<string, unknown>>('/hotel/agent-diagnostics')
+  agentDiagnostics: () => api.get<Record<string, unknown>>('/hotel/agent-diagnostics'),
+  aiOverview: (target_date?: string) => api.get<Record<string, unknown>>('/hotel/ai/overview', { params: target_date ? { target_date } : undefined }),
+  aiConversations: () => api.get<Array<Record<string, unknown>>>('/hotel/ai/conversations'),
+  createAiConversation: (title = '酒店 AI 运营任务') => api.post<Record<string, unknown>>('/hotel/ai/conversations', { title }),
+  sendAiMessage: (conversationId: number, natural_language: string) => api.post<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}/messages`, { natural_language }),
+  aiProposals: (status?: string) => api.get<Array<Record<string, unknown>>>('/hotel/ai/proposals', { params: status ? { status } : undefined }),
+  confirmAiProposal: (proposalId: number, action: 'DRAFT' | 'PUBLISH') => api.post<Record<string, unknown>>(`/hotel/ai/proposals/${proposalId}/confirm`, { action })
 }
 
 export const merchantApi = {
@@ -53,10 +60,6 @@ export const visitorApi = {
   consult: (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/visitor/consult', payload),
   interpret: (payload: { natural_language: string }) => api.post<{ interpreted_needs: Record<string, unknown>; follow_up_questions: string[] }>('/visitor/interpret', payload),
   recommend: (payload: Record<string, unknown>) => api.post<{ results: Recommendation[]; trace_id: string; fallback_used: boolean; interpreted_needs: Record<string, unknown>; provider: string; skill_name: string; skill_version: string }>('/visitor/recommend', payload),
-  proposeTripPlans: (payload: Record<string, unknown>) => api.post<{ plans: TripPlan[]; interpreted_needs: Record<string, unknown>; inventory_note: string }>('/visitor/trip-plans/propose', payload),
-  holdTripPlan: (payload: Record<string, unknown>) => api.post<TripPlan & { message: string }>('/visitor/trip-plans/hold', payload),
-  updateTripPlan: (id: number, payload: Record<string, unknown>) => api.patch<TripPlan & { message: string }>(`/visitor/trip-plans/${id}`, payload),
-  cancelTripPlan: (id: number, contact_phone: string) => api.post<TripPlan & { message: string }>(`/visitor/trip-plans/${id}/cancel`, { contact_phone }),
   intent: (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/visitor/intents', payload),
   publicResources: (weather = 'RAIN') => api.get<Array<Record<string, unknown>>>('/visitor/public-resources', { params: { weather } })
 }

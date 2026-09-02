@@ -65,13 +65,14 @@ GitHub 和前端代码都不会读取或保存该 Key。首次 Live 部署会执
 - 请求体只使用官方 OpenResponses 字段，不发送未确认的 `text.format=json_object`
 - Agent 输出只提供语义和 JSON；FastAPI 重新校验库存、容量、价格、毛利、天气、日期、年龄、状态和预约
 
-## 两个 Skill
+## 三个 Skill
 
 Skill 放在 Agent workspace：
 
 ```text
 ~/.openclaw/workspace/skills/stayscape-product-generator/SKILL.md
 ~/.openclaw/workspace/skills/stayscape-visitor-matcher/SKILL.md
+~/.openclaw/workspace/skills/stayscape-marketing-writer/SKILL.md
 ```
 
 部署脚本随后执行：
@@ -81,11 +82,11 @@ openclaw skills list --agent stayscape-main --json
 openclaw skills check --agent stayscape-main --json
 ```
 
-Live 部署只有在 Gateway 健康、`stayscape-main` 路由、Qwen provider、两个 Skill、StayScape Tool Plugin、模型清单和一次真实 `/v1/responses` smoke test 全部通过后，才会将 `OPENCLAW_SKILLS_READY` 与 `OPENCLAW_LIVE_READY` 标为 true；FastAPI 不会伪装成 OpenClaw LIVE。
+Live 部署只有在 Gateway 健康、`stayscape-main` 路由、Qwen provider、三个 Skill、StayScape Tool Plugin、模型清单和一次真实 `/v1/responses` smoke test 全部通过后，才会将 `OPENCLAW_SKILLS_READY` 与 `OPENCLAW_LIVE_READY` 标为 true；FastAPI 不会伪装成 OpenClaw LIVE。
 
 ## Tool policy
 
-OpenClaw 使用 `tools.profile: minimal`，只 allow 三个 StayScape Tool，并 deny runtime、filesystem、UI、nodes、agents 和 automation 工具组。Tool Plugin 通过固定包路径加载，服务端再用 `STAYSCAPE_AGENT_TOOL_TOKEN`、Feishu sender allowlist、hotel_id 和 actor_role 做第二层校验。
+OpenClaw allowlist 只包含 StayScape 的事实读取、文旅知识检索、候选创建和显式确认工具，并 deny runtime、filesystem、UI、nodes、agents 和 automation 工具组。Tool Plugin 通过固定包路径加载，服务端再用 `STAYSCAPE_AGENT_TOOL_TOKEN`、Feishu sender allowlist、hotel_id 和 actor_role 做第二层校验。任何候选先进入 `PENDING_CONFIRMATION`；只有允许的酒店经营者在飞书明确确认后才可转草稿或发布。
 
 ## 本地契约调试
 

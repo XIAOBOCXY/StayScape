@@ -156,7 +156,10 @@
     "allow": [
       "stayscape_get_hotel_context",
       "stayscape_list_available_products",
-      "stayscape_create_product_draft"
+      "stayscape_get_operations_insights",
+      "stayscape_search_travel_knowledge",
+      "stayscape_create_product_proposal",
+      "stayscape_confirm_product_proposal"
     ],
     "deny": [
       "group:runtime",

@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 class WanImageService:
+    @staticmethod
+    def _detected_image_type(content: bytes, declared: str) -> str | None:
+        """Trust image bytes over a CDN's occasionally generic MIME header."""
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if content.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if len(content) > 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+            return "image/webp"
+        return declared if declared in {"image/png", "image/jpeg", "image/webp"} else None
+
     def _api_key(self) -> str:
         return (settings.wan_image_api_key or settings.qwen_api_key).strip()
 
@@ -162,8 +173,9 @@ class WanImageService:
             raise AppError("WAN_IMAGE_DOWNLOAD_FAILED", "AI 配图已生成，但暂时无法保存到服务器。", status_code=502, retryable=True) from exc
         if not response.is_success:
             raise AppError("WAN_IMAGE_DOWNLOAD_FAILED", "AI 配图已生成，但暂时无法保存到服务器。", status_code=502, retryable=True)
-        content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
-        if content_type not in {"image/png", "image/jpeg", "image/webp"}:
+        declared_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+        content_type = self._detected_image_type(response.content, declared_type)
+        if content_type is None:
             raise AppError("WAN_IMAGE_RESPONSE_INVALID", "百炼 AI 配图返回了不支持的图片格式。", status_code=502, retryable=True)
         if not response.content or len(response.content) > settings.wan_image_max_bytes:
             raise AppError("WAN_IMAGE_RESPONSE_INVALID", "AI 配图文件大小不符合保存限制。", status_code=502, retryable=True)

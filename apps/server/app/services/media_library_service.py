@@ -39,6 +39,15 @@ def _looks_like_image(content: bytes, content_type: str) -> bool:
     return False
 
 
+def _detected_content_type(content: bytes, declared: str) -> str:
+    """Normalise a CDN's generic MIME header from the actual image signature."""
+    normalized = declared.split(";", 1)[0].strip().lower()
+    for content_type in ALLOWED_TYPES:
+        if _looks_like_image(content, content_type):
+            return content_type
+    return normalized
+
+
 class MediaLibraryService:
     """Avoid unlicensed scraping and unsafe hotlinks.
 
@@ -69,6 +78,7 @@ class MediaLibraryService:
         return True
 
     def _write(self, content: bytes, content_type: str, *, prefix: str) -> str:
+        content_type = _detected_content_type(content, content_type)
         suffix = _extension(content_type)
         if len(content) > MAX_MEDIA_BYTES or not _looks_like_image(content, content_type):
             raise AppError("MEDIA_CONTENT_INVALID", "图片文件无效或超过 12MB 限制。", field="file")
@@ -137,7 +147,7 @@ class MediaLibraryService:
             raise AppError("MEDIA_IMPORT_UNAVAILABLE", "网络图片暂时无法下载，请换一张或直接上传。", status_code=503, retryable=True) from exc
         if not response.is_success:
             raise AppError("MEDIA_IMPORT_UNAVAILABLE", "网络图片暂时无法下载，请换一张或直接上传。", status_code=502, retryable=True)
-        content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+        content_type = _detected_content_type(response.content, response.headers.get("content-type", ""))
         local_url = self._write(response.content, content_type, prefix="web")
         return {"image_url": local_url, "image_source": source[:120] or "网络图片", "image_attribution": attribution[:500]}
 

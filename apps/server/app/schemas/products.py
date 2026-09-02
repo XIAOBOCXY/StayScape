@@ -15,6 +15,9 @@ class GenerateProductRequest(BaseModel):
     target_date: date
     weather: str = "RAIN"
     target_crowd: str = "FAMILY"
+    # The legacy/default audience is a three-person family; every UI-created
+    # request now sends its own explicit group size.
+    party_size: int = Field(default=3, ge=1, le=12)
     minimum_gross_margin: Decimal = Field(default=Decimal("0.20"), ge=0, lt=1)
     visitor_budget: Decimal = Field(default=Decimal("700"), gt=0)
     theme: str = "雨天亲子非遗"
@@ -78,6 +81,25 @@ class MarketingRegenerationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     style: Literal["ARTISTIC", "PROMOTIONAL", "EMPATHETIC", "SEEDING"] = "SEEDING"
+    # A product-detail marketing run is an explicit hotel action, so use the
+    # configured server-side Wan model by default rather than returning a
+    # template that looks AI-generated but was never actually generated.
+    generate_image: bool = True
+
+
+class BatchMarketingRefinementRequest(BaseModel):
+    """A safe bulk creative revision for generated candidates.
+
+    The request intentionally changes only customer-facing content.  It never
+    adjusts product resources, capacity, price or publication status, which
+    remain subject to the normal product editor and inventory checks.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_ids: list[int] = Field(min_length=1, max_length=5)
+    natural_language: str = Field(min_length=2, max_length=800)
+    style: Literal["ARTISTIC", "PROMOTIONAL", "EMPATHETIC", "SEEDING"] = "SEEDING"
     generate_image: bool = False
 
 
@@ -98,6 +120,7 @@ class ProductRead(BaseModel):
     product_name: str
     theme: str
     target_crowd: str
+    party_size: int = 2
     weather: str
     target_date: date
     room_inventory_id: int

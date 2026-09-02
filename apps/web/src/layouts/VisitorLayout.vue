@@ -13,7 +13,7 @@ const route = useRoute()
       </router-link>
       <nav class="visitor-nav">
         <router-link to="/visitor/products" :class="{ active: route.path === '/visitor/products' }">探索套餐</router-link>
-        <router-link to="/visitor/recommend" :class="{ active: route.path.includes('/recommend') }">说说想怎么玩</router-link>
+        <router-link to="/visitor/products" :class="{ active: route.path === '/visitor/products' }">筛选产品</router-link>
         <router-link to="/login" class="visitor-business-link">经营入口</router-link>
       </nav>
       <div class="visitor-live"><i /> 杭州周末</div>

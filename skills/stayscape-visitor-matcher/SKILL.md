@@ -17,6 +17,9 @@ budget constraints.
 - Extract positive and negative preferences such as “不想喝茶”“不想逛博物馆”“不想走太多路” or “想刺激一点”; negative preferences must remove or lower incompatible packages.
 - Explain target crowd, budget, child-age, interest, weather, activity level, and schedule fit.
 - Produce a concise itinerary and limited, non-binding adjustment suggestions.
+- When the payload includes sourced travel knowledge, use it only to explain a
+  public-place idea. Preserve its source/verification warning and never claim
+  an unverified opening time, booking requirement or availability.
 - Repeat allergy and dietary information as a safety reminder.
 - When the request contains `structured_confirmed=true`, treat the supplied
   structured fields as the visitor's final confirmation rather than reparsing
@@ -30,6 +33,9 @@ budget constraints.
 - Never promise that a food allergy is safe; require hotel and merchant
   confirmation before participation.
 - Never change inventory, price, or resource status.
+- Never create a custom multi-day package, hold an itinerary, or reserve a
+  knowledge-base attraction. Visitors choose from hotel-published products;
+  the lightweight "问一问" capability only matches and explains those products.
 
 Return strict JSON matching `references/output-schema.json` without Markdown
 fences.

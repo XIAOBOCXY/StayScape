@@ -3,22 +3,23 @@
 StayScape 聚焦两项可落地核心功能：
 
 1. 酒店临期库存驱动的文旅产品智能生成与动态运营
-2. 游客自然语言需求驱动的个性化旅居匹配
+2. 游客对酒店已审核产品的“问一问”咨询、解释和替代推荐
 
 ## 评分点对应
 
 | 评分方向 | StayScape 证据 |
 |---|---|
 | 场景适配性 | 临期房、早餐、延迟退房、合作体验名额、天气、场次、商户状态和游客预约形成真实经营闭环 |
-| 功能实用性 | Product Studio、多候选方案、营销素材、游客需求确认、推荐解释、预约意向和 12→4→1 动态联动 |
+| 功能实用性 | 酒店 Web/飞书多轮运营任务、待确认候选、营销素材、游客问一问、预约意向和 12→4→1 动态联动 |
 | 部署便捷性 | Windows 本地 SQLite/Mock、Docker Compose PostgreSQL、阿里云 `scripts/deploy.sh live` 一键部署 |
-| 代码规范性 | FastAPI 分层、SQLAlchemy/Alembic、Pydantic Schema、确定性规则、两个 Skill 和 OpenClaw Tool Plugin |
-| 异常处理能力 | Agent 超时重试、JSON Schema 修复、Live 不伪装 fallback、资源/天气/时间/年龄/容量/毛利校验、统一错误结构 |
-| 文档完整性 | README、API、架构、演示脚本、OpenClaw、飞书、阿里云部署、ClawHive Skill 上传说明 |
+| 引擎技术实现 | ECS 唯一 `stayscape-main` Agent、正式 `/v1/responses`、三个 Skill、飞书 Tool Plugin、文旅知识库、天气和经营数据工具 |
+| 代码规范性 | FastAPI 分层、SQLAlchemy/Alembic、Pydantic Schema、确定性规则、三个 Skill 和 OpenClaw Tool Plugin |
+| 异常处理能力 | Agent 超时重试、JSON Schema 修复、Live 不伪装 fallback、资源/天气/时间/年龄/容量/毛利校验、知识过期显式提示、统一错误结构 |
+| 文档完整性 | README、API、架构、业务调研、测试案例、演示脚本、OpenClaw、飞书、阿里云部署、ClawHive Skill 上传说明 |
 
 ## AI 与规则边界
 
-AI/Skill 负责主题创意、资源语义选择、产品命名、营销内容、视觉 brief、游客理解和推荐解释。FastAPI/PostgreSQL/规则引擎负责真实资源 ID、库存、成本、售价、毛利、状态、天气、日期、年龄、容量、预约和事务。任何 Agent 输出都会被后端重新校验。
+AI/Skill 负责主题创意、资源语义选择、产品命名、营销内容、视觉 brief、游客理解和推荐解释。FastAPI/PostgreSQL/规则引擎负责真实资源 ID、库存、成本、售价、毛利、状态、天气、日期、年龄、容量、预约和事务。文旅知识库只提供带来源的参考，未核验信息明确提示“信息需确认”。任何 Agent 输出都会被后端重新校验；酒店必须确认候选后才能变成草稿或游客可见产品。
 
 ## 可演示指标
 

@@ -29,7 +29,7 @@ Feishu ──▶ official OpenClaw Feishu Channel ──▶ stayscape-main
                               FastAPI agent-tools
 ```
 
-ClawHive 不在运行时调用链中。两个 Skill 仍然打包为独立 ZIP 上传 ClawHive，用于 Skill 发布、验证、管理和比赛生态展示。
+ClawHive 不在运行时调用链中。三个 Skill 仍然打包为独立 ZIP 上传 ClawHive，用于 Skill 发布、验证、管理和比赛生态展示。
 
 ## 职责边界
 
@@ -45,6 +45,8 @@ ClawHive 不在运行时调用链中。两个 Skill 仍然打包为独立 ZIP �
 ### Product Generator Skill
 
 理解酒店经营目标和游客画像，从 FastAPI 提供的合法资源上下文中提出主题、资源选择、产品名称、营销标题、故事、推荐理由、视觉 brief 和替代建议。它不能决定库存、价格、成本、毛利、日期约束或数据库状态。
+
+飞书直接对话还会加载 `deploy/openclaw/workspace/AGENTS.md`。它只规定可审计的运营顺序：先查询 FastAPI 事实，再创建 `PENDING_CONFIRMATION` 候选；只有经营者明确说“加入草稿”或“确认发布”才调用确认 Tool。它不包含密钥、提示词原文或模型内部推理。
 
 ### Visitor Matcher Skill
 
@@ -62,11 +64,14 @@ ClawHive 不在运行时调用链中。两个 Skill 仍然打包为独立 ZIP �
 
 ## 飞书 Tool 边界
 
-只开放三个固定工具：
+只开放六个固定工具：
 
 1. `stayscape_get_hotel_context`：读取房型、服务和合作资源的必要上下文
 2. `stayscape_list_available_products`：读取游客安全的在售产品摘要
-3. `stayscape_create_product_draft`：创建 DRAFT，仍由 FastAPI 重新校验
+3. `stayscape_get_operations_insights`：读取近 14 天脱敏经营聚合信号
+4. `stayscape_search_travel_knowledge`：检索带来源与更新时间的杭州文旅知识
+5. `stayscape_create_product_proposal`：创建待人工确认候选，仍由 FastAPI 重新校验
+6. `stayscape_confirm_product_proposal`：经营者明确确认后，才加入草稿或发布
 
 不开放发布、删除、库存、成本、价格、SQL、shell 或任意 HTTP。浏览器永远不能拿到 Gateway Token 或 Tool Token。
 

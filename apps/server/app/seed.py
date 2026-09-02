@@ -5,10 +5,12 @@ from sqlalchemy.orm import Session
 
 from .core.security import hash_password
 from .models import (
+    AgentConversation,
     Hotel,
     HotelService,
     Merchant,
     PartnerResource,
+    ProductProposal,
     ProductAdjustmentRecord,
     ProductResource,
     PublicResource,
@@ -16,10 +18,12 @@ from .models import (
     RoomInventory,
     SkillCallLog,
     TravelProduct,
+    TravelKnowledge,
     User,
     VisitorIntent,
-    VisitorTripPlan,
+    WeatherSnapshot,
 )
+from .services.knowledge_service import KnowledgeService
 from .showcase_catalog import seed_extra_catalog
 from .showcase_seed import seed_showcase_products
 
@@ -30,7 +34,8 @@ DEMO_PASSWORD = "StayScape123!"
 def clear_all(db: Session) -> None:
     # Explicit order keeps this compatible with PostgreSQL foreign-key checks.
     for model in (
-        VisitorTripPlan,
+        ProductProposal,
+        AgentConversation,
         VisitorIntent,
         ProductAdjustmentRecord,
         ProductResource,
@@ -41,6 +46,8 @@ def clear_all(db: Session) -> None:
         HotelService,
         RoomInventory,
         PublicResource,
+        TravelKnowledge,
+        WeatherSnapshot,
         Merchant,
         User,
         Hotel,
@@ -55,10 +62,11 @@ def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = Fals
         # Bulk deletes bypass the identity map; clear loaded auth entities
         # before inserting demo rows with the same primary keys.
         db.expunge_all()
+    knowledge_created = KnowledgeService(db).seed_curated_hangzhou()
     existing = db.query(Hotel).first()
     if existing:
         target_date = db.query(RoomInventory).order_by(RoomInventory.available_date).first().available_date
-        result = {"hotel_id": existing.id, "target_date": target_date.isoformat(), "created": False}
+        result = {"hotel_id": existing.id, "target_date": target_date.isoformat(), "created": False, "knowledge_created": knowledge_created}
         # Keep a rolling, date-specific inventory pool for the visitor and
         # merchant calendars.  This is idempotent: each catalog row is keyed
         # by its real availability date and resource name.
@@ -144,7 +152,7 @@ def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = Fals
     for offset in range(1, 10):
         seed_extra_catalog(db, hotel.id, target_date + timedelta(days=offset), demo_password=DEMO_PASSWORD, variation=offset)
     db.commit()
-    result = {"hotel_id": hotel.id, "target_date": target_date.isoformat(), "created": True}
+    result = {"hotel_id": hotel.id, "target_date": target_date.isoformat(), "created": True, "knowledge_created": knowledge_created}
     if include_showcase:
         created = 0
         for offset in range(10):

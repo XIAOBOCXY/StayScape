@@ -12,6 +12,7 @@ mkdir -p "$OPENCLAW_HOME/workspace/skills"
 # persistent home so OpenClaw can update its own state without a read-only
 # bind mount; a subsequent deploy refreshes the declarative config.
 cp /opt/stayscape/openclaw.json "$OPENCLAW_HOME/openclaw.json"
+cp -R /opt/stayscape/workspace/. "$OPENCLAW_HOME/workspace/"
 cp -R /opt/stayscape/skills/. "$OPENCLAW_HOME/workspace/skills/"
 
 exec node dist/index.js gateway --port 18789

@@ -180,6 +180,51 @@ def test_multi_variant_generation_and_marketing_assets(client, hotel_token):
     assert {asset["asset_type"] for asset in products[0]["marketing_assets"]} >= {"POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT"}
 
 
+def test_hotel_product_generator_persists_the_selected_party_size(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    request["resource_selections"] = []
+    request["party_size"] = 3
+    request["variant_count"] = 2
+    response = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    assert response.status_code == 200, response.text
+    products = response.json()["products"]
+    assert {item["party_size"] for item in products} == {3}
+    assert all(any(row["resource_type"] == "PARTNER_RESOURCE" and row["quantity_per_package"] == 3 for row in item["resources"]) for item in products)
+
+
+def test_hotel_can_batch_refine_generated_candidate_marketing(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    request["variant_count"] = 2
+    generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
+    assert generated.status_code == 200, generated.text
+    ids = [item["id"] for item in generated.json()["products"]]
+    refined = client.post(
+        "/api/v1/hotel/products/refine-marketing",
+        headers=auth(hotel_token),
+        json={
+            "product_ids": ids,
+            "natural_language": "统一改得更适合带六岁孩子，突出看展时的互动感，语气轻松一些。",
+            "style": "SEEDING",
+            "generate_image": False,
+        },
+    )
+    assert refined.status_code == 200, refined.text
+    assert [item["id"] for item in refined.json()] == ids
+    assert all(item["marketing_assets"] for item in refined.json())
+
+
+def test_product_draft_parser_extracts_party_size(client, hotel_token):
+    response = client.post(
+        "/api/v1/hotel/products/interpret",
+        headers=auth(hotel_token),
+        json={"natural_language": "这个周末两大一小去博物馆，做两套产品，预算 900。"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["interpreted"]["party_size"] == 3
+    assert response.json()["interpreted"]["variant_count"] == 2
+    assert any(item["label"] == "套餐人数" and item["value"] == 3 for item in response.json()["parsed_fields"])
+
+
 def test_product_content_update_and_delete(client, hotel_token):
     request, _ = generate_request(client, hotel_token)
     generated = client.post("/api/v1/hotel/products/generate", headers=auth(hotel_token), json=request)
@@ -265,57 +310,46 @@ def test_automatic_variants_use_one_compatible_session_instead_of_merging_overla
     assert all(sum(item["resource_type"] == "PARTNER_RESOURCE" for item in product["resources"]) == 1 for product in products)
 
 
-def test_custom_multi_day_plan_holds_and_releases_real_inventory(client, hotel_token):
-    dates = sorted({item["available_date"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()})
-    assert len(dates) >= 2
-    proposal = client.post(
-        "/api/v1/visitor/trip-plans/propose",
-        json={
-            "natural_language": "两个人第一天看展吃饭，第二天去博物馆和西湖，不要太赶。",
-            "start_date": dates[0],
-            "duration_days": 2,
-            "party_size": 2,
-            "target_crowd": "COUPLE",
-            "weather": "CLOUDY",
-            "include_breakfast": True,
-            "plan_name": "两天杭州看展行程",
-        },
+def test_visitor_multi_day_self_package_endpoints_are_removed(client):
+    response = client.post("/api/v1/visitor/trip-plans/propose", json={})
+    assert response.status_code == 404
+
+
+def test_hotel_ai_task_creates_auditable_pending_candidates_before_human_confirmation(client, hotel_token):
+    target_date = client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()[0]["available_date"]
+    conversation = client.post("/api/v1/hotel/ai/conversations", headers=auth(hotel_token), json={"title": "博物馆亲子候选"})
+    assert conversation.status_code == 200, conversation.text
+
+    generated = client.post(
+        f"/api/v1/hotel/ai/conversations/{conversation.json()['id']}/messages",
+        headers=auth(hotel_token),
+        json={"natural_language": f"请为 {target_date} 做 2 套适合亲子家庭的杭州博物馆与科学探索产品，预算 700 元左右。"},
     )
-    assert proposal.status_code == 200, proposal.text
-    draft = proposal.json()["plans"][0]
-    rooms = [item for item in draft["items"] if item["resource_type"] == "ROOM"]
-    assert len(rooms) == 2
-    second_day_experiences = [
-        item["resource_name"]
-        for item in draft["itinerary"]
-        if item["resource_type"] == "PARTNER_RESOURCE" and item["day"] == 2
-    ]
-    assert any("博物馆" in name for name in second_day_experiences)
-    before = {item["id"]: item["available_count"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()}
-    held = client.post(
-        "/api/v1/visitor/trip-plans/hold",
-        json={
-            "natural_language": "两个人第一天看展吃饭，第二天去博物馆和西湖，不要太赶。",
-            "start_date": dates[0],
-            "duration_days": 2,
-            "party_size": 2,
-            "target_crowd": "COUPLE",
-            "weather": "CLOUDY",
-            "include_breakfast": True,
-            "plan_name": "两天杭州看展行程",
-            "items": draft["items"],
-            "contact_name": "王五",
-            "contact_phone": "13600136000",
-        },
+    assert generated.status_code == 200, generated.text
+    data = generated.json()
+    assert len(data["proposals"]) == 2
+    candidate = data["proposals"][0]
+    assert candidate["status"] == "PENDING_CONFIRMATION"
+    assert candidate["product"]["status"] == "PENDING_CONFIRMATION"
+    assert candidate["knowledge_snapshot"]
+    assert any(step["name"] == "文旅知识库" for step in candidate["execution_steps"])
+
+    execution = data["conversation"]["last_execution"]
+    assert execution["agent"] == "stayscape-main"
+    assert execution["skill"] == "stayscape-product-generator"
+    assert execution["duration_ms"] >= 0
+    assert execution["used_knowledge"] > 0
+    assert {item["name"] for item in execution["tool_calls"]} >= {"实时库存与资源校验", "杭州文旅知识库"}
+    assert all(item["id"] != candidate["product_id"] for item in client.get("/api/v1/visitor/products").json())
+
+    confirmed = client.post(
+        f"/api/v1/hotel/ai/proposals/{candidate['id']}/confirm",
+        headers=auth(hotel_token),
+        json={"action": "DRAFT"},
     )
-    assert held.status_code == 200, held.text
-    assert held.json()["status"] == "HELD"
-    after_hold = {item["id"]: item["available_count"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()}
-    assert all(after_hold[item["resource_id"]] == before[item["resource_id"]] - 1 for item in rooms)
-    released = client.post(f"/api/v1/visitor/trip-plans/{held.json()['id']}/cancel", json={"contact_phone": "13600136000"})
-    assert released.status_code == 200, released.text
-    after_release = {item["id"]: item["available_count"] for item in client.get("/api/v1/hotel/rooms", headers=auth(hotel_token)).json()}
-    assert all(after_release[item["resource_id"]] == before[item["resource_id"]] for item in rooms)
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "CONFIRMED_DRAFT"
+    assert confirmed.json()["product"]["status"] == "DRAFT"
 
 
 def test_natural_language_interpretation_returns_confirmable_requirement_card(client):

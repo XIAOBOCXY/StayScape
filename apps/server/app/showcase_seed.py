@@ -1,4 +1,4 @@
-"""Create a varied public-facing Hangzhou demo pool without automatic image costs."""
+"""Create a varied public-facing Hangzhou demo pool without pretending to run AI."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from .models import HotelService, PartnerResource, ProductResource, RoomInventory, TravelProduct
 from .services.inventory_service import reconcile_published_capacity
-from .services.poster_service import poster_asset
 
 
 # Weather stays an operational compatibility tag; themes lead with the journey.
@@ -57,6 +56,11 @@ def _lookup(db: Session, model, hotel_id: int, field: str, value: str):
 
 def _normalize_legacy_themes(db: Session, hotel_id: int) -> None:
     for product in db.scalars(select(TravelProduct).where(TravelProduct.hotel_id == hotel_id)):
+        # Legacy showcase rows used local SVG/copy templates. Clear only the
+        # known SC demo rows so the UI never presents a template as an AI
+        # marketing result; real operator-generated assets are preserved.
+        if product.product_code.startswith("SC-"):
+            product.marketing_assets = []
         replacement = LEGACY_THEME_RENAMES.get(product.theme)
         if not replacement:
             continue
@@ -86,59 +90,13 @@ def _copy_for(plan: dict[str, object], partner: PartnerResource, target_date: da
     return title, content, reason
 
 
-def _direct_assets(title: str, content: str, partner: PartnerResource, room: RoomInventory, plan: dict[str, object], target_date: date, price: Decimal, index: int) -> list[dict[str, str]]:
-    poster = poster_asset(
-        title=title,
-        content=content,
-        partner_name=partner.resource_name,
-        room_name=room.room_type,
-        address=partner.address,
-        price=str(price),
-        target_crowd=str(plan["crowd"]),
-        theme=str(plan["theme"]),
-        weather=str(plan["weather"]),
-        target_date=target_date.isoformat(),
-        variant_index=index,
-        creative_angle="真实时间线与体验地点的旅行记录感",
-    )
-    return [
-        {
-            "asset_type": "POSTER",
-            "platform": "旅行分享海报",
-            "title": title,
-            "content": content,
-            "visual_brief": "按路线和具体体验呈现，预留分享文字空间",
-            "call_to_action": "",
-            "copy_style": "SEEDING",
-            **poster,
-        },
-        {
-            "asset_type": "SOCIAL_POST",
-            "platform": "小红书 / 抖音图文",
-            "title": f"{partner.resource_name} 这段安排很对味",
-            "content": f"这次没有赶着刷景点，住下以后去了一趟 {partner.resource_name}。\n{partner.description}\n如果你也想把杭州过得松一点，可以把这一段留在行程里。",
-            "visual_brief": "像旅行者回顾周末的三张照片，不写硬广口号",
-            "call_to_action": "",
-            "copy_style": "SEEDING",
-        },
-        {
-            "asset_type": "SHORT_VIDEO_SCRIPT",
-            "platform": "短视频",
-            "title": "杭州周末的三个镜头",
-            "content": f"镜头一：抵达 {room.room_type} 放下行李。\n镜头二：前往 {partner.resource_name}，拍下开始前的细节。\n镜头三：回到杭州的夜色里，记录今天最想留住的一瞬间。",
-            "visual_brief": "竖版、自然光、真实旅行记录",
-            "call_to_action": "",
-            "copy_style": "ARTISTIC",
-        },
-    ]
-
-
 def seed_showcase_products(db: Session, hotel_id: int, target_date: date) -> dict[str, int]:
     """Seed a small, diverse merchant-approved product pool per date.
 
-    It never calls a model at startup and it does not artificially set every
-    product to one unit.  The rest of the resource pool remains available for
-    operator-created products and visitor custom itineraries.
+    It never calls a model at startup and deliberately leaves marketing assets
+    empty. A hotel operator must press the product-detail "生成宣传素材" action
+    to invoke the marketing Skill and the configured Wan image model. The rest
+    of the resource pool remains available for operator-created products.
     """
     _normalize_legacy_themes(db, hotel_id)
     existing_themes = set(
@@ -152,7 +110,7 @@ def seed_showcase_products(db: Session, hotel_id: int, target_date: date) -> dic
     start = target_date.toordinal() % len(SHOWCASE_PLANS)
     plans = [SHOWCASE_PLANS[(start + offset * 7) % len(SHOWCASE_PLANS)] for offset in range(3)]
     created = 0
-    for index, plan in enumerate(plans):
+    for plan in plans:
         if plan["theme"] in existing_themes:
             continue
         room = db.scalar(
@@ -249,7 +207,7 @@ def seed_showcase_products(db: Session, hotel_id: int, target_date: date) -> dic
             bottleneck_resource=partner.resource_name if partner.remaining_capacity <= room.available_count else room.room_type,
             marketing_title=title,
             marketing_content=content,
-            marketing_assets=_direct_assets(title, content, partner, room, plan, target_date, price, index),
+            marketing_assets=[],
             recommendation_reason=reason,
             risk_message="这组日期的可预约名额不多，确认前会再次为你核对。" if quantity <= 2 else "",
             status="LOW_STOCK" if quantity <= 2 else "ON_SALE",

@@ -14,6 +14,7 @@ const media = computed(() => {
   return focus ? mediaForResource(props.product, focus) : heroMedia(props.product)
 })
 const crowdLabel = computed(() => ({ FAMILY: '亲子', COUPLE: '两人', FRIENDS: '朋友', SOLO: '独自', LOCAL_WEEKEND: '本地周末' }[props.product.target_crowd] || '杭州周末'))
+const partyLabel = computed(() => `${props.product.party_size || ({ FAMILY: 3, COUPLE: 2, FRIENDS: 4, SOLO: 1 }[props.product.target_crowd] || 2)} 人套餐`)
 const visibleResources = computed(() => props.product.resources.slice(0, 3))
 const hook = computed(() => publicTravelCopy(props.product.marketing_title || props.product.marketing_content, '把这段杭州时光留给周末。'))
 function open() {
@@ -39,7 +40,7 @@ function onKeydown(event: KeyboardEvent) {
         <span v-for="resource in visibleResources" :key="resource.id"><b>{{ experienceLabel(resource.resource_type) }}</b> · {{ resource.resource_name }}</span>
       </div>
       <div class="product-card__bottom">
-        <div><strong>¥{{ product.suggested_price }}</strong><span class="muted"> / {{ crowdLabel }}</span></div>
+        <div><strong>¥{{ product.suggested_price }}</strong><span class="muted"> / {{ partyLabel }}</span></div>
         <span v-if="product.sale_quantity <= 2" class="warning-text">即将售罄</span>
       </div>
     </div>

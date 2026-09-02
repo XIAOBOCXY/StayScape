@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { posterSvgDataUri } from '../../utils/posterSvg'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { showToast } from 'vant'
 import { visitorApi } from '../../api'
 import { errorMessage } from '../../api/client'
@@ -13,7 +13,6 @@ import { publicTravelCopy } from '../../utils/publicTravelCopy'
 import { loadVisitorProfile, saveVisitorProfile, type VisitorProfile, visitorConversationId } from '../../utils/visitorProfile'
 
 const route = useRoute()
-const router = useRouter()
 const product = ref<TravelProduct | null>(null)
 const loading = ref(true)
 const question = ref('')
@@ -81,17 +80,6 @@ function itineraryAction(item: TravelProduct['resources'][number]) {
   if (item.resource_type === 'ROOM') return '办理入住，放下行李后慢慢开始'
   if (item.resource_type === 'HOTEL_SERVICE') return '到店后向前台确认使用方式'
   return item.address ? `抵达 ${item.address} 后开始体验` : '出发前留意商家发送的预约信息'
-}
-
-function customizeProduct() {
-  if (!product.value) return
-  router.push({
-    path: '/visitor/recommend',
-    query: {
-      q: `想把${product.value.product_name}改成自己的行程，${product.value.target_date}出发`,
-      product: String(product.value.id),
-    },
-  })
 }
 
 async function load() {
@@ -190,7 +178,7 @@ onMounted(load)
   <div v-if="loading" class="detail-loading"><span /> 正在打开这段杭州体验…</div>
   <div v-else-if="product" class="visitor-product-detail">
     <section class="product-detail-hero">
-      <img v-if="poster?.image_url" class="product-detail-hero__ai" :src="poster.image_url" :alt="poster.title || product.product_name" />
+      <img v-if="poster?.image_url" class="product-detail-hero__ai" :src="poster.image_url" :alt="poster.title || product.product_name" loading="eager" fetchpriority="high" decoding="async" />
       <MediaImage v-else :media="hero" aspect="hero" />
       <div class="product-detail-hero__veil" />
       <router-link to="/visitor/products" class="back-to-list">← 返回体验列表</router-link>
@@ -204,7 +192,7 @@ onMounted(load)
 
     <section class="trip-strip">
       <div><span>出行日期</span><strong>{{ product.target_date }}</strong></div>
-      <div><span>适合谁去</span><strong>{{ crowdLabel }}</strong></div>
+        <div><span>适合谁去</span><strong>{{ crowdLabel }} · {{ product.party_size }} 人</strong></div>
       <div><span>已安排</span><strong>{{ resourceCount }} 项旅居内容</strong></div>
     </section>
 
@@ -272,7 +260,7 @@ onMounted(load)
 
     <section class="booking-bar">
       <div><span class="section-kicker">想去就先留个位置</span><p>提交预约意向后，酒店会和你确认出行安排。</p></div>
-      <div class="booking-bar__right"><strong>¥{{ product.suggested_price }}</strong><span>起 / 套</span><el-button plain @click="customizeProduct">调整行程</el-button><el-button type="primary" :disabled="product.sale_quantity <= 0" @click="openIntent">提交预约</el-button></div>
+      <div class="booking-bar__right"><strong>¥{{ product.suggested_price }}</strong><span>起 / 套</span><el-button type="primary" :disabled="product.sale_quantity <= 0" @click="openIntent">提交预约</el-button></div>
     </section>
 
     <el-dialog v-model="posterDialog" title="分享这段杭州体验" width="min(92vw, 560px)" class="poster-dialog"><img v-if="posterVisual" class="poster-dialog__image" :src="posterVisual" :alt="poster?.title" /><template #footer><el-button @click="posterDialog = false">关闭</el-button><el-button v-if="poster?.poster_svg" type="primary" @click="downloadPoster(poster)">下载 SVG 海报</el-button></template></el-dialog>

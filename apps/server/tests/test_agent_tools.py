@@ -91,6 +91,32 @@ def test_visitor_or_support_cannot_create_product_draft(client, monkeypatch):
     assert response.status_code == 403
 
 
+def test_feishu_product_proposal_needs_an_explicit_second_tool_confirmation(client, monkeypatch):
+    configure_tool_auth(monkeypatch, settings)
+    created = client.post(
+        "/api/v1/agent-tools/product-proposal",
+        headers=tool_headers(settings),
+        json={
+            "hotel_id": 1,
+            "payload": {"natural_language": "为本周末的亲子客做两套杭州博物馆方向产品，预算 700 元左右。"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    proposal = created.json()["proposals"][0]
+    assert proposal["status"] == "PENDING_CONFIRMATION"
+    assert proposal["product"]["status"] == "PENDING_CONFIRMATION"
+    assert any(step["name"] == "文旅知识库" for step in proposal["execution_steps"])
+
+    confirmed = client.post(
+        "/api/v1/agent-tools/proposal-confirm",
+        headers=tool_headers(settings),
+        json={"hotel_id": 1, "payload": {"proposal_id": proposal["proposal_id"], "action": "DRAFT"}},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "CONFIRMED_DRAFT"
+    assert confirmed.json()["product"]["status"] == "DRAFT"
+
+
 def test_group_tools_require_both_group_and_sender_allowlists(client, monkeypatch):
     configure_tool_auth(monkeypatch, settings)
     allowed = client.post(

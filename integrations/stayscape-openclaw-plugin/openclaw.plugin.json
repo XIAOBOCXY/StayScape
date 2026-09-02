@@ -1,7 +1,7 @@
 {
   "id": "stayscape-openclaw-plugin",
   "name": "StayScape Business Tools",
-  "description": "Allowlisted hotel context, public product lookup and validated product drafts for StayScape Feishu operators.",
+  "description": "Allowlisted hotel facts, reviewed tourism knowledge and explicit-confirmation product proposals for StayScape Feishu operators.",
   "version": "1.0.0",
   "configSchema": {
     "type": "object",
@@ -18,12 +18,18 @@
     "tools": [
       "stayscape_get_hotel_context",
       "stayscape_list_available_products",
-      "stayscape_create_product_draft"
+      "stayscape_get_operations_insights",
+      "stayscape_search_travel_knowledge",
+      "stayscape_create_product_proposal",
+      "stayscape_confirm_product_proposal"
     ]
   },
   "toolMetadata": {
     "stayscape_get_hotel_context": { "optional": true },
     "stayscape_list_available_products": { "optional": true },
-    "stayscape_create_product_draft": { "optional": true }
+    "stayscape_get_operations_insights": { "optional": true },
+    "stayscape_search_travel_knowledge": { "optional": true },
+    "stayscape_create_product_proposal": { "optional": true },
+    "stayscape_confirm_product_proposal": { "optional": true }
   }
 }

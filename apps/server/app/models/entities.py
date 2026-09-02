@@ -153,6 +153,65 @@ class PublicResource(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
 
 
+class TravelKnowledge(TimestampMixin, Base):
+    """Reviewed, attributable Hangzhou travel knowledge used as planning context.
+
+    Knowledge records are deliberately separate from ``PartnerResource``.  A
+    knowledge entry can help the Agent explain a place or suggest a direction,
+    but it is never a sellable resource until a hotel/merchant has supplied a
+    real, date-specific PartnerResource with capacity and settlement data.
+    """
+
+    __tablename__ = "travel_knowledge"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    category: Mapped[str] = mapped_column(String(80), nullable=False)
+    area: Mapped[str] = mapped_column(String(100), default="杭州", nullable=False)
+    address: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    indoor_outdoor: Mapped[str] = mapped_column(String(20), default="MIXED", nullable=False)
+    suitable_crowds: Mapped[str] = mapped_column(String(160), default="ALL", nullable=False)
+    minimum_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    maximum_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suggested_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    opening_hours: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    weather_adaptations: Mapped[str] = mapped_column(String(180), default="CLOUDY", nullable=False)
+    reservation_notice: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ACTIVE: checked within the configured review window; VERIFY_REQUIRED:
+    # use only with an explicit confirmation note; STALE: never present as a
+    # factual opening-time or reservation claim.
+    verification_status: Mapped[str] = mapped_column(String(30), default="VERIFY_REQUIRED", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
+
+
+class WeatherSnapshot(TimestampMixin, Base):
+    """A cache of a sourced forecast, never a model-invented weather claim."""
+
+    __tablename__ = "weather_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    city: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    target_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    scenario: Mapped[str] = mapped_column(String(20), default="CLOUDY", nullable=False)
+    temperature_min: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    temperature_max: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    precipitation_probability: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weather_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    advisory: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    source_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_status: Mapped[str] = mapped_column(String(30), default="VERIFY_REQUIRED", nullable=False)
+    raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
 class TravelProduct(TimestampMixin, Base):
     __tablename__ = "travel_products"
 
@@ -162,6 +221,10 @@ class TravelProduct(TimestampMixin, Base):
     product_name: Mapped[str] = mapped_column(String(180), nullable=False)
     theme: Mapped[str] = mapped_column(String(120), nullable=False)
     target_crowd: Mapped[str] = mapped_column(String(60), nullable=False)
+    # A product is sold as one clearly defined group package.  Keeping this on
+    # the product (rather than inferring it from the crowd label) makes the
+    # breakfast / activity allocation and the hotel-facing wording consistent.
+    party_size: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     weather: Mapped[str] = mapped_column(String(20), default="RAIN", nullable=False)
     target_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     # Merchant-approved upper bound.  ``sale_quantity`` is the live, volatile
@@ -193,6 +256,47 @@ class TravelProduct(TimestampMixin, Base):
     resources: Mapped[list["ProductResource"]] = relationship(back_populates="product", cascade="all, delete-orphan")
     visitor_intents: Mapped[list["VisitorIntent"]] = relationship(back_populates="product")
     adjustments: Mapped[list["ProductAdjustmentRecord"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+
+
+class AgentConversation(TimestampMixin, Base):
+    """One hotel-operating task shared by Web and Feishu entry points."""
+
+    __tablename__ = "agent_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotel_id: Mapped[int] = mapped_column(ForeignKey("hotels.id"), nullable=False, index=True)
+    source_channel: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_role: Mapped[str] = mapped_column(String(30), nullable=False)
+    external_conversation_id: Mapped[str] = mapped_column(String(180), default="", nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(220), default="酒店 AI 运营任务", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="ACTIVE", nullable=False)
+    # User/assistant-facing messages only.  Never place model hidden reasoning
+    # or credentials here; detailed raw payloads remain in server-only logs.
+    messages: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    last_execution: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class ProductProposal(TimestampMixin, Base):
+    """A validated product candidate awaiting an explicit human decision."""
+
+    __tablename__ = "product_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotel_id: Mapped[int] = mapped_column(ForeignKey("hotels.id"), nullable=False, index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("agent_conversations.id"), nullable=True, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("travel_products.id"), nullable=False, unique=True, index=True)
+    source_channel: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING_CONFIRMATION", nullable=False, index=True)
+    trace_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # These are compact, factual snapshots returned to the hotel operator. They
+    # make an Agent recommendation auditable without exposing chain-of-thought.
+    insight_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    weather_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    knowledge_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    execution_steps: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    confirmation_action: Mapped[str] = mapped_column(String(30), default="", nullable=False)
+    confirmed_by: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProductResource(TimestampMixin, Base):
@@ -240,36 +344,6 @@ class VisitorIntent(TimestampMixin, Base):
     contact_phone: Mapped[str] = mapped_column(String(40), nullable=False)
 
     product: Mapped[TravelProduct] = relationship(back_populates="visitor_intents")
-
-
-class VisitorTripPlan(TimestampMixin, Base):
-    """A visitor-editable, multi-day quote whose physical inventory is held atomically.
-
-    Published products remain merchant-approved one-click offers.  This object
-    handles the separate "tell us how you want to play" journey without
-    pretending that an arbitrary draft already has guaranteed availability.
-    """
-
-    __tablename__ = "visitor_trip_plans"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    hotel_id: Mapped[int] = mapped_column(ForeignKey("hotels.id"), nullable=False, index=True)
-    source_product_id: Mapped[int | None] = mapped_column(ForeignKey("travel_products.id"), nullable=True, index=True)
-    plan_name: Mapped[str] = mapped_column(String(180), default="杭州自定义行程", nullable=False)
-    natural_language: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    start_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    target_crowd: Mapped[str] = mapped_column(String(60), default="FRIENDS", nullable=False)
-    party_size: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
-    itinerary: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
-    total_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT")
-    reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    allocation_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    contact_name: Mapped[str] = mapped_column(String(80), default="", nullable=False)
-    contact_phone: Mapped[str] = mapped_column(String(40), default="", nullable=False)
-    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ResourceChangeEvent(TimestampMixin, Base):

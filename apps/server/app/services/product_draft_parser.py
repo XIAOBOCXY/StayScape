@@ -33,6 +33,8 @@ _THEME_RULES = (
     ("茶园慢慢放空", ("龙井", "茶园", "点茶", "茶文化")),
 )
 
+_CHINESE_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
 
 def _weekday(text: str, today: date) -> date | None:
     if "周末" in text:
@@ -71,20 +73,53 @@ def _money(text: str) -> Decimal | None:
     return Decimal(matched.group(1)) if matched else None
 
 
+def _party_size(text: str, crowd: str) -> int:
+    """Extract a sellable group size without guessing from a theme word."""
+
+    normalized = text.replace(" ", "")
+    if any(token in normalized for token in ("两大两小", "2大2小", "二大二小")):
+        return 4
+    if any(token in normalized for token in ("两大一小", "2大1小", "二大一小")):
+        return 3
+    family = re.search(r"一家([一二两三四五六七八九十\d]+)口", normalized)
+    if family:
+        raw = family.group(1)
+        value = int(raw) if raw.isdigit() else _CHINESE_DIGITS.get(raw, 3)
+        return max(1, min(value, 12))
+    people = re.search(r"([一二两三四五六七八九十\d]+)\s*(?:人|位)", normalized)
+    if people:
+        raw = people.group(1)
+        value = int(raw) if raw.isdigit() else _CHINESE_DIGITS.get(raw, 3)
+        return max(1, min(value, 12))
+    return {"FAMILY": 3, "COUPLE": 2, "FRIENDS": 4, "SOLO": 1, "LOCAL_WEEKEND": 2}.get(crowd, 2)
+
+
 def interpret_product_draft(natural_language: str, *, today: date | None = None) -> dict[str, Any]:
     """Return only UI-editable draft hints and a transparent parse summary."""
 
     text = natural_language.strip()
     now = today or date.today()
     crowd = next((value for value, words in _CROWD_RULES if any(word in text for word in words)), "FAMILY")
+    party_size = _party_size(text, crowd)
     theme = next((value for value, words in _THEME_RULES if any(word in text for word in words)), "杭州周末体验")
     weather = "RAIN" if any(word in text for word in ("下雨", "雨天", "雨", "室内")) else "SUNNY" if "晴" in text else "CLOUDY"
     budget = _money(text) or Decimal("699")
-    variants = re.search(r"([1-5])\s*(?:套|个)?(?:方案|产品|候选)", text)
-    variant_count = int(variants.group(1)) if variants else 3
+    # “做两套亲子方案” is the common operator phrasing.  Do not treat “一个
+    # 孩子” as a request for one candidate: bare 个 must still be followed by
+    # a product noun, whereas bare 套 is unambiguous in this workflow.
+    variants = re.search(
+        r"([1-5一二两三四五])\s*(?:套(?:\s*(?:方案|产品|候选))?|个\s*(?:方案|产品|候选)|(?:方案|产品|候选))",
+        text,
+    )
+    if variants:
+        raw_variant_count = variants.group(1)
+        variant_count = int(raw_variant_count) if raw_variant_count.isdigit() else _CHINESE_DIGITS.get(raw_variant_count, 3)
+    else:
+        variant_count = 3
     updates = {
         "target_date": (_date_value(text, now) or now + timedelta(days=1)).isoformat(),
         "target_crowd": crowd,
+        "party_size": party_size,
         "weather": weather,
         "theme": theme,
         "visitor_budget": str(budget),
@@ -93,7 +128,7 @@ def interpret_product_draft(natural_language: str, *, today: date | None = None)
         "creative_direction": text,
     }
     labels = {
-        "target_date": "日期", "target_crowd": "同行人", "weather": "体验场景",
+        "target_date": "日期", "target_crowd": "同行人", "party_size": "套餐人数", "weather": "体验场景",
         "theme": "主题", "visitor_budget": "预算", "variant_count": "方案数量",
     }
     parsed = [{"field": key, "label": labels[key], "value": value} for key, value in updates.items() if key in labels]

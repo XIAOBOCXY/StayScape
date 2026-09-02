@@ -1,4 +1,4 @@
-"""Verify the two StayScape skills in ``openclaw skills list --json`` output."""
+"""Verify the three StayScape skills in ``openclaw skills list --json`` output."""
 
 from __future__ import annotations
 

@@ -1,18 +1,20 @@
 # StayScape 余宿成景
 
-StayScape 是面向酒店临期客房的文旅业务系统：FastAPI + PostgreSQL 保存真实经营数据，确定性规则计算库存、成本、售价、毛利和状态；OpenClaw 只负责调用两个 StayScape Skill 完成产品创意、游客理解、文案和解释。
+StayScape 是面向酒店临期客房的文旅业务系统：FastAPI + PostgreSQL 保存真实经营数据，确定性规则计算库存、成本、售价、毛利和状态；ECS 上唯一的 OpenClaw Agent 负责 Skill 编排、产品候选和营销内容。ClawHive 只发布、展示和验证 Skill，不承担线上业务调用。
 
 ## 产品定位
 
 - 酒店临期库存驱动的文旅产品生成与动态运营
-- 游客自然语言需求驱动的个性化旅居匹配
-- Web/H5 和飞书是两个入口，但只使用一个 OpenClaw Gateway、一个 Agent：`stayscape-main`
+- 酒店自然语言运营任务：经营者在 Web 或飞书提出目标，生成待确认产品候选，再明确加入草稿或发布
+- 酒店产品工作台：可先选博物馆、亲子乐园、双人约会等产品方向与人数套餐；AI 按实时库存生成多套候选，支持批量自然语言改稿与单品细调
+- 游客端只浏览酒店已发布产品、提交预约意向，并保留“问一问”轻量咨询；不再提供多日自主组包
+- Web/H5 和飞书共用一个 OpenClaw Gateway、一个 Agent：`stayscape-main`
 - ClawHive 仅用于 Skill 发布、管理、验证和展示；不作为 StayScape 的运行时 API
 
 ```text
-Visitor H5  -> FastAPI -> OpenClaw -> stayscape-main -> stayscape-visitor-matcher
-Hotel Web   -> FastAPI -> OpenClaw -> stayscape-main -> stayscape-product-generator
-Feishu      -> OpenClaw Feishu Channel -> stayscape-main -> StayScape Tools -> FastAPI
+Visitor H5  -> FastAPI -> OpenClaw -> stayscape-main -> stayscape-visitor-matcher (问一问)
+Hotel Web   -> FastAPI -> OpenClaw -> stayscape-main -> Product/Marketing Skills -> 待确认候选
+Feishu      -> OpenClaw Feishu Channel -> stayscape-main -> StayScape Tools -> 待确认候选 -> 明确确认草稿/发布
 ```
 
 ## 核心演示不变量
@@ -122,7 +124,7 @@ Wan 2.7 使用与 API Key 同地域的工作空间地址，程序会根据 `WAN_
 
 不要把真实 Qwen Key、飞书 Secret、Gateway Token、Tool Token 或数据库密码写进 README、源码、前端、Dockerfile、Skill ZIP，或提交到 GitHub。项目的 `.gitignore` 会排除 `.env`；部署脚本会在服务器端生成 `SECRET_KEY`、PostgreSQL 密码、Gateway Token 和 Tool Token。
 
-脚本会生成服务端密钥、PostgreSQL 密码、Gateway Token 和 Tool Token，构建 PostgreSQL、FastAPI、Vue、Nginx 以及固定版本的官方 OpenClaw 镜像，安装两个 Skill、Qwen provider、可选 Feishu plugin 和 StayScape Tool Plugin，执行迁移、幂等 Seed、健康检查、Skill/plugin discovery、模型清单检查和一次真实 `/v1/responses` smoke test。Live 模式需要把 `QWEN_API_KEY` 预先写入服务器 `.env`；模型供应商首次授权仍需人工完成一次。
+脚本会生成服务端密钥、PostgreSQL 密码、Gateway Token 和 Tool Token，构建 PostgreSQL、FastAPI、Vue、Nginx 以及固定版本的官方 OpenClaw 镜像，安装三个 Skill、Qwen provider、可选 Feishu plugin 和 StayScape Tool Plugin，执行迁移、幂等 Seed、健康检查、Skill/plugin discovery、模型清单检查和一次真实 `/v1/responses` smoke test。Live 模式需要把 `QWEN_API_KEY` 预先写入服务器 `.env`；模型供应商首次授权仍需人工完成一次。
 
 公网只开放 80/443；不要开放 18789、5432、8000。详细步骤见 [docs/DEPLOY_ALIYUN.md](docs/DEPLOY_ALIYUN.md)、[docs/OPENCLAW.md](docs/OPENCLAW.md) 和 [docs/FEISHU.md](docs/FEISHU.md)。
 
@@ -134,14 +136,14 @@ npm.cmd --prefix apps/web run build
 .venv\Scripts\python.exe scripts/package_skills.py
 ```
 
-两个 ZIP 位于 `dist/stayscape-product-generator.zip` 和 `dist/stayscape-visitor-matcher.zip`，ZIP 根目录直接包含 `SKILL.md`，打包脚本会排除 `.env`、密钥、`node_modules`、缓存和构建产物。
+三个 ZIP 位于 `dist/`，分别对应产品生成、游客问一问和营销文案 Skill；ZIP 根目录直接包含 `SKILL.md`，打包脚本会排除 `.env`、密钥、`node_modules`、缓存和构建产物。
 
 ## 目录
 
 - `apps/server`：FastAPI、SQLAlchemy、Alembic、规则引擎、Agent 编排和业务 API
 - `apps/web`：酒店 Web、商户端和游客 H5
-- `skills`：两个可上传 ClawHive 的 Skill
+- `skills`：三个可上传 ClawHive 的 Skill
 - `integrations/stayscape-openclaw-plugin`：官方 OpenClaw Tool Plugin
 - `deploy/openclaw`：固定版本 OpenClaw 容器和配置模板
 - `scripts`：本地 Seed、Skill 打包、demo/live 一键部署
-- `docs`：架构、赛题对齐、OpenClaw、飞书和阿里云部署说明
+- `docs`：架构、赛题对齐、业务调研、测试案例、OpenClaw、飞书和阿里云部署说明

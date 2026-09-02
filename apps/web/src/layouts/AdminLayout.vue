@@ -9,7 +9,7 @@ const auth = useAuthStore()
 const isMerchant = computed(() => auth.role === 'MERCHANT')
 const hotelMenu = [
   { path: '/hotel/dashboard', label: '经营总览', icon: '◈' }, { path: '/hotel/rooms', label: '临期客房', icon: '▦' }, { path: '/hotel/services', label: '酒店服务', icon: '⌁' },
-  { path: '/hotel/resources', label: '合作资源池', icon: '◇' }, { path: '/hotel/products', label: '当前产品池', icon: '▤' }, { path: '/hotel/products/generate', label: '生成产品', icon: '✦' }, { path: '/hotel/operations', label: '动态运营', icon: '↻' },
+  { path: '/hotel/resources', label: '合作资源池', icon: '◇' }, { path: '/hotel/products', label: '当前产品池', icon: '▤' }, { path: '/hotel/products/generate', label: '生成产品', icon: '✦' }, { path: '/hotel/ai-operations', label: 'AI 运营任务', icon: '◌' }, { path: '/hotel/operations', label: '动态运营', icon: '↻' },
   { path: '/hotel/intents', label: '游客意向', icon: '♡' }, { path: '/hotel/skill-logs', label: '调用日志', icon: '⌘' }
 ]
 const merchantMenu = [{ path: '/merchant/dashboard', label: '商户工作台', icon: '◈' }, { path: '/merchant/resources', label: '我的资源', icon: '◇' }]

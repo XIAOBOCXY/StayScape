@@ -29,13 +29,16 @@ DM 和群组默认都是 allowlist；群聊要求 mention。角色名单只负�
 
 ## StayScape Tool
 
-同一个 Agent 可以调用三个固定工具：
+同一个 Agent 可以调用六个固定工具：
 
 - `stayscape_get_hotel_context`
 - `stayscape_list_available_products`
-- `stayscape_create_product_draft`
+- `stayscape_get_operations_insights`
+- `stayscape_search_travel_knowledge`
+- `stayscape_create_product_proposal`
+- `stayscape_confirm_product_proposal`
 
-插件只访问 FastAPI 的 `/api/v1/agent-tools/*`，携带服务端 Tool Token、来源 `FEISHU`、酒店 ID 和 OpenClaw 运行时注入的 `requesterSenderId`。插件配置不保存静态 senderId 或 actorRole；FastAPI 根据 sender allowlist 重新推导角色。缺少运行时 sender 身份直接拒绝。`HOTEL_SUPPORT` 只能读上下文/在售产品；`HOTEL_OPERATOR` 才能创建 DRAFT。绝不提供发布、删除、改库存、改成本、改价格、SQL、shell 或 arbitrary HTTP。
+插件只访问 FastAPI 的 `/api/v1/agent-tools/*`，携带服务端 Tool Token、来源 `FEISHU`、酒店 ID 和 OpenClaw 运行时注入的 `requesterSenderId`。插件配置不保存静态 senderId 或 actorRole；FastAPI 根据 sender allowlist 重新推导角色。缺少运行时 sender 身份直接拒绝。`HOTEL_SUPPORT` 只能读上下文/在售产品；`HOTEL_OPERATOR` 才能创建待确认候选，并且仅在对话中明确回复“加入草稿”或“确认发布”后调用确认工具。发布动作会由 FastAPI 再次校验实时库存、资源、时间、价格和利润。绝不提供删除、改库存、改成本、改价格、SQL、shell 或 arbitrary HTTP。
 
 ## 验证流程
 
@@ -45,7 +48,7 @@ DM 和群组默认都是 allowlist；群聊要求 mention。角色名单只负�
 明天还有哪些临期亲子房？杭州下雨，预算700左右，帮我做一个适合一家三口的产品。
 ```
 
-预期链路：`get_hotel_context` → Product Skill → Agent 返回候选；经理确认“创建这个草稿”后，`create_product_draft` → FastAPI 确定性校验 → Hotel Web 出现 DRAFT。
+预期链路：`get_hotel_context` + `get_operations_insights` + `search_travel_knowledge` → Product Skill → `create_product_proposal` → FastAPI 复核并创建 `PENDING_CONFIRMATION`；经理明确确认后，`confirm_product_proposal(DRAFT|PUBLISH)` → Hotel Web 同步显示草稿或已发布产品。
 
 客服发送：
 
