@@ -111,3 +111,40 @@ def test_advisor_route_instruction_returns_visible_route_note(client, hotel_toke
     primary = response.json()['advisor']['primary']
     assert primary.get('route_note')
     assert '自由' in primary['route_note']
+
+
+def test_advisor_confirmation_preserves_solo_party_and_route_note(client, hotel_token):
+    created = client.post('/api/v1/hotel/ai/conversations', headers=auth(hotel_token), json={'title': '确认状态回归测试'})
+    assert created.status_code == 200, created.text
+    conversation_id = created.json()['id']
+
+    solo = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '改成单人'},
+    )
+    assert solo.status_code == 200, solo.text
+    assert solo.json()['advisor']['primary']['party_size'] == 1
+
+    routed = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '路线安排轻松一点，下午留自由时间'},
+    )
+    assert routed.status_code == 200, routed.text
+    routed_primary = routed.json()['advisor']['primary']
+    assert routed_primary['party_size'] == 1
+    assert '自由' in routed_primary['route_note']
+
+    generated = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '就这个，生成候选'},
+    )
+    assert generated.status_code == 200, generated.text
+    payload = generated.json()
+    assert payload['advisor']['step'] == 'GENERATED'
+    assert payload['advisor']['primary']['party_size'] == 1
+    assert '自由' in payload['advisor']['primary']['route_note']
+    assert payload['proposals']
+    assert all(item['product']['party_size'] == 1 for item in payload['proposals'])

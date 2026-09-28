@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from ..repositories.product_repository import list_products
@@ -24,7 +24,7 @@ from ..repositories.product_repository import list_products
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import HotelService, PartnerResource, RoomInventory, TravelProduct, VisitorIntent
+from ..models import HotelService, Merchant, PartnerResource, RoomInventory, TravelProduct, VisitorIntent
 from .knowledge_service import KnowledgeService
 from .weather_service import WeatherService
 
@@ -32,7 +32,7 @@ from .weather_service import WeatherService
 WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 # 经营判断与主推方案的输出协议版本。plans / primary / resource_options 结构变化时递增，
 # 前端只在版本一致时复用历史快照，否则重新生成，避免页面长期显示旧结构数据。
-ADVISOR_CONTRACT_VERSION = 3
+ADVISOR_CONTRACT_VERSION = 6
 CROWD_LABELS = {
     "FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友出行",
     "SOLO": "独自旅行", "LOCAL_WEEKEND": "本地周末", "ALL": "不限客群",
@@ -190,19 +190,24 @@ class ProductAdvisor:
                 .where(TravelProduct.hotel_id == self.hotel_id)
             ).all()
         )
+        window_start = date.today() - timedelta(days=13)
+        recent_intents = [
+            item for item in intents
+            if item.product and window_start <= item.product.target_date <= date.today()
+        ]
+        confirmed = [item for item in recent_intents if item.reservation_status == "CONFIRMED"]
         by_crowd: dict[str, int] = {}
         revenue = Decimal("0")
-        for intent in intents:
+        for intent in confirmed:
             product = intent.product
             if product is None:
                 continue
             label = CROWD_LABELS.get(str(product.target_crowd), "其他")
             by_crowd[label] = by_crowd.get(label, 0) + 1
-            if intent.reservation_status == "CONFIRMED":
-                revenue += Decimal(str(product.suggested_price or 0))
+            revenue += Decimal(str(product.suggested_price or 0))
         return {
-            "orders": len(intents),
-            "confirmed": sum(1 for item in intents if item.reservation_status == "CONFIRMED"),
+            "orders": len(recent_intents),
+            "confirmed": len(confirmed),
             "revenue": revenue,
             "by_crowd": by_crowd,
         }
@@ -210,7 +215,8 @@ class ProductAdvisor:
     def _resources_for(self, target: date, crowd: str, party_size: int) -> list[PartnerResource]:
         rows = list(
             self.db.scalars(
-                select(PartnerResource).where(
+                select(PartnerResource).join(Merchant).where(
+                    Merchant.hotel_id == self.hotel_id,
                     PartnerResource.available_date == target,
                     PartnerResource.status == "AVAILABLE",
                     PartnerResource.package_enabled.is_(True),
@@ -230,10 +236,11 @@ class ProductAdvisor:
                 select(HotelService).where(
                     HotelService.hotel_id == self.hotel_id,
                     HotelService.available_date == target,
+                    HotelService.available_quantity > 0,
                     HotelService.status == "AVAILABLE",
-                )
+                ).order_by(HotelService.available_quantity.desc(), HotelService.id)
             ).all()
-        )[:4]
+        )[:8]
 
     def _resource_by_name(self, target: date, text: str):
         """按名称精确查当天的合作资源。
@@ -246,7 +253,8 @@ class ProductAdvisor:
             return None
         rows = list(
             self.db.scalars(
-                select(PartnerResource).where(
+                select(PartnerResource).join(Merchant).where(
+                    Merchant.hotel_id == self.hotel_id,
                     PartnerResource.available_date == target,
                     PartnerResource.status == "AVAILABLE",
                     PartnerResource.package_enabled.is_(True),
@@ -305,12 +313,19 @@ class ProductAdvisor:
 
     # ------------------------------------------------------------------ turns
     @staticmethod
-    def _estimated_price(room_row: dict[str, Any], partner, party_size: int) -> Decimal:
+    def _estimated_price(room_row: dict[str, Any], partner, party_size: int, partners=None, services=None) -> Decimal:
         """按正式定价规则（25% 最低毛利、建议价 = 最低合法价 × 1.2）预估售价。"""
 
-        unit_cost = Decimal(str(room_row["cost"])) + Decimal(str(partner.settlement_price or 0)) * max(1, party_size)
-        floor = unit_cost / (Decimal("1") - Decimal("0.25"))
-        return floor * Decimal("1.2")
+        partner_rows = list(partners or [partner])
+        service_rows = list(services or [])
+        unit_cost = (
+            Decimal(str(room_row["cost"]))
+            + sum((Decimal(str(item.settlement_price or 0)) * max(1, party_size) for item in partner_rows), Decimal("0"))
+            + sum((Decimal(str(item.unit_cost or 0)) * max(1, party_size) for item in service_rows), Decimal("0"))
+        )
+        margin_floor = unit_cost / (Decimal("1") - Decimal("0.20")) if unit_cost else Decimal("0")
+        floor = max(Decimal(str(room_row.get("minimum_price") or 0)), margin_floor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return max(floor, (floor * Decimal("1.2")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     @staticmethod
     def _resource_window(resource) -> str:
@@ -339,11 +354,29 @@ class ProductAdvisor:
         chosen_date = parsed["target_date"] or (
             date.fromisoformat(state["target_date"]) if state.get("target_date") else None
         )
+        if state.get("target_date") and state.get("room_type"):
+            current_date = date.fromisoformat(state["target_date"])
+            if parsed["target_date"] is None and any(word in message for word in ("换日期", "换一个日期", "改日期", "换一天")):
+                same_room_dates = sorted({row["date"] for row in rooms if row["room_type"] == state["room_type"] and row["date"] != current_date})
+                if same_room_dates:
+                    chosen_date = same_room_dates[0]
+            if parsed["room_type"] is None and any(word in message for word in ("换房型", "换一个房型", "换房间")):
+                alternatives = [row for row in rooms if row["date"] == chosen_date and row["room_type"] != str(state["room_type"])]
+                if alternatives:
+                    chosen_room = max(alternatives, key=lambda row: row["remaining"])["room_type"]
         crowd = parsed["crowd"] or state.get("crowd") or self._top_crowd(demand)
         # 统一成代码后再往下传，否则资源表的 suitable_crowds（COUPLE 等）永远匹配不上。
         crowd = normalize_crowd(crowd)
         party_defaults = {"FAMILY": 3, "COUPLE": 2, "FRIENDS": 3, "SOLO": 1, "LOCAL_WEEKEND": 2}
-        party_size = int(parsed["party_size"] or (party_defaults.get(crowd) if crowd in party_defaults else state.get("party_size")) or 2)
+        # A follow-up such as "就这个，生成候选" must keep the operator's
+        # already selected package size. Only an explicit crowd/size change may
+        # replace it with a crowd default.
+        if parsed["party_size"] is not None:
+            party_size = int(parsed["party_size"])
+        elif parsed["crowd"]:
+            party_size = int(party_defaults.get(crowd) or state.get("party_size") or 2)
+        else:
+            party_size = int(state.get("party_size") or party_defaults.get(crowd) or 2)
 
         # 1) overview when nothing concrete has been chosen yet
         # No room and no date yet: always answer with the live inventory first,
@@ -379,8 +412,17 @@ class ProductAdvisor:
             room_row = next((row for row in rooms if row["room_type"] == chosen_room), rooms[0])
             chosen_date = room_row["date"]
 
+        # 后续的推荐方向、选中标记和当前产品都以本轮真正选中的日期和房型为准。
+        planning_state = {
+            **state,
+            "room_type": str(room_row["room_type"]),
+            "target_date": room_row["date"].isoformat(),
+            "crowd": normalize_crowd(crowd),
+            "party_size": party_size,
+        }
+
         # The room decides the audience when the operator did not say.
-        if not parsed["crowd"]:
+        if not parsed["crowd"] and not state.get("crowd"):
             tags = str(room_row.get("crowds") or "").upper()
             crowd = next(
                 (label for code, label in CROWD_LABELS.items() if code in tags and code != "ALL"),
@@ -396,7 +438,7 @@ class ProductAdvisor:
                 crowd,
                 party_size,
                 message,
-                state,
+                planning_state,
             )
 
         # 3) otherwise refine the plan for the chosen room/date
@@ -407,7 +449,7 @@ class ProductAdvisor:
             crowd,
             party_size,
             message,
-            state,
+            planning_state,
         )
 
     def _with_judgement(
@@ -460,11 +502,19 @@ class ProductAdvisor:
             explicit = "COUPLE" if "朋友" not in text and "姐妹" not in text else "FRIENDS"
         crowd_code = explicit or normalize_crowd(crowd) or normalize_crowd(self._top_crowd(demand)) or "COUPLE"
         if crowd_code in {"ALL", "LOCAL_WEEKEND"}:
-            crowd_code = self._top_crowd(demand) or "COUPLE"
+            crowd_code = normalize_crowd(self._top_crowd(demand)) or "ALL"
         crowd_label = CROWD_LABELS.get(crowd_code, crowd_code)
         # 2) 库存压力：未来几天里「余量 × 房价」最高的那天/房型
         pressure = sorted(rooms, key=lambda row: (-(int(row["remaining"]) * float(row["normal_price"])), row["date"]))
-        top = pressure[0]
+        requested_state_date = None
+        try:
+            requested_state_date = date.fromisoformat(str(state.get("target_date") or ""))
+        except ValueError:
+            pass
+        top = next(
+            (row for row in pressure if row["date"] == requested_state_date and str(row["room_type"]) == str(state.get("room_type"))),
+            pressure[0],
+        )
         # 3) 匹配客群、当天有足够名额的体验
         pool = self._resources_for(top["date"], crowd_code, party_size)
         if not pool:
@@ -502,11 +552,19 @@ class ProductAdvisor:
         # 本轮提到预算时，先在预算内挑合作资源，挑不到就保留成本最低的组合并说明原因。
         # 方案方向卡始终基于未受预算裁剪的候选池，避免预算一出现就只剩一个方案。
         base_pool = list(pool)
+        ai_partner = sorted(base_pool, key=resource_score)[0] if base_pool else None
+        state_resource_names = [str(item) for item in (state.get("resources") or []) if str(item)]
+        if not state_resource_names and state.get("selected_resource"):
+            state_resource_names = [str(state["selected_resource"])]
+        add_resource_intent = any(word in text for word in ("增加一个体验", "增加体验", "再加一个", "再增加", "加一个体验", "增加资源"))
+        replace_resource_intent = any(word in text for word in ("换资源", "换成", "替换", "改成"))
         # 用户明确说了「换成 X」时，优先用 X，而不是继续按评分挑。
         requested_resource = next(
             (row for row in base_pool if str(row.resource_name or "") and str(row.resource_name) in text),
             None,
         ) or self._resource_by_name(top["date"], text)
+        if requested_resource is None and replace_resource_intent:
+            requested_resource = next((row for row in sorted(base_pool, key=resource_score) if str(row.resource_name) not in state_resource_names), None)
         if requested_resource is not None and all(str(row.id) != str(requested_resource.id) for row in base_pool):
             base_pool.append(requested_resource)
         budget = self._turn_budget
@@ -549,23 +607,145 @@ class ProductAdvisor:
 
         if requested_resource is not None:
             pool = [requested_resource]
-        partner = sorted(pool, key=resource_score)[0]
+        # 当前组合允许多个不冲突的正式体验。状态里的资源优先于默认主推，
+        # 这样“增加一个体验”会进入下一轮容量、成本和候选生成。
+        resource_candidates = {str(row.resource_name): row for row in (base_pool + pool)}
+        selected_names = list(state_resource_names)
+        selection_notes: list[str] = []
+        if requested_resource is not None:
+            if replace_resource_intent and selected_names:
+                selected_names = [str(requested_resource.resource_name), *selected_names[1:]]
+            elif not selected_names:
+                selected_names = [str(requested_resource.resource_name)]
+            elif add_resource_intent and str(requested_resource.resource_name) not in selected_names:
+                selected_names.append(str(requested_resource.resource_name))
+            elif str(requested_resource.resource_name) in selected_names:
+                # Mentioning one of the already selected resources must not
+                # collapse a multi-resource package during candidate creation.
+                selected_names = list(state_resource_names)
+            else:
+                selected_names = [str(requested_resource.resource_name)]
+        elif add_resource_intent:
+            selected_names = selected_names or [str(sorted(pool, key=resource_score)[0].resource_name)]
+            current_rows = [resource_candidates.get(name) or self._resource_by_name(top["date"], name) for name in selected_names]
+            current_rows = [item for item in current_rows if item is not None]
+            extra = next((
+                row for row in sorted(base_pool, key=resource_score)
+                if str(row.resource_name) not in selected_names
+                and int(row.remaining_capacity or 0) >= max(1, party_size)
+                and not any(
+                    row.start_time and row.end_time and other.start_time and other.end_time
+                    and row.start_time < other.end_time and other.start_time < row.end_time
+                    for other in current_rows
+                )
+            ), None)
+            if extra is not None:
+                selected_names.append(str(extra.resource_name))
+            else:
+                selection_notes.append("没有找到同时满足名额与场次要求的第二项体验，当前组合未增加体验。")
+        if not selected_names:
+            selected_names = [str(sorted(pool, key=resource_score)[0].resource_name)]
+        selected_partners: list[PartnerResource] = []
+        for name in selected_names:
+            resource = resource_candidates.get(name) or self._resource_by_name(top["date"], name)
+            if resource is None or any(str(item.id) == str(resource.id) for item in selected_partners):
+                continue
+            if int(resource.remaining_capacity or 0) < max(1, party_size):
+                selection_notes.append(f"「{resource.resource_name}」名额不足，本轮未加入。")
+                continue
+            # 同一时段的两个活动不能塞进一个方案，仍作为不同方向保留。
+            if any(
+                resource.start_time and resource.end_time and other.start_time and other.end_time
+                and resource.start_time < other.end_time and other.start_time < resource.end_time
+                for other in selected_partners
+            ):
+                selection_notes.append(f"「{resource.resource_name}」与已有体验场次重叠，本轮未加入。")
+                continue
+            selected_partners.append(resource)
+        if not selected_partners:
+            selected_partners = [sorted(pool, key=resource_score)[0]]
+        partner = selected_partners[0]
         per_package = max(1, party_size)
-        partner_sets = int(partner.remaining_capacity or 0) // per_package
+        partner_sets = min(int(item.remaining_capacity or 0) // per_package for item in selected_partners)
         room_sets = int(top["remaining"])
-        max_sellable = max(0, min(room_sets, partner_sets))
+        services = self._services_for(top["date"])
+        all_services = services
+        requested_service = None
+        remove_service_intent = any(word in text for word in ("去掉", "移除", "删除", "不要", "取消"))
+        named_service = next((item for item in services if str(item.service_name) in text), None)
+        service_requested = any(word in text for word in ("增加", "搭配", "加上", "酒店服务", "服务", "换成")) or named_service is not None
+        if service_requested:
+            requested_service = named_service
+            if requested_service is None:
+                all_services = list(
+                    self.db.scalars(
+                        select(HotelService).where(
+                            HotelService.hotel_id == self.hotel_id,
+                            HotelService.available_date == top["date"],
+                            HotelService.available_quantity > 0,
+                            HotelService.status == "AVAILABLE",
+                        )
+                    ).all()
+                )
+                requested_service = next((item for item in all_services if str(item.service_name) in text), None)
+            if requested_service is None and "早餐" in text:
+                requested_service = next((item for item in services if item.service_type == "BREAKFAST"), None)
+        selected_services: list[HotelService] = []
+        for state_service in (state.get("services") or []):
+            service_name = str(state_service.get("name") if isinstance(state_service, dict) else state_service)
+            service_id = int(state_service.get("id") or 0) if isinstance(state_service, dict) else 0
+            remove_all_services = remove_service_intent and any(word in text for word in ("酒店权益", "酒店服务", "所有服务", "全部服务"))
+            remove_this_service = remove_service_intent and service_name and service_name in text
+            if remove_all_services or remove_this_service:
+                continue
+            service = next((item for item in all_services if (service_id and item.id == service_id) or (service_name and str(item.service_name) == service_name)), None)
+            if service is not None:
+                selected_services.append(service)
+        if requested_service is not None and not remove_service_intent and all(item.id != requested_service.id for item in selected_services):
+            selected_services.append(requested_service)
+        if service_requested and not remove_service_intent and requested_service is None:
+            selection_notes.append("没有找到名称匹配且有可用名额的酒店服务，本轮未增加酒店权益。")
+        service_sets = min([int(item.available_quantity or 0) // per_package for item in selected_services] or [room_sets])
+        max_sellable = max(0, min(room_sets, partner_sets, service_sets))
         unit_cost = (
             Decimal(str(top["cost"]))
-            + Decimal(str(partner.settlement_price or 0)) * per_package
+            + sum((Decimal(str(item.settlement_price or 0)) * per_package for item in selected_partners), Decimal("0"))
+            + sum((Decimal(str(item.unit_cost or 0)) * per_package for item in selected_services), Decimal("0"))
         )
-        margin_required = Decimal("0.25")
-        floor = (unit_cost / (Decimal("1") - margin_required)).quantize(Decimal("0.01"))
-        suggested = (floor * Decimal("1.2")).quantize(Decimal("0.01"))
+        margin_required = Decimal("0.20")
+        margin_floor = unit_cost / (Decimal("1") - margin_required) if unit_cost else Decimal("0")
+        floor = max(Decimal(str(top.get("minimum_price") or 0)), margin_floor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        suggested = max(floor, (floor * Decimal("1.2")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        if budget is not None and budget > 0:
+            if floor > budget:
+                gap = (floor - budget).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                budget_note = f"预算 ¥{_money(budget)} 低于最低合法价 ¥{_money(floor)}，相差 ¥{_money(gap)}；需要放宽预算或更换低成本组合。"
+                budget_shortfall = {
+                    "requested": _money(budget),
+                    "lowest": _money(floor),
+                    "gap": _money(gap),
+                    "options": [
+                        {"label": f"放宽到 ¥{_money(floor)}", "message": f"预算放宽到 {_money(floor)} 以内"},
+                        {"label": "换更低成本体验", "message": "换成更低成本的体验"},
+                    ],
+                }
+            else:
+                suggested = max(floor, min(suggested, budget)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                budget_note = f"建议售价已控制在 ¥{_money(budget)} 预算内，仍不低于最低合法价。"
         margin = ((suggested - unit_cost) / suggested * 100).quantize(Decimal("0.1")) if suggested > 0 else Decimal("0")
-        bottleneck = "房间库存" if room_sets <= partner_sets else f"{partner.resource_name}名额"
-        window = ""
-        if partner.start_time and partner.end_time:
-            window = f"{partner.start_time.strftime('%H:%M')}–{partner.end_time.strftime('%H:%M')}"
+        service_bottleneck = min(selected_services, key=lambda item: int(item.available_quantity or 0) // per_package, default=None)
+        partner_bottleneck = min(selected_partners, key=lambda item: int(item.remaining_capacity or 0) // per_package)
+        bottleneck = "房间库存" if room_sets <= partner_sets and room_sets <= service_sets else (f"{partner_bottleneck.resource_name}名额" if partner_sets <= service_sets else f"{service_bottleneck.service_name}服务名额" if service_bottleneck else f"{partner.resource_name}名额")
+        window = "、".join(self._resource_window(item) for item in selected_partners if self._resource_window(item))
+        retained_partners = selected_partners[1:]
+        def replacement_fits(option) -> bool:
+            return not any(
+                option.start_time and option.end_time and other.start_time and other.end_time
+                and option.start_time < other.end_time and other.start_time < option.end_time
+                for other in retained_partners
+            )
+        def replacement_price(option) -> Decimal:
+            return self._estimated_price(top, option, per_package, partners=[option, *retained_partners], services=selected_services)
         # 同日期、同房型、同客群下可替换的合作资源：这是「换资源」，不改变产品框架。
         resource_options = [
             {
@@ -573,14 +753,14 @@ class ProductAdvisor:
                 "window": self._resource_window(option),
                 "remaining_capacity": int(option.remaining_capacity or 0),
                 "sets": int(option.remaining_capacity or 0) // per_package,
-                "estimated_price": _money(self._estimated_price(top, option, per_package)),
+                "estimated_price": _money(replacement_price(option)),
                 "settlement_price": _money(option.settlement_price or 0),
                 "indoor": bool(getattr(option, "indoor", False)),
                 "is_current": str(option.resource_name) == str(partner.resource_name),
             }
             for option in sorted(
-                base_pool or pool,
-                key=lambda row: (self._estimated_price(top, row, per_package), row.id),
+                [row for row in (base_pool or pool) if replacement_fits(row)],
+                key=lambda row: (replacement_price(row), row.id),
             )[:5]
         ]
         crowd_short = {"FAMILY": "亲子短住", "COUPLE": "双人短住", "FRIENDS": "朋友短住", "SOLO": "独自短住"}.get(crowd_code, "周末短住")
@@ -588,7 +768,7 @@ class ProductAdvisor:
         slot = "晚上"
         if partner.start_time is not None:
             slot = "上午" if partner.start_time.hour < 12 else ("下午" if partner.start_time.hour < 18 else "晚上")
-        route_note = ""
+        route_note = str(state.get("route_note") or "")
         if any(word in text for word in ("路线", "行程", "轻松", "自由时间", "别排太满", "不要排满")):
             route_note = "下午留出自由时间，减少连续安排，具体场次仍按资源开放时间核对"
         other_pressure = [
@@ -611,18 +791,73 @@ class ProductAdvisor:
                 else "天气变化会影响户外项目，本轮选择了名额更稳的资源。"
             )
         )
-        matched = self._match_running_product(top["date"], str(top["room_type"]), str(partner.resource_name))
+        matched = self._match_running_product(
+            top["date"],
+            str(top["room_type"]),
+            {str(item.resource_name) for item in selected_partners},
+            {str(item.service_name) for item in selected_services},
+            crowd_code,
+            party_size,
+            suggested,
+        )
         forecast = WeatherService(self.db).get_forecast("杭州", top["date"]) or {}
         weather_text = self._weather_label(str(forecast.get("scenario") or "")) or "以当天预报为准"
+        partner_names = "、".join(str(item.resource_name) for item in selected_partners)
+        partner_capacity_text = "；".join(f"{item.resource_name}剩 {item.remaining_capacity} 个名额" for item in selected_partners)
+        selected_ids = {int(item.id) for item in selected_partners}
+        selected_windows = [item for item in selected_partners if item.start_time and item.end_time]
+        add_resource_options = []
+        for option in sorted(base_pool, key=resource_score):
+            if int(option.id) in selected_ids or int(option.remaining_capacity or 0) < per_package:
+                continue
+            conflicts = any(
+                option.start_time and option.end_time
+                and option.start_time < other.end_time and other.start_time < option.end_time
+                for other in selected_windows
+            )
+            if conflicts:
+                continue
+            add_resource_options.append({
+                "id": option.id,
+                "name": str(option.resource_name),
+                "window": self._resource_window(option),
+                "remaining_capacity": int(option.remaining_capacity or 0),
+                "sets": int(option.remaining_capacity or 0) // per_package,
+                "settlement_price": _money(option.settlement_price or 0),
+                "indoor": bool(getattr(option, "indoor", False)),
+            })
+            if len(add_resource_options) >= 8:
+                break
+        resource_decisions = []
+        for candidate in sorted(base_pool, key=resource_score)[:6]:
+            if int(candidate.id) in selected_ids:
+                reason = "时间、客群和天气与当前组合匹配"
+                status = "已选择"
+            elif not crowd_tag_hit(candidate):
+                reason = "可作为备选，当前优先级低于已选资源"
+                status = "备选"
+            elif not getattr(candidate, "indoor", False):
+                reason = "户外适配较弱，雨天需二次核验"
+                status = "未选择"
+            else:
+                reason = "客群或容量匹配度较低"
+                status = "未选择"
+            resource_decisions.append({"name": str(candidate.resource_name), "status": status, "reason": reason})
+        crowd_orders = int(demand.get("by_crowd", {}).get(crowd_label, 0))
+        demand_basis = (
+            f"近14天已确认 {demand['confirmed']} 单，其中{crowd_label} {crowd_orders} 单"
+            if demand["confirmed"]
+            else "近14天没有已确认订单，客群样本不足，本轮按房态与资源适配判断"
+        )
         judgement_text = (
             f"我建议先处理 {top['date'].month} 月 {top['date'].day} 日的{top['room_type']}：当天还剩 {room_sets} 间，"
-            f"是未来几天库存压力较高的房型之一；近 14 天订单里{crowd_label}占比最高，"
+            f"是未来几天库存压力较高的房型之一；{demand_basis}，"
             f"{_weekday(top['date'])}更匹配{'亲子短住' if crowd_code == 'FAMILY' else '双人/朋友短住'}；"
-            f"当天「{partner.resource_name}」还剩 {partner.remaining_capacity} 个名额，按每套 {per_package} 人算最多支撑 {partner_sets} 套，"
-            f"因此这套资源比其它体验更适合作为这一轮主产品。"
+            f"当天「{partner_names}」可用，{partner_capacity_text}，按每套 {per_package} 人算最多支撑 {partner_sets} 套，"
+            f"因此这组资源比其它体验更适合作为这一轮主产品。"
             f"当前天气{weather_text}"
             f"{'，室内资源不受影响' if getattr(partner, 'indoor', False) else '，户外项目会按天气复核'}。"
-            f"按 min({room_sets} 间房, {partner_sets} 套资源) 计算，这一轮实际可售 {max_sellable} 套；"
+            f"按房间、体验和酒店权益中最小容量计算，这一轮实际可售 {max_sellable} 套；"
             f"成本 ¥{_money(unit_cost)}，最低合法售价 ¥{_money(floor)}，建议售价 ¥{_money(suggested)}（毛利率约 {margin}%）。"
         )
         primary = {
@@ -636,31 +871,69 @@ class ProductAdvisor:
             "room_quantity": room_sets,
             "experiences": [
                 {
-                    "name": str(partner.resource_name),
-                    "capacity": int(partner.remaining_capacity or 0),
+                    "name": str(item.resource_name),
+                    "capacity": int(item.remaining_capacity or 0),
                     "per_package": per_package,
-                    "sets": partner_sets,
-                    "window": window,
-                    "indoor": bool(getattr(partner, "indoor", False)),
+                    "sets": int(item.remaining_capacity or 0) // per_package,
+                    "window": self._resource_window(item),
+                    "indoor": bool(getattr(item, "indoor", False)),
                 }
+                for item in selected_partners
             ],
             "price": _money(suggested),
             "cost": _money(unit_cost),
             "floor_price": _money(floor),
+            "visitor_budget": _money(budget) if budget is not None and budget > 0 else None,
             "margin": str(margin),
             "max_sellable": max_sellable,
             "bottleneck": bottleneck,
             "party_size": party_size,
             "route_note": route_note,
+            "selection_notice": "；".join(dict.fromkeys(selection_notes)),
+            "services": [{"id": item.id, "name": str(item.service_name), "quantity": per_package} for item in selected_services],
+            "service_options": [
+                {"id": item.id, "name": str(item.service_name), "available_quantity": int(item.available_quantity or 0), "reference_price": _money(item.reference_price or 0), "unit_cost": _money(item.unit_cost or 0), "window": self._resource_window(item)}
+                for item in services[:8]
+            ],
+            "cost_breakdown": [
+                {"label": "客房内部成本", "value": _money(top["cost"])},
+                *[{"label": f"{item.resource_name}合作成本", "value": _money(Decimal(str(item.settlement_price or 0)) * per_package)} for item in selected_partners],
+                *[{"label": f"{item.service_name}服务成本", "value": _money(Decimal(str(item.unit_cost or 0)) * per_package)} for item in selected_services],
+            ],
+            "pricing_basis": [
+                f"单位成本 = 客房 ¥{_money(top['cost'])} + 已选体验与酒店权益成本 = ¥{_money(unit_cost)}",
+                f"最低合法价 = 客房最低价 ¥{_money(top.get('minimum_price') or 0)} 与「单位成本 ÷（1 − 20%最低毛利率）」取较高值 = ¥{_money(floor)}",
+                f"建议售价 = 最低合法价上浮20%，并受用户预算封顶；本轮 ¥{_money(suggested)}，毛利率 {margin}%",
+            ],
+            "structure": [
+                {"label": "住宿", "items": [{"name": f"{top['room_type']} 1晚", "quantity": ""}]},
+                {"label": "核心体验", "items": [{"name": item.resource_name, "quantity": f"{per_package}人", "window": self._resource_window(item)} for item in selected_partners]},
+                {"label": "酒店权益", "items": [{"name": item.service_name, "quantity": f"{per_package}份"} for item in selected_services] or [{"name": "暂无正式酒店权益", "quantity": ""}]},
+                {"label": "路线建议", "items": [{"name": route_note or "入住后自由安排，按场次衔接体验", "quantity": ""}]},
+            ],
+            "itinerary": [
+                {"time": "入住日", "title": f"15:00 后入住{top['room_type']}，留出城市活动时间"},
+                {"time": window or "按场次", "title": f"参加{partner_names}，结束后返回酒店"},
+                {"time": "次日", "title": "早餐或自由活动；未标为正式权益的景点仅作路线建议"},
+            ],
+            "reason_sections": [
+                {"label": "为什么现在做", "text": f"{top['date'].month}月{top['date'].day}日{top['room_type']}仍有 {room_sets} 间，是当前窗口中库存压力较高的房型。"},
+                {"label": "为什么给这类人", "text": f"{demand_basis}；{'本轮按' + crowd_audience + '设计。' if demand['confirmed'] else '客群结论信心较低，建议结合后续成交再复核。'}"},
+                {"label": "为什么搭这个体验", "text": f"{weather_text}；{partner_names}的场次与入住后的{slot}空档衔接，名额可以支撑 {partner_sets} 套。"},
+                {"label": "为什么这样卖", "text": f"当前组合单位成本 ¥{_money(unit_cost)}，最低合法价 ¥{_money(floor)}，建议售价 ¥{_money(suggested)}，瓶颈在{bottleneck}。"},
+                {"label": "资源筛选结果", "text": "；".join(f"{item['name']}：{item['status']}，{item['reason']}" for item in resource_decisions) or "暂无可比较的合作资源。"},
+            ],
+            "resource_decisions": resource_decisions,
             "budget_note": budget_note,
             "budget_shortfall": budget_shortfall,
             "resource_options": resource_options,
+            "add_resource_options": add_resource_options,
             "image_url": str(getattr(partner, "image_url", "") or ""),
-            "reasons": ([f"已按你的要求改用「{partner.resource_name}」"] if requested_resource is not None else [])
+            "reasons": ([f"已按你的要求使用「{partner_names}」"] if requested_resource is not None or len(selected_partners) > 1 else [])
             + [
                 f"{top['room_type']} 当天还剩 {room_sets} 间，是未来 10 天库存压力最高的房型之一",
-                f"近 14 天{crowd_label}成交最集中",
-                f"{partner.resource_name} 剩 {partner.remaining_capacity} 席，每套 {per_package} 席，最多支撑 {partner_sets} 套",
+                demand_basis,
+                f"{partner_names}共占用 {partner_sets} 套容量，瓶颈为{bottleneck}",
                 f"天气{weather_text}" + ("，室内体验不受影响" if getattr(partner, "indoor", False) else "，户外项目出发前会再确认"),
             ]
             + ([budget_note] if budget_note else []),
@@ -673,11 +946,11 @@ class ProductAdvisor:
             # 一句结论 + 四个关键数据块，让用户先看到 AI 判断了什么。
             "conclusion": (
                 f"优先消化 {top['date'].month} 月 {top['date'].day} 日的{top['room_type']}："
-                f"{crowd_label}需求最高，「{partner.resource_name}」可支撑 {max_sellable} 套。"
+                f"{'近期' + crowd_label + '成交较多' if demand['confirmed'] else '近期成交样本有限'}，「{partner_names}」组合可支撑 {max_sellable} 套。"
             ),
             "blocks": [
                 {"label": "库存压力", "value": f"{top['room_type']} {room_sets} 间"},
-                {"label": "客群依据", "value": f"{crowd_label}近 14 天成交最多"},
+                {"label": "客群依据", "value": demand_basis},
                 {"label": "资源容量", "value": f"{partner.resource_name} {partner.remaining_capacity} 席 → {partner_sets} 套"},
                 {"label": "天气", "value": f"{weather_text}{'，室内不受影响' if getattr(partner, 'indoor', False) else ''}"},
             ],
@@ -779,25 +1052,29 @@ class ProductAdvisor:
         # 主推荐给 2~3 个方向：主推 + 更低成本 / 更适合雨天 + 更高容量。
         # 这些都是「同一轮经营判断下的可选方案」，不是已生成的正式候选。
         plan_options: list[dict[str, Any]] = []
-        seen_resources: set[str] = {str(partner.resource_name)}
+        seen_resources: set[str] = {str(item.resource_name) for item in selected_partners}
 
         def push_plan(option_label: str, row: dict[str, Any], resource, is_current: bool = False) -> None:
             if resource is None or str(resource.resource_name) in seen_resources:
                 return
             seen_resources.add(str(resource.resource_name))
-            sets = int(resource.remaining_capacity or 0) // per_package
+            same_frame = row["date"] == top["date"] and str(row["room_type"]) == str(top["room_type"])
+            option_partners = [resource, *retained_partners] if same_frame else [resource]
+            sets = min(int(item.remaining_capacity or 0) // per_package for item in option_partners)
             row_sets = int(row["remaining"])
+            option_services = selected_services if same_frame else []
+            option_names = "、".join(str(item.resource_name) for item in option_partners)
             plan_options.append(
                 {
                     "label": option_label,
-                    "name": f"{row['room_type']} × {resource.resource_name}",
+                    "name": f"{row['room_type']} × {option_names}",
                     "target_date": row["date"].isoformat(),
                     "weekday": _weekday(row["date"]),
                     "room_type": str(row["room_type"]),
                     "resource_name": str(resource.resource_name),
                     "window": self._resource_window(resource),
                     "indoor": bool(getattr(resource, "indoor", False)),
-                    "estimated_price": _money(self._estimated_price(row, resource, per_package)),
+                    "estimated_price": _money(self._estimated_price(row, resource, per_package, partners=option_partners, services=option_services)),
                     "max_sellable": max(0, min(row_sets, sets)),
                     "remaining": row_sets,
                     "is_current": is_current,
@@ -807,8 +1084,8 @@ class ProductAdvisor:
 
         plan_options.append(
             {
-                "label": "主推",
-                "name": f"{top['room_type']} × {partner.resource_name}",
+                "label": "当前选择" if ai_partner is not None and int(ai_partner.id) != int(partner.id) else "AI主推",
+                "name": f"{top['room_type']} × {partner_names}",
                 "target_date": top["date"].isoformat(),
                 "weekday": _weekday(top["date"]),
                 "room_type": str(top["room_type"]),
@@ -819,18 +1096,41 @@ class ProductAdvisor:
                 "max_sellable": max_sellable,
                 "remaining": room_sets,
                 "is_current": True,
+                "is_ai_primary": ai_partner is not None and int(ai_partner.id) == int(partner.id),
                 "message": "",
             }
         )
+        if ai_partner is not None and int(ai_partner.id) != int(partner.id):
+            ai_sets = min(room_sets, int(ai_partner.remaining_capacity or 0) // per_package)
+            plan_options.insert(
+                0,
+                {
+                    "label": "AI主推",
+                    "name": f"{top['room_type']} × {ai_partner.resource_name}",
+                    "target_date": top["date"].isoformat(),
+                    "weekday": _weekday(top["date"]),
+                    "room_type": str(top["room_type"]),
+                    "resource_name": str(ai_partner.resource_name),
+                    "window": self._resource_window(ai_partner),
+                    "indoor": bool(getattr(ai_partner, "indoor", False)),
+                    "estimated_price": _money(self._estimated_price(top, ai_partner, per_package, partners=[ai_partner, *retained_partners], services=selected_services)),
+                    "max_sellable": ai_sets,
+                    "remaining": room_sets,
+                    "is_current": False,
+                    "is_ai_primary": True,
+                    "message": f"把 {top['date'].isoformat()} 的 {top['room_type']} 换成 {ai_partner.resource_name}",
+                },
+            )
+            seen_resources.add(str(ai_partner.resource_name))
         same_frame_pool = [row for row in base_pool if str(row.resource_name) not in seen_resources]
         # 先在同客群的资源里挑替代方向，避免给「两人同行」推荐亲子向体验。
         matched_pool = [row for row in same_frame_pool if crowd_tag_hit(row) == 0]
         if matched_pool:
             same_frame_pool = matched_pool
-        cheaper = sorted(same_frame_pool, key=lambda row: (self._estimated_price(top, row, per_package), row.id))
+        cheaper = sorted(same_frame_pool, key=lambda row: (self._estimated_price(top, row, per_package, partners=[row, *retained_partners], services=selected_services), row.id))
         if cheaper:
             candidate_resource = cheaper[0]
-            candidate_price = self._estimated_price(top, candidate_resource, per_package)
+            candidate_price = self._estimated_price(top, candidate_resource, per_package, partners=[candidate_resource, *retained_partners], services=selected_services)
             if not getattr(partner, "indoor", False) and getattr(candidate_resource, "indoor", False):
                 # 主推是户外、替代是室内，这时候「更适合雨天」比「更便宜」更有价值。
                 option_label = "更适合雨天"
@@ -861,12 +1161,11 @@ class ProductAdvisor:
 
         # 供运营阅读的执行摘要：只讲做了什么，不出现英文工具名和公式。
         execution_summary = [
-            {"label": f"已读取未来 10 天房态", "value": f"{len(rooms)} 个「房型 × 日期」组合"},
-            {"label": f"已分析近 14 天订单", "value": f"已成交 {demand['confirmed']} 单，{self._top_crowd(demand)}占比最高"},
-            {"label": f"已筛选合作资源", "value": f"{len(pool)} 项适合{crowd_label}、名额足够的体验"},
-            {"label": "已校验可售容量", "value": f"最多 {max_sellable} 套，主要受{bottleneck}限制"},
-            {"label": "已完成价格与利润校验", "value": f"最低合法价 ¥{_money(floor)}，建议售价 ¥{_money(suggested)}"},
-            {"label": "方案校验", "value": "房态、资源、时间、天气均已通过"},
+            {"label": "已读取房态", "value": "完成未来 10 天可售房态读取"},
+            {"label": "已分析近期订单", "value": "完成近 14 天成交结构分析"},
+            {"label": "已匹配合作资源", "value": "完成客群、天气和场次适配"},
+            {"label": "已重新计算容量和价格", "value": "完成资源组合、容量与定价规则校验"},
+            {"label": "当前方案校验通过", "value": "房态、资源、时间冲突和最低利润均已复核"},
         ]
         # Agent 的工具调用轨迹：让「不是套壳聊天机器人」这件事可见，失败也如实呈现。
         top_crowd = self._top_crowd(demand)
@@ -895,24 +1194,50 @@ class ProductAdvisor:
     def _weather_label(code: str) -> str:
         return {"RAIN": "有雨", "SUNNY": "晴天", "CLOUDY": "多云"}.get(str(code or "").upper(), "")
 
-    def _match_running_product(self, target: date, room_type: str, resource_name: str) -> TravelProduct | None:
+    def _match_running_product(
+        self,
+        target: date,
+        room_type: str,
+        resource_names: set[str],
+        service_names: set[str],
+        crowd_code: str,
+        party_size: int,
+        suggested_price: Decimal,
+    ) -> TravelProduct | None:
         for item in list_products(self.db, self.hotel_id):
             if str(item.status) not in {"ON_SALE", "LOW_STOCK"} or int(item.sale_quantity or 0) <= 0:
                 continue
-            if item.target_date != target or self._product_room_type(item) != room_type:
+            if (
+                item.target_date != target
+                or self._product_room_type(item) != room_type
+                or str(item.target_crowd) != crowd_code
+                or int(item.party_size or 0) != party_size
+                or Decimal(str(item.suggested_price or 0)) != suggested_price
+            ):
                 continue
-            if any(str(row.resource_name) == resource_name for row in item.resources):
+            actual_resources = {
+                str(row.resource_name)
+                for row in item.resources
+                if row.resource_type == "PARTNER_RESOURCE"
+            }
+            actual_services = {
+                str(row.resource_name)
+                for row in item.resources
+                if row.resource_type == "HOTEL_SERVICE"
+            }
+            if actual_resources == resource_names and actual_services == service_names:
                 return item
         return None
 
     def _top_crowd(self, demand: dict[str, Any]) -> str:
         if demand["by_crowd"]:
             return max(demand["by_crowd"].items(), key=lambda item: item[1])[0]
-        return "亲子家庭"
+        return "不限客群"
 
     def _overview(self, rooms, demand, crowd, party_size, state: dict[str, Any] | None = None, message: str = "") -> dict[str, Any]:
         state = dict(state or {})
         text = str(message or "")
+        demand_crowd = self._top_crowd(demand) if demand["confirmed"] else "暂无成交样本"
         by_date: dict[date, list[dict[str, Any]]] = {}
         for row in rooms:
             by_date.setdefault(row["date"], []).append(row)
@@ -977,7 +1302,7 @@ class ProductAdvisor:
                     "price_hint": _money(price),
                     "why": (
                         f"这天{top['room_type']}还剩 {top['remaining']} 间，"
-                        f"{_weekday(day)}通常是{demand['by_crowd'] and max(demand['by_crowd'], key=demand['by_crowd'].get) or crowd}需求最集中的时段，"
+                        f"{_weekday(day)}{demand_crowd + '订单较多' if demand['confirmed'] else '暂无近期成交数据可比较'}，"
                         f"而且{resources[0].resource_name}当天还有 {resources[0].remaining_capacity} 个名额。"
                     ),
                     "hotel_benefit": f"按 ¥{_money(price)} 出售，可把这 {top['remaining']} 间房变成约 ¥{_money(price * top['remaining'])} 的在售货值。",
@@ -1086,7 +1411,9 @@ class ProductAdvisor:
             used_ids = {row.resource_id for row in item.resources}
             pairing = self.db.scalars(
                 select(PartnerResource)
+                .join(Merchant)
                 .where(
+                    Merchant.hotel_id == self.hotel_id,
                     PartnerResource.available_date == item.target_date,
                     PartnerResource.package_enabled.is_(True),
                     PartnerResource.status == "AVAILABLE",
@@ -1116,7 +1443,7 @@ class ProductAdvisor:
                     "experience": experience,
                     "reason": (
                         f"{item.target_date}（{weekday}）· {room_type} 当天还剩 {remaining} 间：{feature_text}。"
-                        f"{weekend}是{demand['by_crowd'] and max(demand['by_crowd'], key=demand['by_crowd'].get) or crowd}客人订得最多的时段，"
+                        f"{weekend}{demand_crowd + '客人订得较多' if demand['confirmed'] else '暂无近期成交数据可比较'}，"
                         f"「{experience}」还有名额，整套 ¥{_money(item.suggested_price)} 卖（毛利率约 {margin}%），现余 {int(item.sale_quantity or 0)} 套，"
                         f"库存与名额都撑得住，适合优先推。{pair_text}"
                     ),
@@ -1129,7 +1456,7 @@ class ProductAdvisor:
             "sellable_products": len(on_sale),
             "confirmed_orders": int(demand["confirmed"]),
             "revenue": _money(demand["revenue"]),
-            "orders_by_crowd": self._top_crowd(demand),
+            "orders_by_crowd": demand_crowd,
             "rooms_remaining": sum(int(row["remaining"]) for row in rooms),
             "room_type_count": len({row["room_type"] for row in rooms}),
             "date_count": len({row["date"] for row in rooms}),
@@ -1142,7 +1469,7 @@ class ProductAdvisor:
             "summary": (
                 f"我先翻了最近的经营情况：未来 10 天还有 {len(rooms)} 个「房型 × 日期」没卖出去，"
                 f"已成交 {demand['confirmed']} 单、累计 ¥{_money(demand['revenue'])}，"
-                f"其中{self._top_crowd(demand)}的客人订得最多。"
+                f"{('其中' + demand_crowd + '客人订得最多。') if demand['confirmed'] else '近 14 天暂无已确认成交样本。'}"
                 f"下面这几组是我觉得这两天更容易卖动的——房量够、体验还有名额、价格也压得住，"
                 f"每组都写了为什么推荐，点开就能编辑或预览。"
             ),
@@ -1150,7 +1477,7 @@ class ProductAdvisor:
                 {"label": "可售房型", "value": f"{len({row['room_type'] for row in rooms})} 种"},
                 {"label": "最近房量最多的日期", "value": f"{best_days[0][0].month}月{best_days[0][0].day}日（{_weekday(best_days[0][0])}）" if best_days else "—"},
                 {"label": "已成交", "value": f"{demand['confirmed']} 单 / ¥{_money(demand['revenue'])}"},
-                {"label": "订单最多的客群", "value": self._top_crowd(demand)},
+                {"label": "订单最多的客群", "value": demand_crowd},
             ],
             "inventory": inventory,
             "recommendations": recommendations,
