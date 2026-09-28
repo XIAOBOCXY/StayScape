@@ -18,7 +18,7 @@ from ..rules.product_validation_rule import PackageValidation, validate_package
 from ..rules.time_rule import intervals_overlap, validate_interval
 from ..rules.weather_rule import is_weather_supported
 from ..schemas.products import GenerateProductRequest
-from .inventory_service import ensure_publish_capacity, reconcile_published_capacity
+from .inventory_service import ACTIVE_PRODUCT_STATUSES, ensure_publish_capacity, reconcile_published_capacity
 from .knowledge_service import KnowledgeService
 from .operations_insight_service import OperationsInsightService
 from .poster_service import poster_asset
@@ -278,8 +278,8 @@ class ProductService:
             "creative_direction": request.creative_direction,
             "variant_index": variant_index,
             "variant_total": request.variant_count,
-            "visitor_budget": str(request.visitor_budget),
-            "preferred_price": str(request.preferred_price),
+            "visitor_budget": str(request.visitor_budget) if request.visitor_budget is not None else "未指定",
+            "preferred_price": str(request.preferred_price) if request.preferred_price is not None else "由房价下限决定",
             "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests, "features": room.features, "suitable_crowds": room.suitable_crowds, "tags": room.tags, "available_count": room.available_count},
             "requested_selections": selections,
             "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE" and ("HOTEL_SERVICE", item.id) in allowed_ids],
@@ -384,6 +384,7 @@ class ProductService:
             theme=output.theme,
             target_crowd=request.target_crowd,
             party_size=request.party_size,
+            nights=getattr(request, "nights", 1) or 1,
             weather=request.weather,
             target_date=request.target_date,
             room_inventory_id=room.id,
@@ -395,8 +396,10 @@ class ProductService:
             gross_profit=validation.pricing.gross_profit,
             gross_margin=validation.pricing.gross_margin,
             minimum_gross_margin_requirement=request.minimum_gross_margin,
-            visitor_budget_limit=request.visitor_budget,
-            price_anchor=request.preferred_price,
+            # Unstated budget anchors on the suggested price, keeping the
+            # hotel-side limits meaningful without inventing a traveller cap.
+            visitor_budget_limit=request.visitor_budget or (validation.pricing.suggested_price + Decimal("200")),
+            price_anchor=request.preferred_price or validation.pricing.suggested_price,
             bottleneck_resource=validation.capacity.bottleneck_resource,
             marketing_title=output.marketing_title,
             marketing_content=output.marketing_content,
@@ -650,7 +653,15 @@ class ProductService:
         # overwrite the merchant's original listing ceiling.  When a temporary
         # hold later expires, the capacity reconciler can safely restore this
         # ceiling (subject to all real source rows).
-        product.sale_quantity = min(max(0, product.listed_quantity), validation.capacity.sale_quantity)
+        # 这里只按「这套套餐自己的资源」算一次上限，不能因此把数量抬高：
+        # 同一房型的所有套餐共享真实库存，最终配额由 reconcile_published_capacity
+        # 统一分配。否则会出现「3 套 → 4 套」这种先涨后被压回去的噪音记录。
+        ceiling = min(max(0, product.listed_quantity), validation.capacity.sale_quantity)
+        if product.status in ACTIVE_PRODUCT_STATUSES:
+            product.sale_quantity = min(ceiling, max(0, old_quantity))
+        else:
+            # 草稿 / 待确认候选不占用在售配额，直接跟随资源变化（房量恢复时也能涨回来）。
+            product.sale_quantity = ceiling
         product.unit_cost = validation.pricing.unit_cost
         product.minimum_allowed_price = validation.pricing.minimum_allowed_price
         product.suggested_price = validation.pricing.suggested_price
@@ -664,7 +675,12 @@ class ProductService:
         elif product.status == "ON_SALE" or product.status == "LOW_STOCK":
             product.status = "LOW_STOCK" if product.sale_quantity <= 2 else "ON_SALE"
         action = "REPLACE_RESOURCE" if replacement_id else ("UPDATE_QUANTITY" if product.sale_quantity != old_quantity else ("REPRICE" if product.suggested_price != old_price else "UPDATE_QUANTITY"))
-        reason = replacement_message or f"资源变化后重新计算：{old_quantity}套→{product.sale_quantity}套"
+        if product.sale_quantity != old_quantity:
+            reason = replacement_message or f"资源变化后重新计算：{old_quantity} 套 → {product.sale_quantity} 套"
+        elif Decimal(product.suggested_price) != Decimal(old_price):
+            reason = f"资源变化后按新成本改价：¥{old_price} → ¥{product.suggested_price}（数量保持 {product.sale_quantity} 套）"
+        else:
+            reason = replacement_message or f"资源变化后重新校验通过，数量保持 {product.sale_quantity} 套"
         return self._record_adjustment(product, event, old_quantity, old_price, action, reason, replacement_id)
 
     def _find_replacement(self, product: TravelProduct, row: ProductResource, room: RoomInventory, existing_capacity: list[CapacityInput], existing_cost: Decimal) -> PartnerResource | None:
@@ -702,6 +718,10 @@ class ProductService:
         return None
 
     def _record_adjustment(self, product: TravelProduct, event: ResourceChangeEvent | None, old_quantity: int, old_price: Decimal, action: str, reason: str, replacement_id: int | None) -> dict[str, Any]:
+        # 数量、价格、替代资源都没变就不要写「调整记录」，
+        # 否则动态运营里会出现大量「6 套 → 6 套」的无意义条目。
+        if replacement_id is None and int(old_quantity) == int(product.sale_quantity) and Decimal(old_price) == Decimal(product.suggested_price):
+            return {"product_id": product.id, "product_name": product.product_name, "old_quantity": old_quantity, "new_quantity": product.sale_quantity, "old_price": old_price, "new_price": product.suggested_price, "action": action, "bottleneck_resource": product.bottleneck_resource, "status": product.status, "replacement_resource_id": replacement_id, "reason": reason}
         record = ProductAdjustmentRecord(product_id=product.id, change_event_id=event.id if event else None, old_quantity=old_quantity, new_quantity=product.sale_quantity, old_price=old_price, new_price=product.suggested_price, action=action, replacement_resource_id=replacement_id, reason=reason)
         self.db.add(record)
         self.db.flush()

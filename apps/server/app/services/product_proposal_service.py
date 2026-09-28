@@ -192,12 +192,29 @@ class ProductProposalService:
         }
         return proposals
 
-    def create_from_language(self, natural_language: str, *, conversation: AgentConversation) -> list[ProductProposal]:
+    def create_from_language(
+        self,
+        natural_language: str,
+        *,
+        conversation: AgentConversation,
+        variant_count: int | None = None,
+    ) -> list[ProductProposal]:
         clean = natural_language.strip()
         if len(clean) < 2:
             raise AppError("VALIDATION_ERROR", "请用一句话描述希望生成的产品方向。", field="natural_language")
+        # Multi-turn: an earlier sentence supplies the context, the newest
+        # sentence is read first so a follow-up like "改成两个人" wins.
+        history = [
+            str(item.get("content", ""))
+            for item in (conversation.messages or [])
+            if isinstance(item, dict) and item.get("role") == "user"
+        ][-3:]
         self._append_message(conversation, "user", clean)
-        return self.create_from_request(self.request_from_language(clean), conversation=conversation, natural_language=clean)
+        context_text = " ".join([clean, *history])[:800]
+        request = self.request_from_language(context_text)
+        if variant_count is not None:
+            request = request.model_copy(update={"variant_count": max(1, min(3, int(variant_count)))})
+        return self.create_from_request(request, conversation=conversation, natural_language=clean)
 
     def confirm(self, proposal_id: int, *, action: str, confirmed_by: str) -> ProductProposal:
         proposal = self.db.scalar(

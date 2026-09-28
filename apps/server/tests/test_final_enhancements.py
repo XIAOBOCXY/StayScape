@@ -75,3 +75,39 @@ def test_poster_uses_media_and_safe_multilingual_wrapping():
     assert 'data-category="family"' in family
     assert 'data-category="nightlife"' in night
     assert family != night
+
+
+def test_refine_crowd_updates_product_name_and_party_size(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post('/api/v1/hotel/products/generate', headers=auth(hotel_token), json=request)
+    assert generated.status_code == 200, generated.text
+    product_id = generated.json()['product']['id']
+    response = client.post(f'/api/v1/hotel/products/{product_id}/refine', headers=auth(hotel_token), json={'natural_language': '改成单人'})
+    assert response.status_code == 200, response.text
+    product = response.json()['product']
+    assert product['target_crowd'] == 'SOLO'
+    assert product['party_size'] == 1
+    assert '独自旅行' in product['product_name']
+
+
+def test_advisor_keeps_party_size_when_follow_up_changes_price(client, hotel_token):
+    created = client.post('/api/v1/hotel/ai/conversations', headers=auth(hotel_token), json={'title': '回归测试'})
+    assert created.status_code == 200, created.text
+    conversation_id = created.json()['id']
+    solo = client.post(f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor', headers=auth(hotel_token), json={'natural_language': '改成单人'})
+    assert solo.status_code == 200, solo.text
+    assert solo.json()['advisor']['primary']['party_size'] == 1
+    priced = client.post(f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor', headers=auth(hotel_token), json={'natural_language': '价格做到500'})
+    assert priced.status_code == 200, priced.text
+    assert priced.json()['advisor']['primary']['party_size'] == 1
+
+
+def test_advisor_route_instruction_returns_visible_route_note(client, hotel_token):
+    created = client.post('/api/v1/hotel/ai/conversations', headers=auth(hotel_token), json={'title': '路线回归测试'})
+    assert created.status_code == 200, created.text
+    conversation_id = created.json()['id']
+    response = client.post(f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor', headers=auth(hotel_token), json={'natural_language': '路线安排轻松一点，下午留自由时间'})
+    assert response.status_code == 200, response.text
+    primary = response.json()['advisor']['primary']
+    assert primary.get('route_note')
+    assert '自由' in primary['route_note']

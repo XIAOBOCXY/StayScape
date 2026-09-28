@@ -33,6 +33,7 @@ services:
       AGENT_MAX_RETRIES: ${AGENT_MAX_RETRIES:-1}
       # Used only in the server container when an operator requests a Wan image.
       QWEN_API_KEY: ${QWEN_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       WAN_IMAGE_ENABLED: ${WAN_IMAGE_ENABLED:-false}
       WAN_IMAGE_MODEL: ${WAN_IMAGE_MODEL:-wan2.7-image}
       WAN_IMAGE_WORKSPACE_ID: ${WAN_IMAGE_WORKSPACE_ID:-}
@@ -66,7 +67,7 @@ services:
       POSTER_EMBED_REMOTE_IMAGES: ${POSTER_EMBED_REMOTE_IMAGES:-false}
       VISITOR_INTENT_HOLD_MINUTES: ${VISITOR_INTENT_HOLD_MINUTES:-30}
       SEED_ON_STARTUP: ${SEED_ON_STARTUP:-false}
-      SEED_DEMO_ON_STARTUP: ${SEED_DEMO_ON_STARTUP:-true}
+      SEED_DEMO_ON_STARTUP: ${SEED_DEMO_ON_STARTUP:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
     volumes:
       # Generated images remain on the server and are ignored by Git.
@@ -124,6 +125,7 @@ services:
       # validate without a live-only secret.
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       QWEN_API_KEY: ${QWEN_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       OPENCLAW_SKIP_ONBOARDING: "1"
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
     depends_on:

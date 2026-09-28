@@ -65,7 +65,7 @@ set_env POSTGRES_DB "$(env_value POSTGRES_DB)"
 set_env POSTGRES_USER "$(env_value POSTGRES_USER)"
 [[ -n "$(env_value POSTGRES_DB)" ]] || set_env POSTGRES_DB stayscape
 [[ -n "$(env_value POSTGRES_USER)" ]] || set_env POSTGRES_USER stayscape
-set_env SEED_DEMO_ON_STARTUP "${SEED_DEMO_ON_STARTUP:-true}"
+set_env SEED_DEMO_ON_STARTUP "${SEED_DEMO_ON_STARTUP:-false}"
 set_env STAYSCAPE_API_INTERNAL_URL http://server:8000
 set_env STAYSCAPE_HOTEL_ID "${STAYSCAPE_HOTEL_ID:-1}"
 set_env OPENCLAW_AGENT_ID stayscape-main
@@ -89,8 +89,8 @@ postgres_password="$(env_value POSTGRES_PASSWORD)"
 [[ -n "$postgres_password" && "$postgres_password" != change-me* ]] || set_env POSTGRES_PASSWORD "$(random_hex)"
 
 if [[ "$MODE" == "live" ]]; then
-  qwen_api_key="$(env_value QWEN_API_KEY)"
-  [[ -n "$qwen_api_key" ]] || fail "Live mode requires QWEN_API_KEY in .env. Create a Qwen/Model Studio API key and keep it server-side; never commit or paste it into the browser."
+  deepseek_api_key="$(env_value DEEPSEEK_API_KEY)"
+  [[ -n "$deepseek_api_key" ]] || fail "Live mode requires DEEPSEEK_API_KEY in .env; keep it server-side and never commit it."
   set_env AGENT_PROVIDER openclaw
   set_env OPENCLAW_BASE_URL http://openclaw:18789
   gateway_token="$(env_value OPENCLAW_GATEWAY_TOKEN)"
@@ -169,10 +169,10 @@ if [[ "$MODE" == "live" ]]; then
   log "Verifying the single stayscape-main Agent"
   docker compose --env-file .env --profile live exec -T openclaw openclaw agents list --json \
     | python3 scripts/verify_openclaw_agent.py
-  log "Discovering all three Skills through the OpenClaw CLI"
+  log "Discovering the StayScape Skill through the OpenClaw CLI"
   docker compose --env-file .env --profile live exec -T openclaw openclaw skills list --agent stayscape-main --json \
     | python3 scripts/verify_openclaw_skills.py
-  log "Checking that all three Skills are visible to stayscape-main"
+  log "Checking that the Skill is visible to stayscape-main"
   docker compose --env-file .env --profile live exec -T openclaw openclaw skills check --agent stayscape-main --json \
     | python3 scripts/verify_openclaw_skills.py
   log "Verifying official OpenClaw provider and StayScape Tool Plugin"
@@ -180,9 +180,9 @@ if [[ "$MODE" == "live" ]]; then
   trap 'rm -f "$plugin_json"' EXIT
   docker compose --env-file .env --profile live exec -T openclaw openclaw plugins list --json >"$plugin_json"
   FEISHU_ENABLED="$(env_value FEISHU_ENABLED)" python3 scripts/verify_openclaw_plugins.py <"$plugin_json"
-  log "Verifying configured Qwen model"
-  model_output="$(docker compose --env-file .env --profile live exec -T openclaw openclaw models list --provider qwen --all 2>&1)" || fail "OpenClaw Qwen provider is not available. Inspect: docker compose --profile live logs openclaw"
-  printf '%s\n' "$model_output" | grep -Fq "${primary_model}" || fail "OpenClaw does not report the configured model ${primary_model}"
+  log "Verifying configured DeepSeek model"
+  model_output="$(docker compose --env-file .env --profile live exec -T openclaw openclaw models list --provider deepseek --all 2>&1)" || fail "OpenClaw DeepSeek provider is not available. Inspect: docker compose --profile live logs openclaw"
+  printf '%s\n' "$model_output" | grep -Fq "${primary_model#deepseek/}" || fail "OpenClaw does not report the configured model ${primary_model}"
   log "Running one real OpenResponses smoke test through stayscape-main"
   docker compose --env-file .env --profile live exec -T openclaw node --input-type=module -e '
     const response = await fetch("http://127.0.0.1:18789/v1/responses", {
@@ -235,6 +235,6 @@ fi
 log "Deployment complete: http://127.0.0.1:${port}"
 log "Hotel demo username: hotel_demo (enter the password manually; it is not embedded in the web bundle)"
 if [[ "$MODE" == "live" ]]; then
-  log "Live runtime: one private OpenClaw Gateway, Agent stayscape-main, three Skills"
+  log "Live runtime: one private OpenClaw Gateway, Agent stayscape-main, one StayScape Skill"
   log "If a model provider needs first-time OAuth/API authorization, complete that one provider-specific step now."
 fi

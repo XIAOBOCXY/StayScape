@@ -39,3 +39,27 @@ def create_access_token(subject: str, role: str, user_id: int) -> str:
 def decode_access_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.secret_key, algorithms=["HS256"])
 
+
+def create_websocket_ticket(*, user_id: int, hotel_id: int) -> str:
+    """Issue a short-lived ticket for a browser WebSocket handshake.
+
+    Browsers cannot attach an Authorization header to WebSocket construction.
+    The ticket is deliberately scoped to one hotel and expires in one minute,
+    so access logs cannot replay the user's long-lived access JWT.
+    """
+    expires = datetime.now(timezone.utc) + timedelta(seconds=60)
+    payload: dict[str, Any] = {
+        "typ": "hotel_ws",
+        "user_id": user_id,
+        "hotel_id": hotel_id,
+        "jti": secrets.token_urlsafe(18),
+        "exp": expires,
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm="HS256")
+
+
+def decode_websocket_ticket(token: str) -> dict[str, Any]:
+    payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+    if payload.get("typ") != "hotel_ws":
+        raise jwt.InvalidTokenError("invalid websocket ticket type")
+    return payload

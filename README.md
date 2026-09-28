@@ -88,7 +88,7 @@ chmod 600 .env
 nano .env
 ```
 
-当前仓库固定 OpenClaw `2026.6.9`，并在项目的 Qwen Standard 模型目录中显式声明了 `qwen/qwen3.5-plus` 与 `qwen/qwen3.7-plus`。Live 实际使用的主对话模型只读取服务器 `.env` 中的 `OPENCLAW_PRIMARY_MODEL`；无需修改 Compose、脚本或代码；它需要阿里云百炼的 **Standard 按量** API Key。当前默认用 3.5-plus 进行联调，稳定后可只改这一项切回 3.7-plus。
+Live 主对话使用 DeepSeek 官方 OpenAI 兼容 API，模型为 `deepseek-chat`；图片生成仍独立使用百炼 Wan 2.7。
 
 使用 Qwen + OpenClaw 的 Live 模式时，填写以下配置；`QWEN_API_KEY` 替换为你自己在阿里云百炼创建的真实 Standard API Key：
 
@@ -97,8 +97,8 @@ MODE=live
 AGENT_PROVIDER=openclaw
 OPENCLAW_BASE_URL=http://openclaw:18789
 OPENCLAW_AGENT_TARGET=openclaw/default
-OPENCLAW_PRIMARY_MODEL=qwen/qwen3.5-plus
-QWEN_API_KEY=<你的百炼 Standard API Key>
+OPENCLAW_PRIMARY_MODEL=deepseek/deepseek-chat
+DEEPSEEK_API_KEY=<你的 DeepSeek 官方 API Key>
 FEISHU_ENABLED=false
 ```
 
@@ -113,7 +113,7 @@ WAN_IMAGE_ENABLED=true
 WAN_IMAGE_MODEL=wan2.7-image
 WAN_IMAGE_WORKSPACE_ID=<你的百炼 Workspace ID>
 WAN_IMAGE_REGION=cn-beijing
-WAN_IMAGE_API_KEY=
+WAN_IMAGE_API_KEY=<你的百炼 DashScope Key>
 WAN_IMAGE_SIZE=1536*2048
 WAN_IMAGE_WATERMARK=true
 ```
@@ -124,7 +124,7 @@ Wan 2.7 使用与 API Key 同地域的工作空间地址，程序会根据 `WAN_
 
 不要把真实 Qwen Key、飞书 Secret、Gateway Token、Tool Token 或数据库密码写进 README、源码、前端、Dockerfile、Skill ZIP，或提交到 GitHub。项目的 `.gitignore` 会排除 `.env`；部署脚本会在服务器端生成 `SECRET_KEY`、PostgreSQL 密码、Gateway Token 和 Tool Token。
 
-脚本会生成服务端密钥、PostgreSQL 密码、Gateway Token 和 Tool Token，构建 PostgreSQL、FastAPI、Vue、Nginx 以及固定版本的官方 OpenClaw 镜像，安装三个 Skill、Qwen provider、可选 Feishu plugin 和 StayScape Tool Plugin，执行迁移、幂等 Seed、健康检查、Skill/plugin discovery、模型清单检查和一次真实 `/v1/responses` smoke test。Live 模式需要把 `QWEN_API_KEY` 预先写入服务器 `.env`；模型供应商首次授权仍需人工完成一次。
+脚本会生成服务端密钥、PostgreSQL 密码、Gateway Token 和 Tool Token，构建 PostgreSQL、FastAPI、Vue、Nginx 以及固定版本的官方 OpenClaw 镜像，安装四个 Skill（包含余宿成景酒店运营总控 Skill）、Qwen provider、可选 Feishu plugin 和 StayScape Tool Plugin，执行迁移、幂等 Seed、健康检查、Skill/plugin discovery、模型清单检查和一次真实 `/v1/responses` smoke test。Live 模式需要把 `QWEN_API_KEY` 预先写入服务器 `.env`；模型供应商首次授权仍需人工完成一次。
 
 公网只开放 80/443；不要开放 18789、5432、8000。详细步骤见 [docs/DEPLOY_ALIYUN.md](docs/DEPLOY_ALIYUN.md)、[docs/OPENCLAW.md](docs/OPENCLAW.md) 和 [docs/FEISHU.md](docs/FEISHU.md)。
 
@@ -136,13 +136,13 @@ npm.cmd --prefix apps/web run build
 .venv\Scripts\python.exe scripts/package_skills.py
 ```
 
-三个 ZIP 位于 `dist/`，分别对应产品生成、游客问一问和营销文案 Skill；ZIP 根目录直接包含 `SKILL.md`，打包脚本会排除 `.env`、密钥、`node_modules`、缓存和构建产物。
+四个 ZIP 位于 `dist/`，分别对应余宿成景运营总控、产品生成、游客问一问和营销文案 Skill；ZIP 根目录直接包含 `SKILL.md`，打包脚本会排除 `.env`、密钥、`node_modules`、缓存和构建产物。
 
 ## 目录
 
 - `apps/server`：FastAPI、SQLAlchemy、Alembic、规则引擎、Agent 编排和业务 API
 - `apps/web`：酒店 Web、商户端和游客 H5
-- `skills`：三个可上传 ClawHive 的 Skill
+- `skills`：四个可上传 ClawHive 的 Skill，其中余宿成景可脱离 Web 平台运行本地确定性演示
 - `integrations/stayscape-openclaw-plugin`：官方 OpenClaw Tool Plugin
 - `deploy/openclaw`：固定版本 OpenClaw 容器和配置模板
 - `scripts`：本地 Seed、Skill 打包、demo/live 一键部署

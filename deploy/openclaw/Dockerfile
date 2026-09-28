@@ -32,7 +32,7 @@ COPY integrations/stayscape-openclaw-plugin/package.json ./package.json
 COPY integrations/stayscape-openclaw-plugin/dist ./dist
 COPY integrations/stayscape-openclaw-plugin/openclaw.plugin.json ./openclaw.plugin.json
 COPY integrations/stayscape-openclaw-plugin/README.md ./README.md
-RUN npm install --omit=dev --ignore-scripts --no-audit --no-fund --legacy-peer-deps
+RUN npm install --registry=https://registry.npmmirror.com --omit=dev --ignore-scripts --no-audit --no-fund --legacy-peer-deps
 
 # The official image owns the OpenClaw runtime package.  Link its SDK into the
 # plugin package when the image layout exposes it there; this keeps the plugin
@@ -46,7 +46,7 @@ RUN mkdir -p /opt/stayscape/openclaw-plugin/node_modules \
 # runtime so a rebuild cannot silently change the provider/channel contract.
 # QWEN_API_KEY is injected at runtime by Compose; it is never baked here.
 RUN mkdir -p /opt/stayscape/runtime-plugins \
-    && npm install --prefix /opt/stayscape/runtime-plugins --omit=dev --omit=peer --no-audit --no-fund \
+    && npm install --registry=https://registry.npmmirror.com --prefix /opt/stayscape/runtime-plugins --omit=dev --omit=peer --no-audit --no-fund \
       "@openclaw/qwen-provider@${OPENCLAW_QWEN_PROVIDER_VERSION}" \
       "@openclaw/feishu@${OPENCLAW_FEISHU_VERSION}" \
     && mkdir -p /opt/stayscape/runtime-plugins/node_modules \

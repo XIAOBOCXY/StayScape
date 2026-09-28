@@ -22,6 +22,23 @@ class User(TimestampMixin, Base):
     hotel: Mapped["Hotel | None"] = relationship(back_populates="users", foreign_keys=[hotel_id])
 
 
+class AgentApiToken(TimestampMixin, Base):
+    """Hash-only read token for external ClawHive/Agent connections."""
+
+    __tablename__ = "agent_api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    hotel_id: Mapped[int] = mapped_column(ForeignKey("hotels.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship()
+    hotel: Mapped["Hotel"] = relationship()
+
+
 class Hotel(TimestampMixin, Base):
     __tablename__ = "hotels"
 
@@ -244,11 +261,18 @@ class TravelProduct(TimestampMixin, Base):
     visitor_budget_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("700"))
     price_anchor: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("599"))
     bottleneck_resource: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # The length of stay is part of the product definition: the visitor never
+    # re-plans it, and a longer stay must come with real content in between.
+    nights: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     marketing_title: Mapped[str] = mapped_column(String(220), default="", nullable=False)
     marketing_content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     marketing_assets: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     recommendation_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     risk_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 对话式微调：每次修改都会把版本号 +1，旧版本不被覆盖。
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 体验层调整（例如「第一天下午别排这么满」）存在这里，不影响库存与成本。
+    experience_notes: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="DRAFT", nullable=False)
 
     hotel: Mapped[Hotel] = relationship(back_populates="products")
@@ -256,6 +280,7 @@ class TravelProduct(TimestampMixin, Base):
     resources: Mapped[list["ProductResource"]] = relationship(back_populates="product", cascade="all, delete-orphan")
     visitor_intents: Mapped[list["VisitorIntent"]] = relationship(back_populates="product")
     adjustments: Mapped[list["ProductAdjustmentRecord"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+    reviews: Mapped[list["ProductReview"]] = relationship(back_populates="product", cascade="all, delete-orphan")
 
 
 class AgentConversation(TimestampMixin, Base):
@@ -274,6 +299,29 @@ class AgentConversation(TimestampMixin, Base):
     # or credentials here; detailed raw payloads remain in server-only logs.
     messages: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     last_execution: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class ProductReview(TimestampMixin, Base):
+    """A traveller review kept with the product it belongs to.
+
+    Reviews stay in their own table so the visitor page can show real ratings
+    and counts instead of a hardcoded score, and so the hotel can see which
+    reviews reference which resource.
+    """
+
+    __tablename__ = "product_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("travel_products.id"), nullable=False, index=True)
+    author_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    author_tag: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    rating: Mapped[Decimal] = mapped_column(Numeric(3, 1), default=Decimal("5.0"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    highlights: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    source: Mapped[str] = mapped_column(String(60), default="平台订单点评", nullable=False)
+    stayed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    product: Mapped["TravelProduct"] = relationship(back_populates="reviews")
 
 
 class ProductProposal(TimestampMixin, Base):
@@ -378,6 +426,23 @@ class ProductAdjustmentRecord(TimestampMixin, Base):
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
     product: Mapped[TravelProduct] = relationship(back_populates="adjustments")
+
+
+class ProductRefinement(TimestampMixin, Base):
+    """One natural-language edit applied to a product (kept as an audit trail)."""
+
+    __tablename__ = "product_refinements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotel_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("travel_products.id"), nullable=False, index=True)
+    conversation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    layer: Mapped[str] = mapped_column(String(30), nullable=False, default="CONTENT")
+    instruction: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    changes: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    checks: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
 
 class SkillCallLog(TimestampMixin, Base):

@@ -1,0 +1,54 @@
+{
+  "data_type": "competition_test_data",
+  "date": "2026-09-12",
+  "services": [
+    {
+      "service_id": "HS001",
+      "name": "双人早餐",
+      "service_type": "BREAKFAST",
+      "capacity": 40,
+      "remaining": 24,
+      "unit_cost": 25,
+      "perceived_value": 68,
+      "available_window": "07:00-10:00",
+      "package_eligible": true,
+      "replaceable": true
+    },
+    {
+      "service_id": "HS002",
+      "name": "延迟退房至14:00",
+      "service_type": "LATE_CHECKOUT",
+      "capacity": 18,
+      "remaining": 12,
+      "unit_cost": 18,
+      "perceived_value": 88,
+      "available_window": "12:00-14:00",
+      "package_eligible": true,
+      "replaceable": true
+    },
+    {
+      "service_id": "HS003",
+      "name": "儿童早餐",
+      "service_type": "BREAKFAST",
+      "capacity": 20,
+      "remaining": 10,
+      "unit_cost": 18,
+      "perceived_value": 48,
+      "available_window": "07:00-10:00",
+      "package_eligible": true,
+      "replaceable": true
+    },
+    {
+      "service_id": "HS004",
+      "name": "夜间洗衣服务",
+      "service_type": "LAUNDRY",
+      "capacity": 6,
+      "remaining": 0,
+      "unit_cost": 30,
+      "perceived_value": 80,
+      "available_window": "18:00-22:00",
+      "package_eligible": false,
+      "replaceable": true
+    }
+  ]
+}

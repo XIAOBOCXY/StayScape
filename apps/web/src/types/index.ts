@@ -101,6 +101,8 @@ export interface ProductResource {
   end_time?: string
   address?: string
   description?: string
+  booking_notice?: string
+  cancellation_rule?: string
   image_url?: string
   image_source?: string
   image_attribution?: string
@@ -124,6 +126,107 @@ export interface MarketingAsset {
   image_request_id?: string
 }
 
+export interface StayOption {
+  nights: number
+  days: number
+  label: string
+  check_in?: string | null
+  check_out?: string | null
+  price: string
+  available: boolean
+}
+
+export interface StayPlan extends StayOption {
+  room_type: string
+  room_name: string
+  hotel_name: string
+  requested_nights: number
+  adjusted: boolean
+  max_nights: number
+  check_in_time: string
+  check_out_time: string
+  options: StayOption[]
+}
+
+export interface DayItem {
+  time: string
+  title: string
+  description: string
+  kind: string
+  slot?: string
+  slot_label?: string
+  duration_minutes?: number | null
+  duration_text?: string
+  notes?: string
+  address?: string
+}
+
+export interface DayPlan {
+  day_index: number
+  label: string
+  date?: string | null
+  title: string
+  summary: string
+  slot_summary?: string
+  items: DayItem[]
+}
+
+export interface RouteStop {
+  time: string
+  title: string
+  address: string
+  kind: string
+  slot: string
+}
+
+export interface RouteLeg {
+  from_stop: string
+  to_stop: string
+  mode: string
+  minutes: number
+  note: string
+}
+
+export interface DayRoute {
+  day_index: number
+  label: string
+  date?: string | null
+  title: string
+  summary: string
+  stops: RouteStop[]
+  legs: RouteLeg[]
+}
+
+export interface ExperienceDetail {
+  name: string
+  time: string
+  duration: string
+  address: string
+  included: string
+  extra_cost: string
+  feature: string
+  tips: string
+  source_note: string
+}
+
+export interface DetailSections {
+  intro: string[]
+  experience_details: ExperienceDetail[]
+  spend_notes: string[]
+  tips: string[]
+}
+
+export interface ProductReview {
+  id: number
+  author_name: string
+  author_tag: string
+  rating: string | number
+  content: string
+  highlights: string[]
+  source: string
+  stayed_on?: string | null
+}
+
 export interface TravelProduct {
   id: number
   hotel_id: number
@@ -137,6 +240,7 @@ export interface TravelProduct {
   room_inventory_id: number
   listed_quantity: number
   sale_quantity: number
+  sold_quantity?: number
   unit_cost: string
   minimum_allowed_price: string
   suggested_price: string
@@ -155,6 +259,13 @@ export interface TravelProduct {
   created_at: string
   updated_at: string
   resources: ProductResource[]
+  stay?: StayPlan | null
+  day_plan?: DayPlan[]
+  route_plan?: DayRoute[]
+  detail_sections?: DetailSections | null
+  reviews?: ProductReview[]
+  rating_average?: string | number | null
+  rating_count?: number
 }
 
 export interface Adjustment {

@@ -12,8 +12,8 @@ StayScape 聚焦两项可落地核心功能：
 | 场景适配性 | 临期房、早餐、延迟退房、合作体验名额、天气、场次、商户状态和游客预约形成真实经营闭环 |
 | 功能实用性 | 酒店 Web/飞书多轮运营任务、待确认候选、营销素材、游客问一问、预约意向和 12→4→1 动态联动 |
 | 部署便捷性 | Windows 本地 SQLite/Mock、Docker Compose PostgreSQL、阿里云 `scripts/deploy.sh live` 一键部署 |
-| 引擎技术实现 | ECS 唯一 `stayscape-main` Agent、正式 `/v1/responses`、三个 Skill、飞书 Tool Plugin、文旅知识库、天气和经营数据工具 |
-| 代码规范性 | FastAPI 分层、SQLAlchemy/Alembic、Pydantic Schema、确定性规则、三个 Skill 和 OpenClaw Tool Plugin |
+| 引擎技术实现 | ECS 唯一 `stayscape-main` Agent、正式 `/v1/responses`、余宿成景总控与三个专用 Skill、飞书 Tool Plugin、文旅知识库、天气和经营数据工具 |
+| 代码规范性 | FastAPI 分层、SQLAlchemy/Alembic、Pydantic Schema、确定性规则、四个 Skill 和 OpenClaw Tool Plugin |
 | 异常处理能力 | Agent 超时重试、JSON Schema 修复、Live 不伪装 fallback、资源/天气/时间/年龄/容量/毛利校验、知识过期显式提示、统一错误结构 |
 | 文档完整性 | README、API、架构、业务调研、测试案例、演示脚本、OpenClaw、飞书、阿里云部署、ClawHive Skill 上传说明 |
 

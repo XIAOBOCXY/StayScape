@@ -103,7 +103,9 @@ def interpret_product_draft(natural_language: str, *, today: date | None = None)
     party_size = _party_size(text, crowd)
     theme = next((value for value, words in _THEME_RULES if any(word in text for word in words)), "杭州周末体验")
     weather = "RAIN" if any(word in text for word in ("下雨", "雨天", "雨", "室内")) else "SUNNY" if "晴" in text else "CLOUDY"
-    budget = _money(text) or Decimal("699")
+    # Only a stated budget becomes a constraint; an unspecified run must not
+    # be rejected for "exceeding the traveller's budget".
+    budget = _money(text)
     # “做两套亲子方案” is the common operator phrasing.  Do not treat “一个
     # 孩子” as a request for one candidate: bare 个 must still be followed by
     # a product noun, whereas bare 套 is unambiguous in this workflow.
@@ -122,8 +124,7 @@ def interpret_product_draft(natural_language: str, *, today: date | None = None)
         "party_size": party_size,
         "weather": weather,
         "theme": theme,
-        "visitor_budget": str(budget),
-        "preferred_price": str(budget),
+        **({"visitor_budget": str(budget), "preferred_price": str(budget)} if budget is not None else {}),
         "variant_count": variant_count,
         "creative_direction": text,
     }

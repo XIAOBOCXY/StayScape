@@ -17,54 +17,65 @@ export interface ProductMediaAsset {
   orientation?: 'portrait' | 'landscape' | 'square'
 }
 
+/** Route a curated public image through our own cache endpoint.
+ *
+ * The first view copies the file to server storage, later views are served
+ * from the local cache with a week-long browser cache, which keeps the
+ * operator console and the storefront from waiting on third-party CDNs.
+ */
+function cachedMediaUrl(url: string): string {
+  if (!/^https:\/\/(images\.unsplash\.com|images\.pexels\.com|commons\.wikimedia\.org|upload\.wikimedia\.org)\//.test(url)) return url
+  return `/api/v1/visitor/media/proxy?url=${encodeURIComponent(url)}`
+}
+
 // 固定的公开演示素材：这是杭州主题的氛围参考图，不代表酒店或合作商户真实供图。
 // 页面只消费 mediaForProduct 的结果，避免把几十个 URL 散落在组件中。
 const MEDIA_LIBRARY_RAW: Record<string, ProductMediaAsset> = {
-  hangzhou: { id: 'hangzhou-water-town', url: 'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=1800&q=85', alt: '江南水乡与山水的旅行氛围图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hangzhou-water-town', kind: 'scene' },
-  rain: { id: 'hangzhou-rain-window', url: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?auto=format&fit=crop&w=1500&q=85', alt: '雨天窗边的安静旅行场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/rainy-window', kind: 'scene' },
-  hotel: { id: 'boutique-hotel-room', url: 'https://images.unsplash.com/photo-1564501049412-61c2a3083791?auto=format&fit=crop&w=1400&q=85', alt: '暖色精品酒店客房与床铺', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/boutique-hotel-room', kind: 'room' },
-  hotelWindow: { id: 'hotel-window-room', url: 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=85', alt: '带窗景与自然光的精品客房', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hotel-window-room', kind: 'room' },
-  breakfast: { id: 'hangzhou-breakfast-table', url: 'https://images.unsplash.com/photo-1533089860892-a7c6f0a88666?auto=format&fit=crop&w=1400&q=85', alt: '旅途中一桌精致早餐', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hotel-breakfast', kind: 'food' },
-  craft: { id: 'hands-on-craft', url: 'https://images.unsplash.com/photo-1452860606245-08befc0ff44b?auto=format&fit=crop&w=1400&q=85', alt: '双手在木桌上进行手作体验', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/handmade-craft-workshop', kind: 'culture' },
-  craftTable: { id: 'craft-table-detail', url: 'https://images.unsplash.com/photo-1528698827591-e19ccd7bc23d?auto=format&fit=crop&w=1400&q=85', alt: '手作材料、工具与桌面细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/craft-table', kind: 'culture' },
-  craftHands: { id: 'craft-hands-detail', url: 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=1400&q=85', alt: '旅行者共同完成手作的双手特写', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hands-craft', kind: 'culture' },
-  tea: { id: 'tea-culture', url: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=1400&q=85', alt: '茶杯与茶叶组成的茶文化场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/chinese-tea-ceremony', kind: 'tea' },
-  teaSet: { id: 'tea-set-table', url: 'https://images.unsplash.com/photo-1564890369478-c89ca6d9cde9?auto=format&fit=crop&w=1400&q=85', alt: '茶器与茶席的近景细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/tea-set', kind: 'tea' },
-  teaGarden: { id: 'tea-garden', url: 'https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?auto=format&fit=crop&w=1400&q=85', alt: '江南茶园与绿色山坡', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/tea-garden', kind: 'tea' },
-  city: { id: 'hangzhou-city-walk', url: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?auto=format&fit=crop&w=1400&q=85', alt: '城市街区与夜间漫游氛围图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hangzhou-city-night', kind: 'city' },
-  canal: { id: 'canal-night-lights', url: 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=1400&q=85', alt: '运河夜色与城市灯光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/canal-night', kind: 'city' },
-  lake: { id: 'lake-walk', url: 'https://images.unsplash.com/photo-1500534623283-312aade485b7?auto=format&fit=crop&w=1400&q=85', alt: '湖边散步与江南风景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/lake-walk', kind: 'scene' },
-  family: { id: 'family-travel', url: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?auto=format&fit=crop&w=1400&q=85', alt: '家庭旅行中的亲密陪伴场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-travel', kind: 'family' },
-  familyRoom: { id: 'family-hotel-room', url: 'https://images.unsplash.com/photo-1595576508898-0ad5c879a061?auto=format&fit=crop&w=1400&q=85', alt: '适合家庭入住的明亮客房', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-hotel-room', kind: 'family' },
-  familyTable: { id: 'family-table', url: 'https://images.unsplash.com/photo-1472162072942-cd5147eb3902?auto=format&fit=crop&w=1400&q=85', alt: '家人围坐分享旅行时光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-dinner-travel', kind: 'family' },
-  themePark: { id: 'hangzhou-theme-park', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=1400&q=85', alt: '夜色中的游乐园摩天轮与灯光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/theme-park', kind: 'themePark' },
-  themeParkDay: { id: 'theme-park-day', url: 'https://images.unsplash.com/photo-1513889961551-628c1efc99d7?auto=format&fit=crop&w=1400&q=85', alt: '白天游乐园的家庭旅行场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/amusement-park', kind: 'themePark' },
-  entertainment: { id: 'city-entertainment', url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1400&q=85', alt: '城市音乐现场与年轻人娱乐氛围', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/live-music', kind: 'entertainment' },
-  sport: { id: 'indoor-sport', url: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=1400&q=85', alt: '室内运动馆的运动体验场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/indoor-sports', kind: 'sport' },
-  sportDetail: { id: 'sport-detail', url: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1400&q=85', alt: '朋友一起完成运动挑战的细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/sports-friends', kind: 'sport' },
-  nightlife: { id: 'hangzhou-nightlife', url: 'https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=1400&q=85', alt: '城市夜色与灯光组成的夜游场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-night', kind: 'nightlife' },
-  food: { id: 'jiangnan-food', url: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1400&q=85', alt: '餐桌与江南美食体验氛围', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/restaurant-table', kind: 'food' },
-  nature: { id: 'xixi-nature', url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=1400&q=85', alt: '湿地与树木组成的自然探索场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/wetland-nature', kind: 'nature' },
-  natureDetail: { id: 'nature-detail', url: 'https://images.unsplash.com/photo-1473445361085-b9a07f55608b?auto=format&fit=crop&w=1400&q=85', alt: '亲子自然观察与植物细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/nature-walk', kind: 'nature' },
-  photo: { id: 'city-photo-walk', url: 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=1400&q=85', alt: '城市旅拍中的相机与街景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-photography', kind: 'photo' },
-  performance: { id: 'city-performance', url: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=1400&q=85', alt: '城市演出现场的舞台与观众', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/theater-performance', kind: 'performance' },
-  kids: { id: 'kids-indoor-play', url: 'https://images.unsplash.com/photo-1503454537195-1dcabb73ffb9?auto=format&fit=crop&w=1400&q=85', alt: '儿童在室内游乐空间探索', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/kids-indoor-play', kind: 'kids' },
-  couple: { id: 'couple-hangzhou-trip', url: 'https://images.unsplash.com/photo-1511988617509-a57c8a288659?auto=format&fit=crop&w=1400&q=85', alt: '情侣旅行中的城市漫游时刻', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/couple-travel', kind: 'couple' },
-  themeParkLights: { id: 'theme-park-lights', url: 'https://images.pexels.com/photos/1779487/pexels-photo-1779487.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '夜间游乐园灯光与摩天轮', source: 'Pexels', source_url: 'https://www.pexels.com/photo/ferris-wheel-under-the-stars-1779487/', kind: 'themePark' },
-  kidsDiscovery: { id: 'kids-discovery', url: 'https://images.pexels.com/photos/3662667/pexels-photo-3662667.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '儿童在探索空间中动手体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/children-playing-inside-a-room-3662667/', kind: 'kids' },
-  climbing: { id: 'climbing-wall', url: 'https://images.pexels.com/photos/1699030/pexels-photo-1699030.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '室内攀岩运动体验', source: 'Pexels', source_url: 'https://www.pexels.com/search/indoor%20climbing/', kind: 'sport' },
-  warmFood: { id: 'warm-food-editorial', url: 'https://images.pexels.com/photos/262978/pexels-photo-262978.jpeg?auto=compress&cs=tinysrgb&w=1400', alt: '暖色餐桌与城市美食体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/restaurant-interior-262978/', kind: 'food' },
-  westLake: { id: 'west-lake-hangzhou-2025', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/West%20Lake%2C%20Hangzhou%202025.jpg?width=1800', alt: '杭州西湖的湖面与群山', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:West_Lake,_Hangzhou_2025.jpg', kind: 'city', attribution: 'Wikimedia Commons · CC BY 4.0', license: 'CC BY 4.0', location: '杭州 · 西湖' },
-  westLakeDawn: { id: 'west-lake-dawn', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Hangzhou%60s%20West%20Lake%20scenery%20at%20dawn.JPG?width=1800', alt: '清晨的杭州西湖', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Hangzhou%60s_West_Lake_scenery_at_dawn.JPG', kind: 'city', attribution: 'Wikimedia Commons · public domain', license: 'Public domain', location: '杭州 · 西湖' },
-  gongchen: { id: 'gongchen-bridge', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/20231122%20Gongchen%20Bridge%2002.jpg?width=1800', alt: '杭州拱宸桥与运河景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:20231122_Gongchen_Bridge_02.jpg', kind: 'city', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 拱宸桥' },
-  xixi: { id: 'xixi-wetland', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Xixi%20Wetland%20Park%2C%20Hangzhou%2C%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%BA%AA%E6%B9%BF%E5%9C%B0%20-%20panoramio.jpg?width=1800', alt: '杭州西溪湿地景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Xixi_Wetland_Park,_Hangzhou,%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%BA%AA%E6%B9%BF%E5%9C%B0_-_panoramio.jpg', kind: 'nature', attribution: 'Wikimedia Commons · CC BY-SA 3.0', license: 'CC BY-SA 3.0', location: '杭州 · 西溪湿地' },
-  longjing: { id: 'longjing-tea-garden', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Tea%20Garden%20Hangzhou.jpg?width=1800', alt: '杭州茶园与山景', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Tea_Garden_Hangzhou.jpg', kind: 'tea', attribution: 'Wikimedia Commons · CC BY 4.0', license: 'CC BY 4.0', location: '杭州 · 龙井茶园' },
-  lingyin: { id: 'lingyin-temple', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Lingyin%20Buddhist%20Temple%2C%20Hangzhou%20%283020083374%29.jpg?width=1800', alt: '杭州灵隐寺建筑景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Lingyin_Buddhist_Temple,_Hangzhou_(3020083374).jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY 2.0', license: 'CC BY 2.0', location: '杭州 · 灵隐' },
-  silkMuseum: { id: 'china-national-silk-museum-reference', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1800', alt: '杭州博物馆建筑参考图', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 博物馆' },
-  liangzhuCctv: { id: 'liangzhu-museum-public', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1600', alt: '杭州良渚博物院建筑参考图', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 良渚' },
-  songcheng: { id: 'theme-park-public-reference', url: 'https://images.pexels.com/photos/1779487/pexels-photo-1779487.jpeg?auto=compress&cs=tinysrgb&w=1800', alt: '主题乐园夜间氛围参考图', source: 'Pexels', source_url: 'https://www.pexels.com/photo/ferris-wheel-under-the-stars-1779487/', kind: 'themePark', attribution: 'Pexels · 来源页', license: 'Pexels License', location: '杭州主题乐园参考' },
-  animationMuseum: { id: 'animation-museum-reference', url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1800&q=85', alt: '城市展演空间参考图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-entertainment', kind: 'entertainment', attribution: 'Unsplash · 来源页', license: 'Unsplash License', location: '杭州展演空间参考' },
-  liangzhuMuseum: { id: 'liangzhu-museum', url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Liangzhu%20Museum%2C%202019-07-07%2009.jpg?width=1800', alt: '杭州良渚博物院建筑', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 良渚' }
+  hangzhou: { id: 'hangzhou-water-town', url: '/generated-media/resource-media/curated-hangzhou.jpg', alt: '江南水乡与山水的旅行氛围图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hangzhou-water-town', kind: 'scene' },
+  rain: { id: 'hangzhou-rain-window', url: '/generated-media/resource-media/curated-rain.jpg', alt: '雨天窗边的安静旅行场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/rainy-window', kind: 'scene' },
+  hotel: { id: 'boutique-hotel-room', url: '/generated-media/resource-media/curated-hotel.jpg', alt: '暖色精品酒店客房与床铺', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/boutique-hotel-room', kind: 'room' },
+  hotelWindow: { id: 'hotel-window-room', url: '/generated-media/resource-media/curated-hotelWindow.jpg', alt: '带窗景与自然光的精品客房', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hotel-window-room', kind: 'room' },
+  breakfast: { id: 'hangzhou-breakfast-table', url: '/generated-media/resource-media/curated-breakfast.jpg', alt: '旅途中一桌精致早餐', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hotel-breakfast', kind: 'food' },
+  craft: { id: 'hands-on-craft', url: '/generated-media/resource-media/curated-craft.jpg', alt: '双手在木桌上进行手作体验', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/handmade-craft-workshop', kind: 'culture' },
+  craftTable: { id: 'craft-table-detail', url: '/generated-media/resource-media/curated-craftTable.jpg', alt: '手作材料、工具与桌面细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/craft-table', kind: 'culture' },
+  craftHands: { id: 'craft-hands-detail', url: '/generated-media/resource-media/curated-craftHands.jpg', alt: '旅行者共同完成手作的双手特写', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hands-craft', kind: 'culture' },
+  tea: { id: 'tea-culture', url: '/generated-media/resource-media/curated-tea.jpg', alt: '茶杯与茶叶组成的茶文化场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/chinese-tea-ceremony', kind: 'tea' },
+  teaSet: { id: 'tea-set-table', url: '/generated-media/resource-media/curated-teaSet.jpg', alt: '茶器与茶席的近景细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/tea-set', kind: 'tea' },
+  teaGarden: { id: 'tea-garden', url: '/generated-media/resource-media/curated-teaGarden.jpg', alt: '江南茶园与绿色山坡', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/tea-garden', kind: 'tea' },
+  city: { id: 'hangzhou-city-walk', url: '/generated-media/resource-media/curated-city.jpg', alt: '城市街区与夜间漫游氛围图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/hangzhou-city-night', kind: 'city' },
+  canal: { id: 'canal-night-lights', url: '/generated-media/resource-media/curated-canal.jpg', alt: '运河夜色与城市灯光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/canal-night', kind: 'city' },
+  lake: { id: 'lake-walk', url: '/generated-media/resource-media/curated-lake.jpg', alt: '湖边散步与江南风景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/lake-walk', kind: 'scene' },
+  family: { id: 'family-travel', url: '/generated-media/resource-media/curated-family.jpg', alt: '家庭旅行中的亲密陪伴场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-travel', kind: 'family' },
+  familyRoom: { id: 'family-hotel-room', url: '/generated-media/resource-media/curated-familyRoom.jpg', alt: '适合家庭入住的明亮客房', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-hotel-room', kind: 'family' },
+  familyTable: { id: 'family-table', url: '/generated-media/resource-media/curated-familyTable.jpg', alt: '家人围坐分享旅行时光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/family-dinner-travel', kind: 'family' },
+  themePark: { id: 'hangzhou-theme-park', url: '/generated-media/resource-media/curated-themePark.jpg', alt: '夜色中的游乐园摩天轮与灯光', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/theme-park', kind: 'themePark' },
+  themeParkDay: { id: 'theme-park-day', url: '/generated-media/resource-media/curated-themeParkDay.jpg', alt: '白天游乐园的家庭旅行场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/amusement-park', kind: 'themePark' },
+  entertainment: { id: 'city-entertainment', url: '/generated-media/resource-media/curated-entertainment.jpg', alt: '城市音乐现场与年轻人娱乐氛围', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/live-music', kind: 'entertainment' },
+  sport: { id: 'indoor-sport', url: '/generated-media/resource-media/curated-sport.jpg', alt: '室内运动馆的运动体验场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/indoor-sports', kind: 'sport' },
+  sportDetail: { id: 'sport-detail', url: '/generated-media/resource-media/curated-sportDetail.jpg', alt: '朋友一起完成运动挑战的细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/sports-friends', kind: 'sport' },
+  nightlife: { id: 'hangzhou-nightlife', url: '/generated-media/resource-media/curated-nightlife.jpg', alt: '城市夜色与灯光组成的夜游场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-night', kind: 'nightlife' },
+  food: { id: 'jiangnan-food', url: '/generated-media/resource-media/curated-food.jpg', alt: '餐桌与江南美食体验氛围', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/restaurant-table', kind: 'food' },
+  nature: { id: 'xixi-nature', url: '/generated-media/resource-media/curated-nature.jpg', alt: '湿地与树木组成的自然探索场景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/wetland-nature', kind: 'nature' },
+  natureDetail: { id: 'nature-detail', url: '/generated-media/resource-media/curated-natureDetail.jpg', alt: '亲子自然观察与植物细节', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/nature-walk', kind: 'nature' },
+  photo: { id: 'city-photo-walk', url: '/generated-media/resource-media/curated-photo.jpg', alt: '城市旅拍中的相机与街景', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-photography', kind: 'photo' },
+  performance: { id: 'city-performance', url: '/generated-media/resource-media/curated-performance.jpg', alt: '城市演出现场的舞台与观众', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/theater-performance', kind: 'performance' },
+  kids: { id: 'kids-indoor-play', url: '/generated-media/resource-media/curated-kids.jpg', alt: '儿童在室内游乐空间探索', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/kids-indoor-play', kind: 'kids' },
+  couple: { id: 'couple-hangzhou-trip', url: '/generated-media/resource-media/curated-couple.jpg', alt: '情侣旅行中的城市漫游时刻', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/couple-travel', kind: 'couple' },
+  themeParkLights: { id: 'theme-park-lights', url: '/generated-media/resource-media/curated-themeParkLights.jpg', alt: '夜间游乐园灯光与摩天轮', source: 'Pexels', source_url: 'https://www.pexels.com/photo/ferris-wheel-under-the-stars-1779487/', kind: 'themePark' },
+  kidsDiscovery: { id: 'kids-discovery', url: '/generated-media/resource-media/curated-kidsDiscovery.jpg', alt: '儿童在探索空间中动手体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/children-playing-inside-a-room-3662667/', kind: 'kids' },
+  climbing: { id: 'climbing-wall', url: '/generated-media/resource-media/curated-climbing.jpg', alt: '室内攀岩运动体验', source: 'Pexels', source_url: 'https://www.pexels.com/search/indoor%20climbing/', kind: 'sport' },
+  warmFood: { id: 'warm-food-editorial', url: '/generated-media/resource-media/curated-warmFood.jpg', alt: '暖色餐桌与城市美食体验', source: 'Pexels', source_url: 'https://www.pexels.com/photo/restaurant-interior-262978/', kind: 'food' },
+  westLake: { id: 'west-lake-hangzhou-2025', url: '/generated-media/resource-media/curated-westLake.jpg', alt: '杭州西湖的湖面与群山', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:West_Lake,_Hangzhou_2025.jpg', kind: 'city', attribution: 'Wikimedia Commons · CC BY 4.0', license: 'CC BY 4.0', location: '杭州 · 西湖' },
+  westLakeDawn: { id: 'west-lake-dawn', url: '/generated-media/resource-media/curated-westLakeDawn.jpg', alt: '清晨的杭州西湖', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Hangzhou%60s_West_Lake_scenery_at_dawn.JPG', kind: 'city', attribution: 'Wikimedia Commons · public domain', license: 'Public domain', location: '杭州 · 西湖' },
+  gongchen: { id: 'gongchen-bridge', url: '/generated-media/resource-media/curated-gongchen.jpg', alt: '杭州拱宸桥与运河景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:20231122_Gongchen_Bridge_02.jpg', kind: 'city', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 拱宸桥' },
+  xixi: { id: 'xixi-wetland', url: '/generated-media/resource-media/curated-xixi.jpg', alt: '杭州西溪湿地景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Xixi_Wetland_Park,_Hangzhou,%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%BA%AA%E6%B9%BF%E5%9C%B0_-_panoramio.jpg', kind: 'nature', attribution: 'Wikimedia Commons · CC BY-SA 3.0', license: 'CC BY-SA 3.0', location: '杭州 · 西溪湿地' },
+  longjing: { id: 'longjing-tea-garden', url: '/generated-media/resource-media/curated-longjing.jpg', alt: '杭州茶园与山景', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Tea_Garden_Hangzhou.jpg', kind: 'tea', attribution: 'Wikimedia Commons · CC BY 4.0', license: 'CC BY 4.0', location: '杭州 · 龙井茶园' },
+  lingyin: { id: 'lingyin-temple', url: '/generated-media/resource-media/curated-lingyin.jpg', alt: '杭州灵隐寺建筑景观', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Lingyin_Buddhist_Temple,_Hangzhou_(3020083374).jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY 2.0', license: 'CC BY 2.0', location: '杭州 · 灵隐' },
+  silkMuseum: { id: 'china-national-silk-museum-reference', url: '/generated-media/resource-media/curated-silkMuseum.jpg', alt: '杭州博物馆建筑参考图', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 博物馆' },
+  liangzhuCctv: { id: 'liangzhu-museum-public', url: '/generated-media/resource-media/curated-liangzhuCctv.jpg', alt: '杭州良渚博物院建筑参考图', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 良渚' },
+  songcheng: { id: 'theme-park-public-reference', url: '/generated-media/resource-media/curated-songcheng.jpg', alt: '主题乐园夜间氛围参考图', source: 'Pexels', source_url: 'https://www.pexels.com/photo/ferris-wheel-under-the-stars-1779487/', kind: 'themePark', attribution: 'Pexels · 来源页', license: 'Pexels License', location: '杭州主题乐园参考' },
+  animationMuseum: { id: 'animation-museum-reference', url: '/generated-media/resource-media/curated-animationMuseum.jpg', alt: '城市展演空间参考图', source: 'Unsplash', source_url: 'https://unsplash.com/s/photos/city-entertainment', kind: 'entertainment', attribution: 'Unsplash · 来源页', license: 'Unsplash License', location: '杭州展演空间参考' },
+  liangzhuMuseum: { id: 'liangzhu-museum', url: '/generated-media/resource-media/curated-liangzhuMuseum.jpg', alt: '杭州良渚博物院建筑', source: 'Wikimedia Commons', source_url: 'https://commons.wikimedia.org/wiki/File:Liangzhu_Museum,_2019-07-07_09.jpg', kind: 'culture', attribution: 'Wikimedia Commons · CC BY-SA 4.0', license: 'CC BY-SA 4.0', location: '杭州 · 良渚' }
 }
 
 // Curated demo catalog metadata is deliberately explicit.  These are public
@@ -79,6 +90,7 @@ const MEDIA_LIBRARY: Record<string, ProductMediaAsset> = Object.fromEntries(Obje
     : 'OFFICIAL_REFERENCE'
   return [key, {
     ...item,
+    url: cachedMediaUrl(item.url),
     source_type: sourceType,
     attribution: item.attribution || `${item.source} curated demo image`,
     usage_note: item.usage_note || '公开参考图，不代表酒店或合作商户实拍；正式商用前请按来源页面核验许可。',
@@ -179,10 +191,10 @@ export function automaticNetworkMedia(query: string, kind: ProductMediaAsset['ki
     id: `commons-auto-${clean}`,
     url: `/api/v1/visitor/media/cover?query=${encodeURIComponent(clean)}`,
     alt: `${clean}参考图片`,
-    source: '网络参考图',
-    source_url: 'https://commons.wikimedia.org/',
-    source_type: 'WIKIMEDIA_COMMONS',
-    attribution: 'Wikimedia Commons 自动检索；可在商户端替换为自有图片',
+    source: '百度/官网检索',
+    source_url: '/api/v1/visitor/media/cover',
+    source_type: 'OFFICIAL_REFERENCE',
+    attribution: '按「地点 + 名称」检索公开图片并核对来源页；可在商户端替换为自有实拍图',
     usage_note: '自动检索的公开参考图；商户上传的实拍图会优先显示。',
     kind,
   }
@@ -250,11 +262,10 @@ function mediaCandidatesForResource(product: ProductMediaInput | null | undefine
     keys = mediaForProduct(product).map((item) => item.id === 'hangzhou-water-town' ? 'hangzhou' : Object.entries(MEDIA_LIBRARY).find((entry) => entry[1].id === item.id)?.[0]).filter(Boolean) as string[]
   }
   const assets = keys.map((key) => MEDIA_LIBRARY[key]).filter(Boolean)
-  const kind = assets[0]?.kind || 'scene'
-  // The server caches a licensed Commons thumbnail per query.  Static
-  // references remain only as a graceful offline fallback, so rooms, services
-  // and experiences no longer all reuse one image host or one photo.
-  return [automaticNetworkMedia(`${resource.resource_name} ${resource.address || '杭州'}`, kind), ...rotate(assets, Number(product?.id || 0) + index * 3)]
+  // Curated CDN assets are served through our own cache (see cachedMediaUrl).
+  // The on-demand Wikimedia cover lookup is intentionally NOT used any more:
+  // it timed out on the deployment host and made operator pages crawl.
+  return rotate(assets, Number(product?.id || 0) + index * 3 + Number(resource?.id || 0))
 }
 
 export function mediaForResource(product: ProductMediaInput | null | undefined, resource: ProductResource | undefined, index = 0) {
@@ -269,7 +280,7 @@ export function experienceMoments(product?: ProductMediaInput | null): ProductMo
   product.resources.forEach((resource, index) => {
     const candidates = mediaCandidatesForResource(product, resource, index)
     const media = candidates.find((candidate) => !usedIds.has(candidate.id) && !usedSources.has(candidate.source)) || candidates.find((candidate) => !usedIds.has(candidate.id)) || candidates[0]
-    if (media && chosen.length < 3) {
+    if (media && chosen.length < 6) {
       chosen.push({ media, resource_name: resource.resource_name, resource_type: resource.resource_type })
       usedIds.add(media.id)
       usedSources.add(media.source)
@@ -277,7 +288,7 @@ export function experienceMoments(product?: ProductMediaInput | null): ProductMo
   })
   const fallbacks = mediaForProduct(product)
   fallbacks.forEach((media) => {
-    if (chosen.length < 3 && !usedIds.has(media.id)) {
+    if (chosen.length < 6 && !usedIds.has(media.id)) {
       chosen.push({ media, resource_name: '杭州漫游', resource_type: 'PARTNER_RESOURCE' })
       usedIds.add(media.id)
     }

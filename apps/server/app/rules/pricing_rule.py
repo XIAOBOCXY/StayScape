@@ -24,19 +24,21 @@ def calculate_pricing(
     unit_cost: Decimal,
     room_minimum_price: Decimal,
     minimum_gross_margin: Decimal,
-    visitor_budget: Decimal,
+    visitor_budget: Decimal | None = None,
     preferred_price: Decimal | None = None,
 ) -> PricingResult:
     if unit_cost < 0:
         raise AppError("VALIDATION_ERROR", "总成本不能为负数", field="unit_cost")
     if minimum_gross_margin < 0 or minimum_gross_margin >= 1:
         raise AppError("VALIDATION_ERROR", "最低毛利率必须大于等于0且小于1", field="minimum_gross_margin")
-    if visitor_budget <= 0:
+    if visitor_budget is not None and visitor_budget <= 0:
         raise AppError("BUDGET_INSUFFICIENT", "游客预算必须大于0", field="visitor_budget", retryable=True)
 
     margin_price = unit_cost / (Decimal("1") - minimum_gross_margin) if unit_cost else Decimal("0")
     minimum_allowed = money(max(room_minimum_price, margin_price))
-    if minimum_allowed > visitor_budget:
+    # A budget is only a constraint when the operator (or the traveller)
+    # actually stated one; otherwise the room's own price floor decides.
+    if visitor_budget is not None and minimum_allowed > visitor_budget:
         raise AppError(
             "BUDGET_INSUFFICIENT",
             "最低允许售价超过游客预算",
@@ -49,7 +51,8 @@ def calculate_pricing(
     # preferred_price is a business-policy input selected by the hotel operator,
     # never an Agent-produced financial value. The backend clamps it to all rules.
     anchor = preferred_price if preferred_price is not None else minimum_allowed
-    suggested = money(max(minimum_allowed, min(anchor, visitor_budget)))
+    ceiling = visitor_budget if visitor_budget is not None else anchor
+    suggested = money(max(minimum_allowed, min(anchor, ceiling)))
     if suggested < unit_cost:
         raise AppError("MARGIN_TOO_LOW", "建议售价低于组合成本", field="suggested_price")
     gross_profit = money(suggested - unit_cost)
@@ -63,4 +66,3 @@ def calculate_pricing(
             suggestion="选择更低结算价资源或提高售价",
         )
     return PricingResult(unit_cost=money(unit_cost), minimum_allowed_price=minimum_allowed, suggested_price=suggested, gross_profit=gross_profit, gross_margin=gross_margin)
-

@@ -3,7 +3,13 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILLS = ["stayscape-product-generator", "stayscape-visitor-matcher", "stayscape-marketing-writer"]
+SKILLS = [
+    "yusuchengjing-hotel-ops",
+    "stayscape-product-generator",
+    "stayscape-visitor-matcher",
+    "stayscape-marketing-writer",
+    "stayscape-clawhive-chat",
+]
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".crt"}
 SENSITIVE_NAMES = {"credentials.json", "secrets.json", "service-account.json"}
 SECRET_ASSIGNMENT = re.compile(r"(?im)^\s*(?:api[_-]?key|secret|access[_-]?token|password)\s*[:=]\s*['\"]?(?!your[-_ ]|change[-_ ]|example|placeholder|none|null)[^\s'\"]{8,}")
@@ -68,5 +74,28 @@ def package(name: str) -> Path:
 
 
 if __name__ == "__main__":
+    built: list[Path] = []
     for skill in SKILLS:
-        print(package(skill))
+        built.append(package(skill))
+    # A single archive that carries every Skill plus the usage note, for
+    # handing the whole set to a platform that accepts one upload.
+    output_dir = ROOT / "dist"
+    bundle = output_dir / "stayscape-skills-bundle.zip"
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+        for item in built:
+            archive.write(item, f"skills/{item.name}")
+        readme = output_dir / "SKILLS-README.md"
+        readme.write_text(
+            "# StayScape Skill 包\n\n"
+            "每个 zip 的根目录都包含 SKILL.md，可单独上传到 ClawHive / SkillHub。\n\n"
+            "- yusuchengjing-hotel-ops：酒店临期库存运营总控（含产品生成、游客匹配、营销文案三种工作模式）\n"
+            "- stayscape-product-generator：产品候选生成与校验\n"
+            "- stayscape-visitor-matcher：游客咨询与推荐匹配\n"
+            "- stayscape-marketing-writer：营销素材文案\n\n"
+            "- stayscape-clawhive-chat：ClawHive 游客/运营自然语言入口，可查询产品并生成待确认候选\n\n"
+            "上传后在 Agent 中启用对应 Skill，并通过 stayscape-openclaw-plugin 调用平台工具。\n",
+            encoding="utf-8",
+        )
+        archive.write(readme, "SKILLS-README.md")
+    for item in [*built, bundle]:
+        print(item)

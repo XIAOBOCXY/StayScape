@@ -34,7 +34,7 @@ async def upload_media(file: UploadFile = File(...), user: User = Depends(get_me
 @router.post("/media/search")
 def search_media(request: MediaSearchRequest, user: User = Depends(get_merchant_user)):
     _ = user
-    return {"items": MediaLibraryService().search_public(request.query, request.limit)}
+    return {"items": MediaLibraryService().search_public(request.query, request.limit, prefetch=True)}
 
 
 @router.post("/media/import")

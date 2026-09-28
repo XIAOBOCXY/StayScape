@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import re
 
 
-VALID_CHANNELS = {"WEB_VISITOR", "WEB_HOTEL", "FEISHU", "SYSTEM"}
+VALID_CHANNELS = {"WEB_VISITOR", "WEB_HOTEL", "FEISHU", "CLAWHIVE", "SYSTEM"}
 VALID_ROLES = {"VISITOR", "HOTEL_OPERATOR", "HOTEL_SUPPORT", "HOTEL", "SYSTEM"}
 
 
@@ -31,7 +31,7 @@ class RequestContext:
             raise ValueError(f"unsupported actor_role: {self.actor_role}")
         if self.source_channel == "WEB_VISITOR" and self.actor_role != "VISITOR":
             raise ValueError("WEB_VISITOR must use VISITOR actor_role")
-        if self.source_channel in {"WEB_HOTEL", "FEISHU"} and self.hotel_id is None:
+        if self.source_channel in {"WEB_HOTEL", "FEISHU", "CLAWHIVE"} and self.hotel_id is None:
             raise ValueError("hotel context is required for hotel and Feishu calls")
 
     @property
@@ -46,5 +46,6 @@ class RequestContext:
             return f"hotel:{self.hotel_id}:{conversation}"
         if self.source_channel == "FEISHU":
             return f"feishu:{self.hotel_id}:{conversation}"
+        if self.source_channel == "CLAWHIVE":
+            return f"clawhive:{self.hotel_id}:{conversation}"
         return None
-

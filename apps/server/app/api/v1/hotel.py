@@ -1,22 +1,31 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ...core.exceptions import AppError
+from ...core.security import create_websocket_ticket
 from ...config import settings
 from ...db import get_db
-from ...models import AgentConversation, Hotel, HotelService, Merchant, PartnerResource, ProductProposal, ProductResource, ResourceChangeEvent, RoomInventory, SkillCallLog, TravelProduct, User, VisitorIntent
+from ...models import AgentApiToken, AgentConversation, Hotel, HotelService, Merchant, PartnerResource, ProductProposal, ProductResource, ResourceChangeEvent, RoomInventory, SkillCallLog, TravelProduct, User, VisitorIntent
 from ...repositories.product_repository import get_product, list_products
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
-from ...schemas.products import AdjustmentRead, BatchMarketingRefinementRequest, GenerateProductRequest, MarketingRegenerationRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
+from ...schemas.products import AdjustmentRead, BatchMarketingRefinementRequest, GenerateProductRequest, MarketingRegenerationRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductRefineRequest, ProductRefineResponse, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
 from ...schemas.ai_operations import AssistantConversationCreate, AssistantMessageCreate, AgentConversationRead, AssistantTaskResponse, ProductProposalRead, ProposalConfirmRequest
+from ...schemas.ai_operations import OrderOverviewResponse, SalesCommandRequest, SalesCommandResponse
 from ...schemas.visitor import VisitorIntentStatusUpdate
 from ...schemas.resources import MediaImportRequest, MediaSearchRequest, MerchantRead, PackageToggleRequest, PartnerResourceRead, ResourceMediaUpdate, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
+from ...services.product_refine_service import ProductRefiner
+from ...services.sales_command_service import CATEGORY_KEYWORDS, apply_sales_command
+from ...services.product_advisor_service import ProductAdvisor
+from ...services.integration_settings_service import public_settings, save_settings
+from ...schemas.ai_operations import AdvisorRequest, AdvisorResponse
 from ...services.product_proposal_service import ProductProposalService
 from ...services.product_draft_parser import interpret_product_draft
 from ...services.operations_insight_service import OperationsInsightService
@@ -25,12 +34,74 @@ from ...services.weather_service import WeatherService
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
 from ...services.media_library_service import MAX_MEDIA_BYTES, MediaLibraryService
+from ...services.agent_token_service import create_token, list_tokens, revoke_token
 from ...agent.openclaw import OpenClawAgent
 from ...agent.context import RequestContext
 from ..deps import get_hotel_user, resolve_hotel_id
 from ..websocket_manager import manager
 
 router = APIRouter(prefix="/hotel", tags=["hotel"])
+
+
+class AgentTokenCreateRequest(BaseModel):
+    name: str = Field(default="ClawHive 只读接入", min_length=1, max_length=120)
+
+
+class IntegrationSettingsUpdate(BaseModel):
+    """Allow only documented runtime settings; credentials remain env-only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_provider: str | None = Field(default=None, max_length=40)
+    openclaw_base_url: str | None = Field(default=None, max_length=500)
+    primary_model: str | None = Field(default=None, max_length=160)
+    reasoning_provider: str | None = Field(default=None, max_length=60)
+    deepseek_api_key: str | None = Field(default=None, max_length=500)
+    vision_provider: str | None = Field(default=None, max_length=60)
+    vision_api_key: str | None = Field(default=None, max_length=500)
+    image_model: str | None = Field(default=None, max_length=160)
+    image_api_key: str | None = Field(default=None, max_length=500)
+    image_workspace_id: str | None = Field(default=None, max_length=160)
+    image_enabled: bool | None = None
+
+
+def _agent_token_view(row: AgentApiToken) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "is_active": row.is_active,
+        "created_at": row.created_at,
+        "last_used_at": row.last_used_at,
+    }
+
+
+@router.post("/ws-ticket")
+def create_hotel_ws_ticket(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Exchange the normal API JWT for a one-minute, hotel-scoped WS ticket."""
+    return {"ticket": create_websocket_ticket(user_id=user.id, hotel_id=hotel_id_for(db, user)), "expires_in": 60}
+
+
+@router.get("/agent-tokens")
+def get_agent_tokens(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    return {"items": [_agent_token_view(item) for item in list_tokens(db, user=user, hotel_id=hotel_id)]}
+
+
+@router.post("/agent-tokens")
+def create_agent_token(request: AgentTokenCreateRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    row, raw = create_token(db, user=user, hotel_id=hotel_id, name=request.name)
+    db.commit()
+    db.refresh(row)
+    return {"token": raw, "item": _agent_token_view(row), "notice": "完整 Token 仅显示这一次，请立即复制并保存。"}
+
+
+@router.post("/agent-tokens/{token_id}/revoke")
+def revoke_agent_token(token_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    row = revoke_token(db, user=user, hotel_id=hotel_id, token_id=token_id)
+    db.commit()
+    return {"item": _agent_token_view(row), "revoked": True}
 
 
 def hotel_id_for(db: Session, user: User) -> int:
@@ -111,6 +182,18 @@ def ai_proposals(status: str | None = None, db: Session = Depends(get_db), user:
 def confirm_ai_proposal(proposal_id: int, request: ProposalConfirmRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     hotel_id = hotel_id_for(db, user)
     service = ProductProposalService(db, hotel_id, RequestContext(source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR", hotel_id=hotel_id, user_id=user.id))
+    # 发布前再核验一次最新库存与合作名额；名额变紧就先把最大可售下调，再把结果写进消息里。
+    if str(request.action).upper() == "PUBLISH":
+        pending = db.get(ProductProposal, proposal_id)
+        product = get_product(db, pending.product_id) if pending is not None else None
+        if product is not None:
+            check = ProductRefiner(db, hotel_id).publish_check(product)
+            if int(check["adjusted_quantity"]) < int(check["current_quantity"]):
+                product.sale_quantity = int(check["adjusted_quantity"])
+                if product.sale_quantity <= 0:
+                    product.status = "SOLD_OUT"
+                elif product.sale_quantity <= 2:
+                    product.status = "LOW_STOCK"
     proposal = service.confirm(proposal_id, action=request.action, confirmed_by=f"web-user:{user.id}")
     db.commit()
     return proposal_to_dict(db, proposal)
@@ -122,12 +205,349 @@ def ai_overview(target_date: date | None = None, db: Session = Depends(get_db), 
     hotel_id = hotel_id_for(db, user)
     selected_date = target_date or date.today()
     proposals = list(db.scalars(select(ProductProposal).where(ProductProposal.hotel_id == hotel_id, ProductProposal.status == "PENDING_CONFIRMATION")).all())
+    insights = OperationsInsightService(db, hotel_id)
+    # 待确认队列里很多是历史候选，单独给出今日新增，避免顶部指标看起来过于沉重。
+    pending_today = sum(
+        1
+        for item in proposals
+        if item.created_at is not None and item.created_at.date() == selected_date
+    )
     return {
-        "operations_insights": OperationsInsightService(db, hotel_id).snapshot(target_date=selected_date),
+        "operations_insights": insights.snapshot(target_date=selected_date),
+        # 顶部指标：未来 10 天的未售房量、压力最大的房型和重点日期可组包资源数。
+        "inventory_pressure": insights.room_night_pressure(window_days=10),
         "weather": WeatherService(db).get_forecast("杭州", selected_date),
         "knowledge": KnowledgeService(db).search(limit=12),
+        "knowledge_total": KnowledgeService(db).total(),
         "pending_confirmation_count": len(proposals),
+        "pending_today_count": pending_today,
         "disclosure": "执行面板只展示可审计步骤与数据来源，不展示模型内部推理。",
+    }
+
+
+@router.post("/ai/conversations/{conversation_id}/clear", response_model=AgentConversationRead)
+def clear_ai_conversation(conversation_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Empty one operating conversation while keeping the task record itself."""
+
+    conversation = _hotel_conversation_or_404(db, hotel_id_for(db, user), conversation_id)
+    conversation.messages = []
+    conversation.last_execution = None
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+@router.delete("/ai/conversations/{conversation_id}")
+def delete_ai_conversation(conversation_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    conversation = _hotel_conversation_or_404(db, hotel_id_for(db, user), conversation_id)
+    # 候选产品通过 conversation_id 引用会话，直接删除会触发外键冲突（500）。
+    # 会话只是候选的来源说明，删除会话时保留候选，仅解除来源关联。
+    for proposal in db.scalars(select(ProductProposal).where(ProductProposal.conversation_id == conversation.id)).all():
+        proposal.conversation_id = None
+    db.flush()
+    db.delete(conversation)
+    db.commit()
+    return {"deleted": True, "conversation_id": conversation_id}
+
+
+@router.get("/settings/integrations")
+def hotel_settings(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Current model / image-generation configuration shown in the workbench."""
+
+    _ = (db, user)
+    return public_settings()
+
+
+@router.put("/settings/integrations")
+def update_hotel_settings(payload: IntegrationSettingsUpdate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Save operator overrides for the model, vision and image services."""
+
+    _ = (db, user)
+    save_settings(payload.model_dump(exclude_none=True))
+    return public_settings()
+
+
+@router.get("/settings/export")
+def export_hotel_data(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """One-click export of the operating data (local deployment / data safety)."""
+
+    hotel_id = hotel_id_for(db, user)
+    hotel = db.get(Hotel, hotel_id)
+    products = list_products(db, hotel_id)
+    rooms = list_rooms(db, hotel_id)
+    resources = list_partner_resources(db, hotel_id)
+    intents = list(
+        db.scalars(
+            select(VisitorIntent).join(TravelProduct).where(TravelProduct.hotel_id == hotel_id)
+        ).unique().all()
+    )
+    knowledge = KnowledgeService(db).listing(limit=200)
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "hotel": {"id": hotel_id, "name": hotel.name if hotel else "", "city": hotel.city if hotel else ""},
+        "settings": public_settings(),
+        "rooms": [
+            {
+                "room_type": item.room_type,
+                "available_date": item.available_date.isoformat(),
+                "available_count": item.available_count,
+                "normal_price": str(item.normal_price),
+                "features": item.features,
+                "status": item.status,
+            }
+            for item in rooms
+        ],
+        "partner_resources": [
+            {
+                "name": item.resource_name,
+                "category": item.category,
+                "address": item.address,
+                "available_date": item.available_date.isoformat(),
+                "remaining_capacity": item.remaining_capacity,
+                "settlement_price": str(item.settlement_price),
+                "status": item.status,
+            }
+            for item in resources
+        ],
+        # Export the same shape the workbench already serves. `visitor_payload`
+        # lives in the visitor router; using the serializer here keeps the
+        # export decoupled and fixes the previous NameError that broke export.
+        "products": [product_to_dict(item) for item in products],
+        "orders": [
+            {
+                "id": item.id,
+                "product_id": item.product_id,
+                "status": item.reservation_status,
+                "contact_name": item.contact_name,
+                "contact_phone": item.contact_phone,
+                "note": item.other_requirements,
+            }
+            for item in intents
+        ],
+        "knowledge": knowledge,
+    }
+
+
+@router.get("/knowledge")
+def hotel_knowledge(q: str = "", category: str = "", limit: int = 80, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Read-only view of the文旅知识库 that the Visitor/Product skills quote."""
+
+    _ = user
+    service = KnowledgeService(db)
+    return {
+        "items": service.listing(query=q, category=category, limit=limit),
+        "categories": service.categories(),
+        "total": service.total(),
+        "disclosure": "",
+    }
+
+
+@router.post("/knowledge/refresh")
+def refresh_hotel_knowledge(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Re-check each stored source page and stamp the records that respond."""
+
+    _ = user
+    result = KnowledgeService(db).refresh_sources(city="杭州")
+    db.commit()
+    return result
+
+
+@router.post("/products/sales-command", response_model=SalesCommandResponse)
+def product_sales_command(request: SalesCommandRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Apply a natural-language pause/resume instruction to matching products."""
+
+    result = apply_sales_command(db, hotel_id_for(db, user), request.natural_language)
+    db.commit()
+    return result
+
+
+CROWD_CODE_BY_LABEL = {
+    "亲子家庭": "FAMILY",
+    "两人约会": "COUPLE",
+    "两人同行": "COUPLE",
+    "朋友出行": "FRIENDS",
+    "朋友相聚": "FRIENDS",
+    "独自旅行": "SOLO",
+    "一个人慢游": "SOLO",
+    "本地周末": "LOCAL_WEEKEND",
+    "不限客群": "ALL",
+}
+
+
+@router.post("/ai/conversations/{conversation_id}/advisor", response_model=AdvisorResponse)
+def ai_conversation_advisor(
+    conversation_id: int,
+    request: AdvisorRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
+    """One turn of the guided product conversation.
+
+    Every turn reads the database first, explains the recommendation, lists what
+    can be adjusted, and only creates real candidates when the operator
+    confirms the pending plan.
+    """
+
+    hotel_id = hotel_id_for(db, user)
+    conversation = _hotel_conversation_or_404(db, hotel_id, conversation_id)
+    messages = list(conversation.messages or [])
+    if not request.auto:
+        messages.append({"role": "user", "content": request.natural_language[:3000], "created_at": datetime.now(timezone.utc).isoformat()})
+    conversation.messages = messages[-50:]
+    state = {}
+    if isinstance(conversation.last_execution, dict):
+        state = dict(conversation.last_execution.get("advisor") or {})
+    previous_step = str((conversation.last_execution or {}).get("step") or "")
+
+    advisor = ProductAdvisor(db, hotel_id)
+    answer = advisor.respond(request.natural_language, state)
+    summary_text = str(answer.get("summary") or "").strip()
+    step = str(answer.get("step") or "")
+    # OVERVIEW 每轮读的都是同一批经营数据，长总结会和上一轮几乎重复，不再逐轮塞进
+    # 对话记录；当前结论由前端根据 advisor.answer 渲染。只有状态变化才写入历史。
+    if summary_text and step != "OVERVIEW":
+        messages.append({"role": "assistant", "content": summary_text[:2000], "created_at": datetime.now(timezone.utc).isoformat()})
+        conversation.messages = messages[-50:]
+    plan = dict(answer.get("plan") or {})
+    # 记住当前选中的体验，下一轮预算达不到时保持它不变，而不是悄悄换资源。
+    selected_experiences = ((answer.get("primary") or {}).get("experiences") or [])
+    if selected_experiences:
+        plan["selected_resource"] = str(selected_experiences[0].get("name") or "")
+    conversation.last_execution = {
+        "advisor": plan,
+        "step": step,
+        "at": datetime.now(timezone.utc).isoformat(),
+        # 刷新页面后仍能恢复当前的经营判断与推荐方案，不必重新跑一轮。
+        "answer": answer,
+    }
+    answer["plan"] = plan
+
+    proposals: list[ProductProposal] = []
+    wants_confirm = any(word in request.natural_language for word in ("生成", "确认", "可以", "按这个", "开始生成"))
+    # Only a second confirmation generates candidates: the first "我需要生成产品"
+    # must show the inventory and the recommendation first.
+    ready_to_generate = previous_step in {"PLAN", "READY", "GENERATED"}
+    if plan.get("room_type") and plan.get("target_date") and wants_confirm and ready_to_generate:
+        room = db.scalar(
+            select(RoomInventory)
+            .where(
+                RoomInventory.hotel_id == hotel_id,
+                RoomInventory.room_type == str(plan["room_type"]),
+                RoomInventory.available_date == date.fromisoformat(str(plan["target_date"])),
+                RoomInventory.status == "AVAILABLE",
+            )
+            .order_by(RoomInventory.available_count.desc())
+        )
+        if room is not None:
+            theme = "、".join(plan.get("resources") or []) or f"{plan['room_type']}周末组合"
+            # plan.crowd 现在存的是代码（COUPLE 等），旧快照里可能是中文标签，两种都要兼容。
+            raw_crowd = str(plan.get("crowd") or "")
+            crowd_code = CROWD_CODE_BY_LABEL.get(raw_crowd, raw_crowd if raw_crowd.isupper() else "FAMILY")
+            generate_request = GenerateProductRequest(
+                target_date=room.available_date,
+                weather="CLOUDY",
+                target_crowd=crowd_code,
+                party_size=int(plan.get("party_size") or 2),
+                theme=theme[:60],
+                room_inventory_id=room.id,
+                variant_count=3,
+                creative_direction=" ".join(str(item) for item in (plan.get("resources") or []))[:400],
+            )
+            service = ProductProposalService(
+                db,
+                hotel_id,
+                RequestContext(source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR", hotel_id=hotel_id, user_id=user.id, conversation_id=str(conversation.id)),
+            )
+            proposals = service.create_from_request(generate_request, conversation=conversation, natural_language=request.natural_language)
+            answer["step"] = "GENERATED"
+            answer["summary"] = f"已按 {plan['room_type']}（{plan['target_date']}）生成 {len(proposals)} 套候选产品。"
+            answer["options"] = [
+                {"id": "publish", "label": "挑一套发布", "message": "把第一套加入草稿"},
+                {"id": "adjust", "label": "继续调整资源", "message": "再换一个合作资源"},
+            ]
+            answer["question"] = "候选已经生成，可以在下方队列里确认发布；也可以继续告诉我要替换哪个资源。"
+    # 生成候选会把 answer.step 改成 GENERATED。会话里同时保存 step 和 answer 快照，
+    # 两者都要写成最终值，否则刷新后前端按 step 判断阶段会退回上一阶段。
+    execution = dict(conversation.last_execution or {})
+    final_step = answer.get("step")
+    stored_answer = dict(answer)
+    stored_answer["step"] = final_step
+    execution["step"] = final_step
+    execution["answer"] = stored_answer
+    conversation.last_execution = execution
+    db.commit()
+    db.refresh(conversation)
+    return {
+        "conversation": conversation,
+        "advisor": answer,
+        "proposals": [proposal_to_dict(db, item) for item in proposals],
+    }
+
+
+@router.get("/orders/overview", response_model=OrderOverviewResponse)
+def orders_overview(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Every order with its category, so the hotel can review sales at a glance."""
+
+    hotel_id = hotel_id_for(db, user)
+    intents = list(
+        db.scalars(
+            select(VisitorIntent)
+            .join(TravelProduct)
+            .options(selectinload(VisitorIntent.product))
+            .where(TravelProduct.hotel_id == hotel_id)
+            .order_by(VisitorIntent.created_at.desc())
+        ).unique().all()
+    )
+    confirmed = [item for item in intents if item.reservation_status == "CONFIRMED"]
+    held = [item for item in intents if item.reservation_status == "HELD"]
+    cancelled = [item for item in intents if item.reservation_status == "CANCELLED"]
+    revenue = sum((item.product.suggested_price for item in confirmed if item.product), Decimal("0"))
+
+    crowd_labels = {
+        "FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友出行",
+        "SOLO": "独自旅行", "LOCAL_WEEKEND": "本地周末", "ALL": "不限客群",
+    }
+    buckets: dict[str, dict[str, Any]] = {}
+    order_rows: list[dict[str, Any]] = []
+    for intent in intents:
+        product = intent.product
+        if product is None:
+            continue
+        text = f"{product.product_name} {product.theme}"
+        category = next(
+            (label for label, words in CATEGORY_KEYWORDS.items() if any(word in text for word in words)),
+            crowd_labels.get(str(product.target_crowd), "其他"),
+        )
+        bucket = buckets.setdefault(category, {"label": category, "count": 0, "confirmed": 0, "revenue": Decimal("0")})
+        bucket["count"] += 1
+        if intent.reservation_status == "CONFIRMED":
+            bucket["confirmed"] += 1
+            bucket["revenue"] += Decimal(str(product.suggested_price or 0))
+        order_rows.append(
+            {
+                "id": intent.id,
+                "product_name": product.product_name,
+                "category": category,
+                "amount": str(product.suggested_price),
+                "target_date": product.target_date.isoformat(),
+                "status": {"CONFIRMED": "已成交", "HELD": "待确认", "CANCELLED": "已取消"}.get(str(intent.reservation_status), "已处理"),
+                "contact_name": intent.contact_name,
+                "contact_phone": intent.contact_phone,
+                "note": intent.other_requirements,
+            }
+        )
+
+    return {
+        "total": len(intents),
+        "confirmed": len(confirmed),
+        "held": len(held),
+        "cancelled": len(cancelled),
+        "confirmed_revenue": str(revenue),
+        "categories": [
+            {"label": bucket["label"], "count": bucket["count"], "confirmed": bucket["confirmed"], "revenue": str(bucket["revenue"])}
+            for bucket in sorted(buckets.values(), key=lambda row: row["count"], reverse=True)
+        ],
+        "orders": order_rows[:40],
     }
 
 
@@ -143,7 +563,9 @@ async def upload_media(file: UploadFile = File(...), user: User = Depends(get_ho
 @router.post("/media/search")
 def search_media(request: MediaSearchRequest, user: User = Depends(get_hotel_user)):
     _ = user
-    return {"items": MediaLibraryService().search_public(request.query, request.limit)}
+    # prefetch=True: 每张候选图先落到服务器本地，缩略图直接引用本站地址，
+    # 既不依赖第三方 CDN，也不会出现「图片显示不出来」。
+    return {"items": MediaLibraryService().search_public(request.query, request.limit, prefetch=True)}
 
 
 @router.post("/media/import")
@@ -519,7 +941,7 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
             if source is not None and source.available_date != target_date:
                 raise AppError("DATE_NOT_MATCHED", f"资源{row.resource_name}未维护目标日期，请先调整资源日期", field="target_date", retryable=True)
 
-    changed = request.model_dump(exclude_unset=True, exclude={"regenerate_marketing", "target_date", "room_inventory_id"})
+    changed = request.model_dump(exclude_unset=True, exclude={"regenerate_marketing", "target_date", "room_inventory_id", "marketing_assets"})
     if request.target_date is not None:
         changed["target_date"] = target_date
     if request.room_inventory_id is not None or target_date != product.target_date:
@@ -534,6 +956,22 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
     weather_or_context_changed = any(key in changed for key in ("target_date", "room_inventory_id", "weather", "target_crowd"))
     for key, value in changed.items():
         setattr(product, key, value)
+    if request.marketing_assets is not None:
+        # 摄影/文案素材按 asset_type 合并，运营可以逐条改标题、正文、视觉方向
+        # 与行动号召，不必整包重新生成。
+        incoming = {
+            str(asset.get("asset_type")): dict(asset)
+            for asset in request.marketing_assets
+            if isinstance(asset, dict) and asset.get("asset_type")
+        }
+        merged: list[Any] = []
+        for asset in product.marketing_assets or []:
+            if isinstance(asset, dict) and str(asset.get("asset_type")) in incoming:
+                merged.append({**asset, **incoming.pop(str(asset.get("asset_type")))})
+            else:
+                merged.append(asset)
+        merged.extend(incoming.values())
+        product.marketing_assets = merged
     db.flush()
 
     service = ProductService(db, hotel_id)
@@ -544,6 +982,66 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
         service.regenerate_marketing(product)
     db.commit()
     return product_to_dict(product)
+
+
+@router.post("/products/{product_id}/refine", response_model=ProductRefineResponse)
+def refine_product_conversationally(
+    product_id: int,
+    request: ProductRefineRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
+    """One natural-language edit on one product.
+
+    The Skill decides which layer the sentence belongs to (content / experience
+    / equity), applies only the fields the operator named, and every equity
+    change is recalculated against real capacity, cost, margin and weather.
+    """
+
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id or product.status == "DELETED":
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    result = ProductRefiner(db, hotel_id).refine(product, request.natural_language)
+    db.commit()
+    db.refresh(product)
+    return {**result, "product": product_to_dict(product)}
+
+
+@router.get("/products/{product_id}/refinements")
+def product_refinements(product_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """这个商品的自然语言修改历史（每一条 = 一个版本）。"""
+
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id:
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    return {"version": int(getattr(product, "version", 1) or 1), "items": ProductRefiner(db, hotel_id).history(product)}
+
+
+@router.post("/products/{product_id}/refinements/{refinement_id}/rollback")
+def rollback_product_refinement(product_id: int, refinement_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """回退到某一次微调之前，并把回退本身也记成一条新版本。"""
+
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id:
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    result = ProductRefiner(db, hotel_id).rollback(product, refinement_id)
+    db.commit()
+    db.refresh(product)
+    return {**result, "product": product_to_dict(product)}
+
+
+@router.post("/products/{product_id}/publish-check")
+def product_publish_check(product_id: int, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """发布前再读一次最新库存与合作名额，返回能不能发、最多能发几套和替代资源。"""
+
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id:
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    return ProductRefiner(db, hotel_id).publish_check(product)
 
 
 @router.post("/products/{product_id}/marketing-assets", response_model=ProductRead)
@@ -764,7 +1262,8 @@ def agent_diagnostics(db: Session = Depends(get_db), user: User = Depends(get_ho
         "live_ready": bool(is_remote and settings.openclaw_live_ready),
         "skills_discovered": bool(is_remote and settings.openclaw_skills_ready),
         "skill_status": skill_status,
-        "skills": [
+         "skills": [
+            {"name": "yusuchengjing-hotel-ops", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
             {"name": "stayscape-product-generator", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
             {"name": "stayscape-visitor-matcher", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},
             {"name": "stayscape-marketing-writer", "version": settings.openclaw_skill_version, "status": skill_status, "configured": settings.openclaw_skills_ready},

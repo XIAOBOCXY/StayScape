@@ -67,3 +67,38 @@ class AssistantTaskResponse(BaseModel):
     conversation: AgentConversationRead
     proposals: list[ProductProposalRead]
     message: str
+
+
+class SalesCommandRequest(BaseModel):
+    """A one-sentence sales instruction, e.g. "把亲子类的产品暂停销售"."""
+
+    natural_language: str = Field(min_length=2, max_length=300)
+
+
+class SalesCommandResponse(BaseModel):
+    action: str
+    scope: str
+    affected: list[dict[str, Any]] = Field(default_factory=list)
+    message: str
+
+
+class OrderOverviewResponse(BaseModel):
+    total: int
+    confirmed: int
+    held: int
+    cancelled: int
+    confirmed_revenue: str
+    categories: list[dict[str, Any]] = Field(default_factory=list)
+    orders: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AdvisorRequest(BaseModel):
+    natural_language: str = Field(min_length=1, max_length=800)
+    # 自动开场（进入页面时后端主动给出第一段建议）不记录成「你说的话」。
+    auto: bool = False
+
+
+class AdvisorResponse(BaseModel):
+    conversation: AgentConversationRead
+    advisor: dict[str, Any]
+    proposals: list[ProductProposalRead] = Field(default_factory=list)

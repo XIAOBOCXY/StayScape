@@ -23,7 +23,7 @@ const pickerVisible = ref(false)
 const query = ref('')
 const searching = ref(false)
 const importing = ref(false)
-const candidates = ref<Array<{ title: string; preview_url: string; source_url: string; source: string; attribution: string; detail_url: string }>>([])
+const candidates = ref<Array<{ title: string; preview_url: string; source_url: string; source: string; attribution: string; detail_url: string; image_url?: string }>>([])
 
 function setImage(asset: { image_url: string; image_source: string; image_attribution: string }) {
   emit('update:modelValue', asset.image_url)
@@ -60,7 +60,14 @@ async function search() {
   finally { searching.value = false }
 }
 
-async function choose(item: { source_url: string; source: string; attribution: string }) {
+async function choose(item: { source_url: string; source: string; attribution: string; image_url?: string }) {
+  // 后端已把搜索结果存到服务器时直接使用，避免重复下载。
+  if (item.image_url) {
+    setImage({ image_url: item.image_url, image_source: item.source, image_attribution: item.attribution })
+    pickerVisible.value = false
+    ElMessage.success('已保存网络图片，可随时替换为实拍图')
+    return
+  }
   importing.value = true
   try {
     const response = await (props.scope === 'merchant' ? merchantApi.importMedia({ url: item.source_url, source: item.source, attribution: item.attribution }) : hotelApi.importMedia({ url: item.source_url, source: item.source, attribution: item.attribution }))
@@ -92,7 +99,7 @@ function clear() { setImage({ image_url: '', image_source: '', image_attribution
 
   <el-dialog v-model="pickerVisible" title="选择网络参考图片" width="min(94vw, 900px)" top="6vh">
     <div class="network-search"><el-input v-model="query" clearable placeholder="例如：杭州 城市博物馆、亲子 乐园、精品酒店客房" @keyup.enter="search" /><el-button type="primary" :loading="searching" @click="search">搜索</el-button></div>
-    <p class="network-note">仅检索 Wikimedia Commons 的公开图片；选中后会保存到服务器，避免直接引用受限网站图片。商户实拍图始终优先。</p>
+    <p class="network-note">从百度与官方/景区公开页检索图片，并按「关键词 + 来源页」核对相关性；选中后会保存到服务器本地。商户实拍图始终优先。</p>
     <div v-loading="searching" class="network-results"><button v-for="item in candidates" :key="item.source_url" :disabled="importing" @click="choose(item)"><img :src="item.preview_url" :alt="item.title" /><span>{{ item.title }}</span><small>{{ item.attribution || item.source }}</small></button></div>
     <div v-if="!searching && !candidates.length" class="empty-state">没有找到合适图片，可换个更具体的地点或体验名称。</div>
   </el-dialog>

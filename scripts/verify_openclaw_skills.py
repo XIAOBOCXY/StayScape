@@ -1,4 +1,4 @@
-"""Verify the three StayScape skills in ``openclaw skills list --json`` output."""
+"""Verify the single public StayScape Skill in OpenClaw discovery output."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import json
 import sys
 from typing import Any
 
-REQUIRED = {"stayscape-product-generator", "stayscape-visitor-matcher", "stayscape-marketing-writer"}
+REQUIRED = {
+    "yusuchengjing-hotel-ops",
+}
 
 
 def strings(value: Any):

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "YuSuChengJingToolResult",
+  "type": "object",
+  "required": ["ok"],
+  "properties": {
+    "ok": {"type": "boolean"},
+    "error_code": {"type": "string"},
+    "message": {"type": "string"},
+    "details": {"type": "object"}
+  },
+  "additionalProperties": true
+}

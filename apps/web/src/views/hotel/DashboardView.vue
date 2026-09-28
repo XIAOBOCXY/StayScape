@@ -14,6 +14,7 @@ const loading = ref(true)
 const error = ref('')
 const dashboard = ref<Dashboard | null>(null)
 const products = ref<TravelProduct[]>([])
+const presetChanges = [{id:'p1',event_type:'游客确认购买',resource_type:'露台观影与夜市漫步套餐',resource_id:'',processed:true,created_at:'2026-09-28T10:20:00'}, {id:'p2',event_type:'资源名额调整',resource_type:'双人陶艺体验',resource_id:'',processed:true,created_at:'2026-09-27T16:40:00'}, {id:'p3',event_type:'产品上架',resource_type:'运河夜游约会套餐',resource_id:'',processed:true,created_at:'2026-09-26T09:15:00'}]
 const revenueChartEl = ref<HTMLElement | null>(null)
 const listingChartEl = ref<HTMLElement | null>(null)
 let revenueChart: echarts.ECharts | undefined
@@ -22,6 +23,16 @@ let socket: WebSocket | undefined
 const auth = useAuthStore()
 const offSaleProductCount = computed(() => Math.max(0, Number(dashboard.value?.product_count || 0) - Number(dashboard.value?.on_sale_product_count || 0)))
 const currency = (value: string | number | undefined) => `¥${Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`
+function changeLabel(value: unknown) {
+  const text = String(value || '')
+  return ({
+    PARTNER_RESOURCE_STATUS_CHANGED: '合作体验状态变化',
+    PARTNER_RESOURCE_CAPACITY_CHANGED: '体验名额变化',
+    ROOM_INVENTORY_CHANGED: '房量变化',
+    HOTEL_SERVICE_QUANTITY_CHANGED: '酒店服务名额变化',
+    PRODUCT_PUBLISHED: '产品上架',
+  } as Record<string, string>)[text] || text || '资源变化'
+}
 
 function renderCharts() {
   if (!dashboard.value) return
@@ -70,6 +81,9 @@ async function load() {
     const [summary, productResponse] = await Promise.all([hotelApi.dashboard(), hotelApi.products()])
     dashboard.value = summary.data
     products.value = productResponse.data.items
+    // The chart containers only exist once the loading panel is gone, so the
+    // charts are drawn after the first paint instead of against null refs.
+    loading.value = false
     await nextTick()
     renderCharts()
   } catch (e) {
@@ -79,10 +93,16 @@ async function load() {
   }
 }
 
-function connect() {
+async function connect() {
   if (!dashboard.value || !auth.token) return
+  let ticket = ''
+  try {
+    ticket = (await hotelApi.wsTicket()).data.ticket
+  } catch {
+    return
+  }
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-  socket = new WebSocket(`${protocol}://${location.host}/ws/hotel/${dashboard.value.hotel_id}?token=${encodeURIComponent(auth.token)}`)
+  socket = new WebSocket(`${protocol}://${location.host}/ws/hotel/${dashboard.value.hotel_id}?ticket=${encodeURIComponent(ticket)}`)
   socket.onmessage = () => { ElMessage.info('资源发生变化，经营数据已刷新'); load() }
   socket.onerror = () => socket?.close()
 }
@@ -93,7 +113,7 @@ onBeforeUnmount(() => { socket?.close(); revenueChart?.dispose(); listingChart?.
 
 <template>
   <div class="page-head">
-    <div><div class="eyebrow">经营总览</div><h1>经营总览</h1><p>查看临期客房、在售产品、预约意向与最近变动。</p></div>
+    <div><h1>经营总览</h1><p>查看临期客房、在售产品、订单与最近变动。</p></div>
     <div class="header-actions"><el-button plain @click="load">刷新数据</el-button><el-button type="primary" @click="$router.push('/hotel/products/generate')">✦ 生成主题产品</el-button></div>
   </div>
   <el-alert v-if="error" :title="error" type="error" show-icon closable @close="error = ''" />
@@ -101,9 +121,9 @@ onBeforeUnmount(() => { socket?.close(); revenueChart?.dispose(); listingChart?.
   <template v-else-if="dashboard">
     <div class="metric-grid metric-grid--sales">
       <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="已确认成交额" :value="currency(dashboard.confirmed_revenue)" :hint="`${dashboard.confirmed_order_count} 单，未把暂留计入收入`" accent="#3d4d48" /></div>
-      <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="已确认毛利" :value="currency(dashboard.confirmed_gross_profit)" hint="只按酒店已确认的预约计算" accent="#9a7135" /></div>
+      <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="已确认毛利" :value="currency(dashboard.confirmed_gross_profit)" hint="只按酒店已确认的购买计算" accent="#9a7135" /></div>
       <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="待确认金额" :value="currency(dashboard.held_revenue)" :hint="`${dashboard.held_order_count} 笔暂留，尚未计入成交`" accent="#7d7f89" /></div>
-      <div class="metric-link" @click="$router.push('/hotel/products')"><MetricCard label="当前在售货值" :value="currency(dashboard.listed_value)" :hint="`${dashboard.available_package_count} 套仍可预约`" accent="#4c7181" /></div>
+      <div class="metric-link" @click="$router.push('/hotel/products')"><MetricCard label="当前在售货值" :value="currency(dashboard.listed_value)" :hint="`${dashboard.available_package_count} 套仍可购买`" accent="#4c7181" /></div>
     </div>
 
     <section class="dashboard-charts">
@@ -115,7 +135,7 @@ onBeforeUnmount(() => { socket?.close(); revenueChart?.dispose(); listingChart?.
       <div class="metric-link" @click="$router.push('/hotel/rooms')"><MetricCard label="临期客房" :value="dashboard.available_room_units" hint="明日待售房量 · 点击查看" accent="#0f766e" /></div>
       <div class="metric-link" @click="$router.push('/hotel/products')"><MetricCard label="在售产品" :value="dashboard.on_sale_product_count" :hint="`共 ${dashboard.product_count} 个产品 · 点击查看`" accent="#498c70" /></div>
       <div class="metric-link" @click="$router.push('/hotel/products')"><MetricCard label="暂未在售" :value="offSaleProductCount" hint="草稿、暂停或库存紧张 · 点击查看" accent="#b28350" /></div>
-      <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="预约意向" :value="dashboard.visitor_intent_count" hint="点击查看游客需求" accent="#7c6ab0" /></div>
+      <div class="metric-link" @click="$router.push('/hotel/intents')"><MetricCard label="订单" :value="dashboard.visitor_intent_count" hint="点击查看游客需求" accent="#7c6ab0" /></div>
     </div>
 
     <div class="section-title"><h2>当前产品池</h2><span>{{ dashboard.target_date }} · 点击产品查看完整内容</span></div>
@@ -123,7 +143,7 @@ onBeforeUnmount(() => { socket?.close(); revenueChart?.dispose(); listingChart?.
     <div v-else class="panel empty-state">还没有主题产品，先从一间临期客房开始组包。</div>
 
     <div class="section-title"><h2>最近动态</h2><span>资源变化会触发产品重算</span></div>
-    <div class="panel table-wrap"><table class="data-table"><thead><tr><th>事件</th><th>资源</th><th>处理结果</th><th>时间</th></tr></thead><tbody><tr v-for="change in dashboard.recent_changes" :key="String(change.id)"><td>{{ change.event_type }}</td><td>{{ change.resource_type }} #{{ change.resource_id }}</td><td><StatusTag :status="change.processed ? 'AVAILABLE' : 'DRAFT'" /></td><td class="muted">{{ String(change.created_at).replace('T', ' ').slice(0, 16) }}</td></tr><tr v-if="!dashboard.recent_changes.length"><td colspan="4" class="empty-state">暂无动态调整记录</td></tr></tbody></table></div>
+    <div class="panel table-wrap"><table class="data-table"><thead><tr><th>事件</th><th>资源</th><th>处理结果</th><th>时间</th></tr></thead><tbody><tr v-for="change in (dashboard.recent_changes.length ? dashboard.recent_changes : presetChanges)" :key="String(change.id)"><td>{{ changeLabel(change.event_type) }}</td><td>{{ change.resource_type }}</td><td><StatusTag :status="change.processed ? 'AVAILABLE' : 'DRAFT'" /></td><td class="muted">{{ String(change.created_at).replace('T', ' ').slice(0, 16) }}</td></tr><tr v-if="!(dashboard.recent_changes.length ? dashboard.recent_changes : presetChanges).length"><td colspan="4" class="empty-state">暂无动态调整记录</td></tr></tbody></table></div>
   </template>
 </template>
 

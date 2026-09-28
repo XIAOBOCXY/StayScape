@@ -71,7 +71,7 @@ def main() -> None:
     print(f"Rendered OpenClaw config: {OUTPUT}")
     print(f"Feishu channel: {'enabled' if feishu_enabled else 'disabled (credentials not supplied)'}")
     print("Agent: stayscape-main")
-    print("Skills: stayscape-product-generator, stayscape-visitor-matcher, stayscape-marketing-writer")
+    print("Skills: yusuchengjing-hotel-ops, stayscape-product-generator, stayscape-visitor-matcher, stayscape-marketing-writer")
 
 
 if __name__ == "__main__":

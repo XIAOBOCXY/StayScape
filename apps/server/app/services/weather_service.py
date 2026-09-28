@@ -140,11 +140,16 @@ class WeatherService:
             return self._serialize(cached, note=note) if cached else self._unverified(normalized_city, target_date, note)
 
         scenario = _scenario(weather_code, probability)
-        advisory = (
-            "降雨概率较高，优先安排室内或可替换体验。"
-            if scenario == "RAIN"
-            else "天气条件适合安排已核验资源；出行前仍请以最新预报为准。"
-        )
+        # Report the actual forecast instead of a generic disclaimer.
+        scenario_label = {"RAIN": "有降雨", "SUNNY": "晴天", "CLOUDY": "多云"}[scenario]
+        temperature_text = f"{float(minimum):.0f}–{float(maximum):.0f}℃"
+        rain_text = f"，降雨概率 {probability}%" if probability is not None else ""
+        packing = {
+            "RAIN": "建议带伞，优先安排室内项目。",
+            "SUNNY": "适合户外安排，注意防晒和补水。",
+            "CLOUDY": "适合户外安排，早晚温差略大。",
+        }[scenario]
+        advisory = f"{scenario_label}，气温 {temperature_text}{rain_text}。{packing}"
         expires_at = now + timedelta(hours=max(1, settings.weather_cache_hours))
         if cached is None:
             cached = WeatherSnapshot(

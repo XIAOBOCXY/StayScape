@@ -6,28 +6,126 @@ import { errorMessage } from '../../api/client'
 
 type AnyRecord = Record<string, any>
 
+// 与后端 product_advisor_service.ADVISOR_CONTRACT_VERSION 保持一致；
+// 版本不一致时不复用历史快照，改为重新生成当前经营判断。
+const ADVISOR_CONTRACT_VERSION = 3
+
 const overview = ref<AnyRecord>({})
 const conversations = ref<AnyRecord[]>([])
 const proposals = ref<AnyRecord[]>([])
+const orders = ref<AnyRecord>({ total: 0, confirmed: 0, held: 0, cancelled: 0, confirmed_revenue: '0', categories: [], orders: [] })
+const advisor = ref<AnyRecord | null>(null)
 const activeConversationId = ref<number | null>(null)
 const brief = ref('')
 const loading = ref(false)
 const submitting = ref(false)
+const loadedAt = ref('')
+// 只允许一个「经营证据」分类展开，避免页面被多块原始数据同时撑长。
+const panel = ref<'' | 'inventory' | 'resources' | 'orders' | 'weather' | 'knowledge' | 'trace'>('')
+// 本次会话真正生成出来的候选（用于「候选确认」阶段，不再展示历史待确认队列）。
+const sessionProposalIds = ref<number[]>([])
+const draftedCount = ref(0)
+// 主方案下方「调整这个方案」的展开状态：替代资源默认不展示。
+const activeAdjust = ref<'' | 'resources' | 'price' | 'crowd' | 'route' | 'service'>('')
+// 价格调整的目标值，以及重算完成后的卡片高亮，避免「点了没反应」的错觉。
+const priceTarget = ref('')
+const cardFlash = ref(false)
+const detailTab = ref<'basis' | 'value' | 'risk' | 'compare'>('basis')
+const editingProduct = ref<AnyRecord | null>(null)
+const refinements = ref<AnyRecord[]>([])
+const previousPrimary = ref<AnyRecord | null>(null)
+const changeNote = ref('')
+const historyOpen = ref(false)
+// 每次指令带来的变化，比聊天记录更接近运营真正关心的信息。
+const operationLog = ref<AnyRecord[]>([])
 
 const activeConversation = computed(() => conversations.value.find((item) => Number(item.id) === activeConversationId.value) || null)
 const signals = computed(() => Array.isArray(overview.value.operations_insights?.recommendation_signals) ? overview.value.operations_insights.recommendation_signals : [])
-const execution = computed(() => activeConversation.value?.last_execution as AnyRecord | undefined)
+const pressure = computed<AnyRecord>(() => (overview.value.inventory_pressure as AnyRecord) || {})
+const focusRoom = computed<AnyRecord | null>(() => (pressure.value.focus_room as AnyRecord) || null)
+const insights = computed<AnyRecord>(() => (overview.value.operations_insights as AnyRecord) || {})
+const weatherLabel = computed(() => {
+  const scenario = String(overview.value.weather?.scenario || '')
+  const base = { RAIN: '有降雨', SUNNY: '晴天', CLOUDY: '多云' }[scenario] || '天气读取中'
+  const low = overview.value.weather?.temperature_min
+  const high = overview.value.weather?.temperature_max
+  return low !== null && low !== undefined && high !== null && high !== undefined
+    ? `${base} ${Math.round(low)}–${Math.round(high)}℃`
+    : base
+})
+const knowledgeTotal = computed(() => Number(overview.value.knowledge_total ?? (overview.value.knowledge || []).length ?? 0))
+const primarySpec = computed<AnyRecord | null>(() => (advisor.value?.primary as AnyRecord) || null)
+const judgement = computed<AnyRecord>(() => (advisor.value?.judgement as AnyRecord) || {})
+const primaryExperience = computed<AnyRecord | null>(() => ((primarySpec.value?.experiences as AnyRecord[]) || [])[0] || null)
+// 2~3 个方向：主推 + 更低成本 / 更适合雨天 / 更高容量 / 换房型
+const plans = computed<AnyRecord[]>(() => ((judgement.value.plans as AnyRecord[]) || []).slice(0, 3))
+const executionSummary = computed<AnyRecord[]>(() => ((judgement.value.execution_summary as AnyRecord[]) || []))
+
+const stages = [
+  { id: 1, label: '经营分析', hint: '读房态、订单、资源' },
+  { id: 2, label: '产品方案', hint: '选一个方向再调整' },
+  { id: 3, label: '候选确认', hint: '人工复核后入草稿' },
+  { id: 4, label: '营销发布', hint: '在产品详情页生成' },
+]
+const stageIndex = computed(() => {
+  const step = String(advisor.value?.step || '')
+  if (draftedCount.value > 0) return 4
+  if (sessionProposalIds.value.length > 0 || step === 'GENERATED') return 3
+  if (primarySpec.value || step === 'PLAN') return 2
+  return 1
+})
 
 async function load() {
   loading.value = true
   try {
-    const [facts, tasks, pending] = await Promise.all([hotelApi.aiOverview(), hotelApi.aiConversations(), hotelApi.aiProposals('PENDING_CONFIRMATION')])
+    const [facts, tasks, pending, orderData] = await Promise.all([
+      hotelApi.aiOverview(),
+      hotelApi.aiConversations(),
+      hotelApi.aiProposals('PENDING_CONFIRMATION'),
+      hotelApi.ordersOverview(),
+    ])
     overview.value = facts.data
     conversations.value = tasks.data
     proposals.value = pending.data
-    if (!activeConversationId.value && conversations.value.length) activeConversationId.value = Number(conversations.value[0].id)
+    orders.value = orderData.data
+    const latest = conversations.value[0] as AnyRecord | undefined
+    if (latest && !activeConversationId.value) {
+      activeConversationId.value = Number(latest.id)
+      const key = operationStorageKey(activeConversationId.value)
+      if (key) { try { operationLog.value = JSON.parse(localStorage.getItem(key) || '[]') } catch { operationLog.value = [] } }
+      const stored = (latest.last_execution as AnyRecord | undefined)?.answer
+      // 只恢复与当前协议一致的快照：必须带主推方案、资源候选和多方案列表，
+      // 任何旧结构都交给自动开场重新生成，避免界面出现空缺或过期字段。
+      const storedPrimary = (stored as AnyRecord | undefined)?.primary as AnyRecord | undefined
+      const storedJudgement = (stored as AnyRecord | undefined)?.judgement as AnyRecord | undefined
+      // 协议版本必须与后端一致，否则旧快照会让页面显示过期结构的数据。
+      const contractOk = storedJudgement?.contract_version === ADVISOR_CONTRACT_VERSION
+        && Boolean(storedPrimary?.resource_options)
+        && Boolean((storedJudgement?.plans as unknown[] | undefined)?.length)
+      if (stored && typeof stored === 'object' && contractOk) advisor.value = stored as AnyRecord
+      const restoredPrimary = (advisor.value?.primary as AnyRecord) || null
+      if (restoredPrimary) {
+        const normalized = normalizePrimaryParty(restoredPrimary)
+        advisor.value = { ...(advisor.value || {}), primary: normalized }
+        previousPrimary.value = normalized
+      }
+    }
+    const now = new Date()
+    loadedAt.value = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
   } catch (error) { showToast(errorMessage(error)) }
   finally { loading.value = false }
+}
+
+const orderRows = computed<AnyRecord[]>(() => (Array.isArray(orders.value.orders) ? orders.value.orders as AnyRecord[] : []))
+const historyMessages = computed<AnyRecord[]>(() => {
+  const messages = activeConversation.value?.messages
+  return Array.isArray(messages) ? messages : []
+})
+
+async function applySalesCommand(text: string) {
+  const response = await hotelApi.salesCommand(text)
+  orders.value = (await hotelApi.ordersOverview()).data
+  showToast(response.data.message)
 }
 
 async function ensureConversation() {
@@ -39,20 +137,153 @@ async function ensureConversation() {
   return activeConversationId.value
 }
 
+function mergeConversation(conversation: AnyRecord) {
+  const index = conversations.value.findIndex((item) => Number(item.id) === Number(conversation.id))
+  if (index >= 0) conversations.value.splice(index, 1, conversation)
+  else conversations.value.unshift(conversation)
+}
+
+// 对比前后两轮主推方案，明确写出变化点；没有更优组合时也要说明，避免像是「按钮坏了」。
+function describeChange(previous: AnyRecord | null, next: AnyRecord | null) {
+  if (!next || !previous) return ''
+  const diffs: string[] = []
+  if (String(previous.product_name || '') !== String(next.product_name || '')) diffs.push(`方案改为「${next.product_name}」`)
+  if (String(previous.price || '') !== String(next.price || '')) diffs.push(`建议售价 ¥${previous.price} → ¥${next.price}`)
+  if (String(previous.crowd_label || '') !== String(next.crowd_label || '')) diffs.push(`客群 ${previous.crowd_label} → ${next.crowd_label}`)
+  if (String(previous.party_size ?? '') !== String(next.party_size ?? '')) diffs.push(`同行人数 ${previous.party_size} → ${next.party_size} 人`)
+  if (String(previous.room_type || '') !== String(next.room_type || '')) diffs.push(`房型 ${previous.room_type} → ${next.room_type}`)
+  if (String(previous.max_sellable ?? '') !== String(next.max_sellable ?? '')) diffs.push(`可售 ${previous.max_sellable} → ${next.max_sellable} 套`)
+  if (String(previous.route_note || "") !== String(next.route_note || "") && next.route_note) diffs.push("路线调整：" + next.route_note)
+  if (!diffs.length) {
+    return `当前已是现有资源下的最优组合（${next.product_name}，¥${next.price}）。要再往下走，需要换资源、换客群，或直接指定一个目标价格。`
+  }
+  return `已根据你的要求调整：${diffs.join('；')}。`
+}
+
+function flashCard() {
+  cardFlash.value = true
+  window.setTimeout(() => { cardFlash.value = false }, 2000)
+}
+
+function operationStorageKey(id: number | null) { return id ? 'stayscape_operation_log_' + id : '' }
+
+function nowLabel() {
+  const now = new Date()
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+}
+
+function logOperation(instruction: string, change: string) {
+  if (!instruction) return
+  operationLog.value = [{ at: nowLabel(), instruction, change }, ...operationLog.value].slice(0, 40)
+  const key = operationStorageKey(activeConversationId.value)
+  if (key) localStorage.setItem(key, JSON.stringify(operationLog.value))
+}
+
+// 每轮回答都会替换当前主方案，这就是「对话直接编辑产品」的核心。
+function applyAdvisor(nextAdvisor: AnyRecord, instruction: string) {
+  const nextPrimary = (nextAdvisor.primary as AnyRecord) || null
+  changeNote.value = describeChange(previousPrimary.value, nextPrimary)
+  if (nextPrimary) previousPrimary.value = nextPrimary
+  advisor.value = nextAdvisor
+  activeAdjust.value = ''
+  flashCard()
+  logOperation(instruction, changeNote.value)
+}
+
+function applyRefinedProduct(refinedProduct: AnyRecord | undefined, instruction: string) {
+  if (!refinedProduct) return
+  const current = primarySpec.value || {}
+  const nextPrimary: AnyRecord = {
+    ...current,
+    product_id: refinedProduct.id,
+    product_name: refinedProduct.product_name || current.product_name,
+    target_date: refinedProduct.target_date || current.target_date,
+    crowd: refinedProduct.target_crowd || current.crowd,
+    crowd_label: crowdLabel(refinedProduct.target_crowd || current.crowd),
+    party_size: refinedProduct.party_size ?? current.party_size,
+    price: refinedProduct.suggested_price ?? current.price,
+    max_sellable: refinedProduct.sale_quantity ?? current.max_sellable,
+  }
+  changeNote.value = describeChange(previousPrimary.value, nextPrimary)
+  previousPrimary.value = nextPrimary
+  advisor.value = { ...(advisor.value || {}), primary: nextPrimary }
+  activeAdjust.value = ''
+  flashCard()
+  logOperation(instruction, changeNote.value)
+}
+
 async function submit() {
-  if (!brief.value.trim()) { showToast('请用一句话说明想生成什么产品'); return }
+  const text = brief.value.trim()
+  if (!text) { showToast('请用一句话说明想怎么调整方案'); return }
+  submitting.value = true
+  try {
+    if (editingProduct.value) {
+      const response = await hotelApi.refineProduct(Number(editingProduct.value.id), text)
+      refinements.value.push({ instruction: text, ...response.data })
+      applyRefinedProduct(response.data.product as AnyRecord | undefined, text)
+      brief.value = ''
+      return
+    }
+    if (/(暂停|停售|下架|恢复|上架|开售|开启销售)/.test(text)) {
+      await applySalesCommand(text)
+      brief.value = ''
+      return
+    }
+    const conversationId = await ensureConversation()
+    const response = await hotelApi.advisor(Number(conversationId), text)
+    const data = response.data
+    mergeConversation(data.conversation as AnyRecord)
+    const created = (data.proposals as AnyRecord[]) || []
+    if (created.length) {
+      sessionProposalIds.value = [...sessionProposalIds.value, ...created.map((item) => Number(item.id))]
+      proposals.value = [...created, ...proposals.value]
+    }
+    applyAdvisor(data.advisor as AnyRecord, text)
+    brief.value = ''
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { submitting.value = false }
+}
+
+function askOption(option: AnyRecord) {
+  brief.value = String(option.message || option.label || '')
+  void submit()
+}
+
+// 选中一张卡片 → 之后的对话都在改这一个商品。
+function startEditing(card: AnyRecord) {
+  if (!card.product_id) return
+  editingProduct.value = { id: card.product_id, name: card.name }
+  brief.value = ''
+  showToast(`已进入微调：${card.name}，直接说要改什么`)
+}
+
+function stopEditing() {
+  editingProduct.value = null
+}
+
+// 「生成候选产品」把当前方案变成真正待确认的产品。
+async function generateFromPlan(primary: AnyRecord) {
+  if (!primary) return
+  if (primary.product_id) {
+    startEditing({ product_id: primary.product_id, name: primary.product_name })
+    return
+  }
+  const experience = (primary.experiences || [])[0]?.name || ''
   submitting.value = true
   try {
     const conversationId = await ensureConversation()
-    const response = await hotelApi.sendAiMessage(Number(conversationId), brief.value.trim())
+    await hotelApi.advisor(Number(conversationId), `${primary.target_date} ${primary.room_type} + ${experience} 的方案`)
+    const response = await hotelApi.advisor(Number(conversationId), '就这个，生成候选')
     const data = response.data
-    const conversation = data.conversation as AnyRecord
-    const index = conversations.value.findIndex((item) => Number(item.id) === Number(conversation.id))
-    if (index >= 0) conversations.value.splice(index, 1, conversation)
-    else conversations.value.unshift(conversation)
-    proposals.value = [...(data.proposals as AnyRecord[]), ...proposals.value]
-    brief.value = ''
-    showToast('候选已生成，等待你确认')
+    mergeConversation(data.conversation as AnyRecord)
+    const created = ((data.proposals as AnyRecord[]) || [])
+    if (created.length) {
+      sessionProposalIds.value = [...sessionProposalIds.value, ...created.map((item) => Number(item.id))]
+      proposals.value = [...created, ...proposals.value]
+    }
+    applyAdvisor(data.advisor as AnyRecord, '生成候选产品')
+    const first = created[0]
+    if (first) startEditing({ product_id: first.product_id, name: first.product?.product_name || primary.product_name })
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
 }
@@ -61,71 +292,784 @@ async function confirm(proposal: AnyRecord, action: 'DRAFT' | 'PUBLISH') {
   try {
     await hotelApi.confirmAiProposal(Number(proposal.id), action)
     proposals.value = proposals.value.filter((item) => Number(item.id) !== Number(proposal.id))
-    showToast(action === 'PUBLISH' ? '产品已发布并完成库存复核' : '已加入产品草稿')
+    sessionProposalIds.value = sessionProposalIds.value.filter((id) => id !== Number(proposal.id))
+    if (action === 'DRAFT') draftedCount.value += 1
+    showToast(action === 'PUBLISH' ? '产品已发布并完成库存复核' : '已加入产品草稿，可以继续生成营销素材')
   } catch (error) { showToast(errorMessage(error)) }
 }
 
-function label(status: string) {
-  return ({ ACTIVE: '已核验', VERIFY_REQUIRED: '需确认', CHECKED: '已查询', PASSED: '已通过', PENDING: '待确认', NONE: '未降级' } as Record<string, string>)[status] || status
+async function clearConversation() {
+  const conversation = activeConversation.value
+  if (!conversation) return
+  try {
+    await hotelApi.clearAiConversation(Number(conversation.id))
+    conversation.messages = []
+    conversation.last_execution = null
+    advisor.value = null
+    previousPrimary.value = null
+    changeNote.value = ''
+    sessionProposalIds.value = []
+    draftedCount.value = 0
+    refinements.value = []
+    operationLog.value = []
+    const key = operationStorageKey(activeConversationId.value)
+    if (key) localStorage.removeItem(key)
+    activeAdjust.value = ''
+    showToast('已清空本轮方案与操作历史，可以重新描述需求')
+  } catch (error) { showToast(errorMessage(error)) }
 }
 
-function toolName(tool: unknown) {
-  if (typeof tool === 'string') return tool
-  return String((tool as AnyRecord)?.name || 'StayScape 服务')
+const quickCommands = ['价格降一点', '换成双人', '不要亲子', '换室内项目', '保持价格，提升体验']
+// 客群选项：给具体口径，避免「换客群」变成一句含糊指令。
+const crowdChoices = [
+  { label: '亲子家庭', message: '客群改成亲子家庭，带孩子来住' },
+  { label: '两人同行', message: '换成两人同行，情侣或朋友都可以' },
+  { label: '朋友同行', message: '改成朋友同行，几个人一起出来玩' },
+  { label: '独自出行', message: '改成独自出行，一个人慢慢玩' },
+  { label: '本地周末客', message: '改成本地周末客，周末本地人出来放松' },
+]
+
+function ask(text: string) {
+  brief.value = text
+  return submit()
 }
 
-function toolKind(tool: unknown) {
-  if (typeof tool === 'string') return ''
-  return String((tool as AnyRecord)?.kind || '')
+// 调价格必须带一个目标数字，后端才能真的重算，而不是只改显示。
+async function applyPriceTarget() {
+  const value = priceTarget.value.trim()
+  if (!value) { showToast('请输入目标价格'); return }
+  if (!/^\d+(\.\d+)?$/.test(value)) { showToast('目标价格请填数字'); return }
+  priceTarget.value = ''
+  activeAdjust.value = ''
+  await ask(`价格做到 ${value} 以内`)
 }
 
-function durationText(value: unknown) {
-  const milliseconds = Number(value || 0)
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return '已记录'
-  return milliseconds >= 1000 ? `${(milliseconds / 1000).toFixed(1)} 秒` : `${milliseconds} ms`
+function growInput(event: Event) {
+  const el = event.target as HTMLTextAreaElement
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, 140)}px`
 }
 
-onMounted(load)
+const CROWD_LABELS: Record<string, string> = {
+  FAMILY: '亲子家庭',
+  COUPLE: '两人同行',
+  FRIENDS: '朋友同行',
+  SOLO: '独自出行',
+  LOCAL_WEEKEND: '本地周末客',
+  ALL: '不限客群',
+}
+
+function crowdLabel(code: unknown) {
+  const key = String(code || '').toUpperCase()
+  return CROWD_LABELS[key] || String(code || '')
+}
+
+function normalizePrimaryParty(primary: AnyRecord) {
+  const defaults: Record<string, number> = { FAMILY: 3, COUPLE: 2, FRIENDS: 3, SOLO: 1, LOCAL_WEEKEND: 2 }
+  const crowd = String(primary.crowd || '').toUpperCase()
+  const expected = defaults[crowd]
+  if (expected === undefined || Number(primary.party_size) === expected) return primary
+  return { ...primary, party_size: expected, crowd_label: crowdLabel(crowd) }
+}
+
+function marginText(value: unknown) {
+  const ratio = Number(value)
+  if (!Number.isFinite(ratio)) return ''
+  const percent = ratio <= 1 ? ratio * 100 : ratio
+  return `${percent.toFixed(1)}%`
+}
+
+// 候选卡图片优先用合作资源图，其次房型图，避免所有卡片都用同一张房间照。
+function proposalImage(proposal: AnyRecord) {
+  const resources = (proposal?.product?.resources || []) as AnyRecord[]
+  const partner = resources.find((item) => item?.resource_type === 'PARTNER_RESOURCE' && item?.image_url)
+  const anyResource = resources.find((item) => item?.image_url)
+  return String(partner?.image_url || anyResource?.image_url || '')
+}
+
+function experienceNames(proposal: AnyRecord) {
+  const resources = (proposal?.product?.resources || []) as AnyRecord[]
+  return resources
+    .filter((row) => row.resource_type === 'PARTNER_RESOURCE')
+    .map((row) => String(row.resource_name || ''))
+    .filter(Boolean)
+}
+
+function candidateReason(proposal: AnyRecord) {
+  const product = proposal?.product as AnyRecord | undefined
+  if (!product) return ''
+  const resources = (product.resources || []) as AnyRecord[]
+  const room = resources.find((row) => row.resource_type === 'ROOM')
+  const partners = resources.filter((row) => row.resource_type === 'PARTNER_RESOURCE')
+  const insight = (proposal.insight_snapshot || {}) as AnyRecord
+  const topCrowds = (insight.top_crowds || []) as AnyRecord[]
+  const bits: string[] = []
+  if (room) bits.push(`房型「${room.resource_name}」可住 ${product.party_size} 人，1 晚`)
+  for (const row of partners) {
+    const window = row.start_time && row.end_time
+      ? `${String(row.start_time).slice(0, 5)}–${String(row.end_time).slice(0, 5)}`
+      : '按场次'
+    bits.push(`体验「${row.resource_name}」${window}，每套占用 ${row.quantity_per_package} 席`)
+  }
+  if (topCrowds.length) bits.push(`近 14 天${crowdLabel(topCrowds[0].target_crowd)}成交最集中（${topCrowds[0].confirmed_orders} 单）`)
+  if (product.bottleneck_resource) bits.push(`可售上限受「${product.bottleneck_resource}」限制，本轮最多 ${product.sale_quantity} 套`)
+  return bits.join('；') + '。'
+}
+
+// 候选确认阶段只展示本轮生成的产品，不再把历史待确认队列铺到页面上。
+const candidateCards = computed<AnyRecord[]>(() => proposals.value
+  .filter((proposal) => sessionProposalIds.value.includes(Number(proposal.id)))
+  .slice(0, 4)
+  .map((proposal) => ({
+    key: `candidate-${proposal.id}`,
+    proposal,
+    product_id: Number(proposal.product_id),
+    name: proposal.product?.product_name || '待确认候选',
+    price: proposal.product?.suggested_price || '',
+    date: proposal.product?.target_date || '',
+    crowd_label: crowdLabel(proposal.product?.target_crowd),
+    party: proposal.product?.party_size || '',
+    quantity: proposal.product?.sale_quantity ?? '',
+    margin_label: marginText(proposal.product?.gross_margin),
+    cost: proposal.product?.unit_cost ?? '',
+    floor_price: proposal.product?.minimum_allowed_price ?? '',
+    experiences: experienceNames(proposal),
+    reason: candidateReason(proposal),
+    image: proposalImage(proposal),
+    raw: proposal,
+  })))
+
+// 「换资源」只列同日期、同房型、同客群下的其它合作资源，不改变产品框架。
+const resourceSwaps = computed<AnyRecord[]>(() => {
+  const primary = primarySpec.value
+  if (!primary) return []
+  return (((primary.resource_options as AnyRecord[]) || [])).filter((item) => !item.is_current)
+})
+const budgetShortfall = computed<AnyRecord | null>(() => (primarySpec.value?.budget_shortfall as AnyRecord) || null)
+
+const logicByTitle = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {}
+  for (const item of ((primarySpec.value?.logic as AnyRecord[]) || [])) out[String(item.title || '')] = String(item.text || '')
+  return out
+})
+
+function planBadgeClass(item: AnyRecord) {
+  if (item.is_current) return 'is-current'
+  if (String(item.label) === '更高容量') return 'is-capacity'
+  if (String(item.label) === '更适合雨天') return 'is-rain'
+  return 'is-cheaper'
+}
+
+// 输入框上方说明「正在调整哪个方案」，精确到房型 × 体验。
+const currentObjectLabel = computed(() => {
+  const primary = primarySpec.value
+  if (!primary) return '尚未选定方案'
+  const experience = primaryExperience.value
+  return experience
+    ? `主推方案 · ${primary.target_date} · ${primary.room_type} × ${experience.name}`
+    : `主推方案 · ${primary.target_date} · ${primary.room_type}`
+})
+
+const AUTO_BRIEF = '帮我看看这两天有什么好卖的，先给我一份推荐吧'
+
+async function autoStart() {
+  if (advisor.value) return
+  submitting.value = true
+  try {
+    const conversationId = await ensureConversation()
+    const response = await hotelApi.advisor(Number(conversationId), AUTO_BRIEF, true)
+    const data = response.data
+    mergeConversation(data.conversation as AnyRecord)
+    advisor.value = data.advisor as AnyRecord
+    const nextPrimary = (advisor.value?.primary as AnyRecord) || null
+    if (nextPrimary) previousPrimary.value = nextPrimary
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { submitting.value = false }
+}
+
+onMounted(async () => { await load(); await autoStart() })
 </script>
 
 <template>
-  <main class="ai-operations">
-    <header class="page-head"><div><span>酒店 AI 运营</span><h1>把一句经营想法变成待确认产品</h1><p>OpenClaw 负责编排与 Skill 调用；库存、价格、时间和发布资格均由系统重新校验。</p></div><el-button :loading="loading" @click="load">刷新事实</el-button></header>
+  <section class="ai-ops" v-loading="loading">
+    <header class="page-head">
+      <div class="page-head__text">
+        <strong>AI 正在维护当前产品方案</strong>
+        <p>用输入框或按钮调整方案，主推荐会立即按房态、成交和资源容量重算。</p>
+      </div>
+      <div class="head-actions">
+        <span v-if="loadedAt" class="muted">数据更新 {{ loadedAt }}</span>
+        <el-button size="small" plain @click="historyOpen = true">操作历史<template v-if="operationLog.length">（{{ operationLog.length }}）</template></el-button>
+      </div>
+    </header>
 
+    <!-- ① 流程步骤 -->
+    <nav class="stage-bar" aria-label="产品生成流程">
+      <ol>
+        <li v-for="s in stages" :key="s.id" :class="{ active: stageIndex === s.id, done: stageIndex > s.id }">
+          <i>{{ stageIndex > s.id ? '✓' : s.id }}</i>
+          <div><b>{{ s.label }}</b><small>{{ s.hint }}</small></div>
+        </li>
+      </ol>
+    </nav>
+
+    <!-- ② 经营状态 -->
     <section class="fact-strip">
-      <article><span>近 14 天已确认</span><strong>{{ overview.operations_insights?.confirmed_order_count ?? 0 }} 单</strong><small>仅使用汇总经营数据</small></article>
-      <article><span>天气参考</span><strong>{{ overview.weather?.scenario === 'RAIN' ? '雨天倾向' : overview.weather?.scenario === 'SUNNY' ? '晴天倾向' : '天气待确认/多云' }}</strong><small>{{ overview.weather?.advisory || '读取中' }}</small></article>
-      <article><span>文旅知识</span><strong>{{ (overview.knowledge || []).length }} 条</strong><small>每条均保留来源与核验状态</small></article>
-      <article><span>待人工确认</span><strong>{{ overview.pending_confirmation_count ?? 0 }} 个</strong><small>确认前不会出现在游客端</small></article>
+      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="panel = panel === 'inventory' ? '' : 'inventory'">
+        <span>待消化房量</span>
+        <strong>{{ pressure.unsold_room_nights ?? 0 }} 间</strong>
+        <small>未来 {{ pressure.window_days ?? 10 }} 天 · {{ pressure.room_type_count ?? 0 }} 种房型</small>
+      </button>
+      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="panel = panel === 'inventory' ? '' : 'inventory'">
+        <span>重点库存</span>
+        <strong>{{ focusRoom?.room_type || '—' }} {{ focusRoom?.remaining ?? 0 }} 间</strong>
+        <small>{{ focusRoom?.target_date || '暂无数据' }}</small>
+      </button>
+      <button type="button" class="fact-card" :class="{ active: panel === 'resources' }" @click="panel = panel === 'resources' ? '' : 'resources'">
+        <span>可用合作资源</span>
+        <strong>{{ pressure.available_resource_count ?? 0 }} 个</strong>
+        <small>重点日期可组包</small>
+      </button>
+      <button type="button" class="fact-card" :class="{ active: panel === 'orders' }" @click="panel = panel === 'orders' ? '' : 'orders'">
+        <span>待确认方案</span>
+        <strong>{{ overview.pending_confirmation_count ?? 0 }} 个</strong>
+        <small>其中今日新增 {{ overview.pending_today_count ?? 0 }}</small>
+      </button>
+      <div class="fact-actions">
+        <span class="weather-chip">杭州 · {{ weatherLabel }}</span>
+        <span v-if="overview.weather && overview.weather.usable === false" class="fact-warn">天气未核验，本轮不参与决策</span>
+      </div>
     </section>
 
-    <section class="workspace-grid">
-      <article class="task-panel">
-        <div class="section-head"><div><span>自然语言任务</span><h2>告诉我你想卖什么</h2></div><el-select v-model="activeConversationId" placeholder="新建任务" clearable><el-option v-for="item in conversations" :key="item.id" :label="item.title" :value="Number(item.id)" /></el-select></div>
-        <textarea v-model="brief" placeholder="例如：周六还剩不少亲子房，做 3 套适合 6—10 岁孩子的杭州博物馆与科学探索产品，预算 700 元左右。" @keydown.ctrl.enter.prevent="submit" />
-        <div class="task-actions"><span>Ctrl + Enter 生成候选</span><el-button type="primary" :loading="submitting" @click="submit">生成待确认候选</el-button></div>
-        <div v-if="activeConversation?.messages?.length" class="task-messages"><p v-for="(message, index) in activeConversation.messages.slice(-6)" :key="index" :class="message.role"><b>{{ message.role === 'user' ? '你' : '助手' }}</b>{{ message.content }}</p></div>
+    <!-- ③ AI 主推荐（2~3 个方向） -->
+    <section class="panel stage-panel">
+      <div class="stage-panel__head">
+        <h2>AI 主推荐</h2>
+        <span v-if="submitting" class="recomputing">正在按新的条件重算…</span>
+        <span v-else class="muted">先选一个方向，再让它变成正式候选</span>
+      </div>
+
+      <p v-if="changeNote && !submitting" class="change-note">{{ changeNote }}</p>
+
+      <div v-if="plans.length" class="plan-grid">
+        <article v-for="item in plans" :key="`${item.label}-${item.name}`" class="plan-card" :class="{ 'is-current': item.is_current, [planBadgeClass(item)]: true }">
+          <header>
+            <span class="plan-badge">{{ item.label }}</span>
+            <b>¥{{ item.estimated_price }}</b>
+          </header>
+          <h3>{{ item.name }}</h3>
+          <p class="muted">{{ item.target_date }}（{{ item.weekday }}）<template v-if="item.window"> · {{ item.window }}</template><template v-if="item.indoor"> · 室内</template></p>
+          <ul>
+            <li>房型余量 {{ item.remaining }} 间</li>
+            <li>最多可售 {{ item.max_sellable }} 套</li>
+          </ul>
+          <span v-if="item.is_current" class="plan-current">当前方案</span>
+          <el-button v-else size="small" plain :disabled="submitting" @click="ask(item.message)">切换为当前方案</el-button>
+        </article>
+      </div>
+      <p v-else-if="!submitting" class="muted">当前没有可推荐的组合，请先在临期客房补充房量。</p>
+
+      <div v-if="!plans.length && !primarySpec" class="empty-candidate">
+        <div>✦</div>
+        <h3>{{ submitting ? '正在读取房态、订单与合作资源…' : '还没有方案' }}</h3>
+        <p>用一句话说明想上新的产品，系统会先给经营判断，再生成可编辑的候选。</p>
+      </div>
+    </section>
+
+    <!-- ④ 当前方案：编辑控制 -->
+    <section v-if="primarySpec" class="panel stage-panel">
+      <div class="stage-panel__head">
+        <h2>当前方案</h2>
+        <span class="muted">用按钮或自然语言调整，价格与容量始终由后端重算</span>
+      </div>
+
+      <article class="decision-card" :class="{ 'is-busy': submitting, 'is-flash': cardFlash }">
+        <div class="decision-card__top">
+          <img v-if="primarySpec.image_url" :src="primarySpec.image_url" :alt="primarySpec.product_name" loading="lazy" />
+          <div v-else class="decision-card__ph">✦</div>
+          <div class="decision-card__head">
+            <h3>{{ primarySpec.product_name }}</h3>
+            <p class="muted">{{ primarySpec.target_date }}（{{ primarySpec.weekday }}） · {{ primarySpec.crowd_label }} · {{ primarySpec.room_type }} 1 间 · {{ primarySpec.party_size }} 人</p>
+            <p class="decision-card__include">{{ primarySpec.room_type }} 1 晚<template v-for="exp in primarySpec.experiences" :key="exp.name"> · {{ exp.name }}<template v-if="exp.window">（{{ exp.window }}）</template></template></p>
+            <p v-if="primarySpec.route_note" class="decision-card__route">路线调整：{{ primarySpec.route_note }}</p>
+          </div>
+        </div>
+
+        <div class="figure-row">
+          <span>建议售价 <b>¥{{ primarySpec.price }}</b></span>
+          <span>可售 <b>{{ primarySpec.max_sellable }} 套</b></span>
+          <span>成本 ¥{{ primarySpec.cost }}</span>
+          <span>最低合法价 ¥{{ primarySpec.floor_price }}</span>
+          <span>毛利率 {{ primarySpec.margin }}%</span>
+        </div>
+
+        <div v-if="primarySpec.blocks?.length" class="key-evidence">
+          <div v-for="item in primarySpec.blocks" :key="item.label"><span>{{ item.label }}</span><b>{{ item.value }}</b></div>
+        </div>
+
+        <p v-if="primarySpec.conclusion" class="conclusion"><b>AI 建议：</b>{{ primarySpec.conclusion }}</p>
+
+        <!-- 无解时给出可直接点击的下一步 -->
+        <div v-if="budgetShortfall" class="budget-note">
+          <p>当前条件下暂无 ¥{{ budgetShortfall.requested }} 以内、且满足最低利润要求的方案，最低可售价为 ¥{{ budgetShortfall.lowest }}。</p>
+          <div class="option-row">
+            <button v-for="option in budgetShortfall.options" :key="option.label" type="button" @click="ask(option.message)">{{ option.label }}</button>
+          </div>
+        </div>
+
+        <details class="reason-fold">
+          <summary>查看推荐依据</summary>
+          <ul><li v-for="reason in primarySpec.reasons" :key="reason">{{ reason }}</li></ul>
+          <div v-if="primarySpec.budget_note" class="muted">{{ primarySpec.budget_note }}</div>
+        </details>
+
+        <!-- 编辑控制 -->
+        <div class="decision-card__actions">
+          <el-button type="primary" :disabled="submitting" @click="generateFromPlan(primarySpec)">{{ primarySpec.product_id ? '继续优化当前产品' : '生成候选产品' }}</el-button>
+          <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'resources' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'resources' ? '' : 'resources'">换资源</button>
+          <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'price' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'price' ? '' : 'price'">调价格</button>
+          <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'crowd' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'crowd' ? '' : 'crowd'">换客群</button>
+          <button type="button" class="ghost-link" :disabled="submitting" @click="ask('路线别排太满，晚上看完演出就回酒店')">改路线</button>
+          <button type="button" class="ghost-link" :disabled="submitting" @click="ask('再搭配一份酒店早餐或服务')">增加酒店服务</button>
+          <span v-if="submitting" class="busy-chip">正在重算…</span>
+        </div>
+
+        <!-- 「调价格」展开：给明确目标价，价格与毛利仍由后端重算 -->
+        <div v-if="activeAdjust === 'price'" class="adjust-panel">
+          <div class="adjust-panel__head">
+            <b>调整建议售价</b>
+            <span class="muted">当前 ¥{{ primarySpec.price }}，最低合法价 ¥{{ primarySpec.floor_price }}；改价会重新跑容量与利润校验</span>
+          </div>
+          <div class="option-row">
+            <button type="button" @click="ask(`价格按最低合法价 ${primarySpec.floor_price} 来`)">按最低合法价 ¥{{ primarySpec.floor_price }}</button>
+            <button type="button" @click="ask('价格降到 650 以内')">降到 650 以内</button>
+            <button type="button" @click="ask('价格降到 600 以内')">降到 600 以内</button>
+          </div>
+          <div class="price-input">
+            <input v-model="priceTarget" inputmode="numeric" placeholder="输入目标价，例如 620" />
+            <el-button size="small" type="primary" :disabled="submitting" @click="applyPriceTarget">按这个价格重算</el-button>
+          </div>
+        </div>
+
+        <!-- 「换客群」展开：客群决定后续资源筛选口径 -->
+        <div v-if="activeAdjust === 'crowd'" class="adjust-panel">
+          <div class="adjust-panel__head">
+            <b>切换目标客群</b>
+            <span class="muted">保持日期与房型，按新客群重新筛选合作资源</span>
+          </div>
+          <div class="option-row">
+            <button v-for="item in crowdChoices" :key="item.label" type="button" @click="ask(item.message)">{{ item.label }}</button>
+          </div>
+        </div>
+
+        <!-- 「换资源」展开：保持日期与房型，只替换合作资源 -->
+        <div v-if="activeAdjust === 'resources'" class="adjust-panel">
+          <div class="adjust-panel__head">
+            <b>替换当前合作资源</b>
+            <span class="muted">保持 {{ primarySpec.target_date }}、{{ primarySpec.room_type }}、{{ primarySpec.crowd_label }} 不变，只换体验</span>
+          </div>
+          <div v-if="resourceSwaps.length" class="alt-grid">
+            <article v-for="item in resourceSwaps" :key="`swap-${item.name}`" class="alt-card">
+              <h3>{{ item.name }}</h3>
+              <p class="muted">{{ item.window || '按场次' }} · 仍可支撑 {{ item.sets }} 套 · 预估价 ¥{{ item.estimated_price }}</p>
+              <p class="alt-card__why">{{ item.indoor ? '室内体验，雨天不受影响。' : '户外体验，出发前会再核对天气。' }}每人结算 ¥{{ item.settlement_price }}。</p>
+              <el-button size="small" plain @click="ask(`${primarySpec.target_date} 的 ${primarySpec.room_type} 换成 ${item.name}`)">换成这个体验</el-button>
+            </article>
+          </div>
+          <p v-else class="muted">当前日期与房型下没有其它可用合作资源，可以直接换成上面另外两个推荐方案。</p>
+        </div>
+
+        <details class="reason-fold">
+          <summary>查看完整推荐逻辑</summary>
+          <div class="detail-tabs">
+            <button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">推荐依据</button>
+            <button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button>
+            <button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险</button>
+            <button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button>
+          </div>
+          <div class="detail-body">
+            <template v-if="detailTab === 'basis'">
+              <p>{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p>
+              <p v-if="logicByTitle['游客体验']" class="muted">{{ logicByTitle['游客体验'] }}</p>
+            </template>
+            <template v-else-if="detailTab === 'value'">
+              <p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p>
+              <div v-if="primarySpec.constraints?.length" class="constraint-row">
+                <span v-for="item in primarySpec.constraints" :key="item.label"><b>{{ item.label }}</b>{{ item.value }}</span>
+              </div>
+            </template>
+            <template v-else-if="detailTab === 'risk'">
+              <p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p>
+              <div v-if="primarySpec.checks?.length" class="check-row">
+                <span v-for="item in primarySpec.checks" :key="item.label">{{ item.label }} {{ item.value }}</span>
+              </div>
+            </template>
+            <template v-else>
+              <p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p>
+            </template>
+          </div>
+        </details>
       </article>
-
-      <article class="audit-panel"><div class="section-head"><div><span>可审计输入</span><h2>为什么这样推荐</h2></div></div><ul><li v-for="(signal, index) in signals" :key="index"><i />{{ signal.message }}</li></ul><div v-if="execution" class="execution-record"><span>本次执行记录</span><div class="execution-main"><b>{{ execution.agent || 'stayscape-main' }}</b><em>{{ execution.skill || 'stayscape-product-generator' }}</em><small>{{ durationText(execution.duration_ms) }} · {{ execution.fallback_used ? '发生降级' : '未发生降级' }}</small></div><div class="execution-tools"><span v-for="(tool, index) in execution.tool_calls || []" :key="index"><b>{{ toolName(tool) }}</b>{{ toolKind(tool) ? ` · ${toolKind(tool)}` : '' }}</span></div><p>{{ execution.used_knowledge ? `已查询 ${execution.used_knowledge} 条文旅知识` : '本次未命中文旅知识' }}{{ execution.used_weather ? '，已读取天气信息。' : '，天气信息需确认。' }}</p></div><p class="audit-note">文旅知识中标记“需确认”的开放时间、地址和预约说明不会被当作可售承诺；这里只展示执行步骤，不展示模型内部推理。</p></article>
     </section>
 
-    <section class="proposal-section"><div class="section-head"><div><span>人工确认队列</span><h2>候选产品</h2></div><small>发布时再次检查实时库存</small></div><div v-if="proposals.length" class="proposal-grid"><article v-for="proposal in proposals" :key="proposal.id" class="proposal-card"><header><div><span>候选 #{{ proposal.id }}</span><h3>{{ proposal.product?.product_name }}</h3><p>{{ proposal.product?.theme }} · {{ proposal.product?.target_date }}</p></div><b>¥{{ proposal.product?.suggested_price }}</b></header><div class="proposal-meta"><span v-for="step in proposal.execution_steps?.slice(0, 5) || []" :key="`${step.name}-${step.at}`" :class="step.status"><i />{{ step.name }} · {{ label(step.status) }}</span></div><p class="proposal-reason">{{ proposal.product?.recommendation_reason }}</p><footer><el-button @click="confirm(proposal, 'DRAFT')">加入草稿</el-button><el-button type="primary" @click="confirm(proposal, 'PUBLISH')">确认发布</el-button></footer></article></div><div v-else class="empty-state">暂无待确认候选。生成后，先由你确认，再进入草稿或游客端。</div></section>
-  </main>
+    <!-- ⑤ 候选确认：只有点了「生成候选产品」才会出现 -->
+    <section v-if="candidateCards.length" class="panel stage-panel">
+      <div class="stage-panel__head">
+        <h2>候选确认</h2>
+        <span class="muted">本轮已生成 {{ candidateCards.length }} 个待确认产品，确认前不会上架</span>
+      </div>
+      <div class="candidate-grid">
+        <article v-for="card in candidateCards" :key="card.key" class="candidate-card">
+          <img v-if="card.image" :src="card.image" :alt="card.name" loading="lazy" />
+          <div v-else class="candidate-card__ph">✦</div>
+          <div class="candidate-card__body">
+            <header>
+              <h3>{{ card.name }}</h3>
+              <b>¥{{ card.price }}</b>
+            </header>
+            <p class="muted">{{ card.date }} · {{ card.crowd_label }} · {{ card.party }} 人<template v-if="card.quantity !== ''"> · 可售 {{ card.quantity }} 套</template></p>
+            <p v-if="card.experiences.length" class="candidate-card__exp">体验资源：{{ card.experiences.join('、') }}</p>
+            <p class="candidate-card__figures">成本 ¥{{ card.cost }} · 最低合法价 ¥{{ card.floor_price }}<template v-if="card.margin_label"> · 毛利率 {{ card.margin_label }}</template></p>
+            <div class="badge-row">
+              <span>✓ 库存通过</span>
+              <span>✓ 资源通过</span>
+              <span>✓ 利润通过</span>
+            </div>
+            <div class="candidate-card__actions">
+              <el-button size="small" type="primary" @click="startEditing(card)">继续优化</el-button>
+              <el-button size="small" plain @click="confirm(card.raw, 'DRAFT')">加入草稿</el-button>
+              <router-link class="ghost-link" :to="`/visitor/products/${card.product_id}`" target="_blank">预览</router-link>
+            </div>
+            <details class="reason-fold">
+              <summary>查看推荐依据</summary>
+              <p>{{ card.reason }}</p>
+            </details>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 微调记录 -->
+    <section v-if="refinements.length" class="panel stage-panel">
+      <div class="stage-panel__head"><h2>微调记录</h2><span class="muted">旧版本保留在版本记录里，可回退</span></div>
+      <div v-for="(item, index) in refinements" :key="`refine-${index}`" class="refine-row">
+        <p><span class="layer-badge">{{ item.layer_label }}</span>{{ item.message }}</p>
+        <table v-if="item.changes?.length" class="reply-table">
+          <thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead>
+          <tbody><tr v-for="row in item.changes" :key="row.field"><td>{{ row.label }}</td><td class="muted">{{ row.before }}</td><td>{{ row.after }}</td></tr></tbody>
+        </table>
+        <div v-if="item.checks?.length" class="chip-row"><span v-for="check in item.checks" :key="check.label">{{ check.label }}：{{ check.value }}</span></div>
+      </div>
+    </section>
+
+    <!-- ⑥ 经营证据：默认折叠 -->
+    <section class="panel stage-panel">
+      <details class="evidence-fold">
+        <summary>经营证据<span class="muted"> · 房态、合作资源、订单、天气、知识库</span></summary>
+        <div class="evidence-tabs">
+          <button type="button" :class="{ active: panel === 'inventory' }" @click="panel = panel === 'inventory' ? '' : 'inventory'">房态</button>
+          <button type="button" :class="{ active: panel === 'resources' }" @click="panel = panel === 'resources' ? '' : 'resources'">合作资源</button>
+          <button type="button" :class="{ active: panel === 'orders' }" @click="panel = panel === 'orders' ? '' : 'orders'">订单</button>
+          <button type="button" :class="{ active: panel === 'weather' }" @click="panel = panel === 'weather' ? '' : 'weather'">天气</button>
+          <button type="button" :class="{ active: panel === 'knowledge' }" @click="panel = panel === 'knowledge' ? '' : 'knowledge'">知识库</button>
+        </div>
+
+        <p v-if="!panel" class="muted">房态、资源容量、天气与利润校验分别来自客房库存、合作资源、天气服务和财务规则。点上面的分类展开原始数据。</p>
+
+        <div v-if="panel === 'inventory'" class="evidence-body">
+          <div class="chip-row">
+            <span>未来 {{ pressure.window_days ?? 10 }} 天待消化 {{ pressure.unsold_room_nights ?? 0 }} 间</span>
+            <span>有房日期 {{ pressure.date_count ?? 0 }} 个 · 房型 {{ pressure.room_type_count ?? 0 }} 种</span>
+            <span v-if="focusRoom">压力最高 {{ focusRoom.room_type }} {{ focusRoom.remaining }} 间（{{ focusRoom.target_date }}）</span>
+          </div>
+          <table v-if="advisor?.inventory?.length" class="reply-table">
+            <thead><tr><th>日期</th><th>房型</th><th>剩余</th><th>参考价</th></tr></thead>
+            <tbody><tr v-for="row in advisor.inventory.slice(0, 12)" :key="row.date + row.room_type"><td>{{ String(row.date).slice(5) }} {{ row.weekday }}</td><td>{{ row.room_type }}</td><td>{{ row.remaining }} 间</td><td>¥{{ row.price }}</td></tr></tbody>
+          </table>
+        </div>
+
+        <div v-if="panel === 'resources'" class="evidence-body">
+          <table v-if="insights.available_partner_resources?.length" class="reply-table">
+            <thead><tr><th>合作资源</th><th>名额</th><th>室内</th><th>适配客群</th></tr></thead>
+            <tbody><tr v-for="row in insights.available_partner_resources" :key="row.name"><td>{{ row.name }}</td><td>{{ row.remaining_capacity }}</td><td>{{ row.indoor ? '是' : '否' }}</td><td>{{ row.suitable_crowds }}</td></tr></tbody>
+          </table>
+          <p v-else class="muted">重点日期暂无可组包的合作资源。</p>
+        </div>
+
+        <div v-if="panel === 'orders'" class="evidence-body">
+          <div class="chip-row">
+            <span>近 14 天已确认 {{ insights.confirmed_order_count ?? 0 }} 单</span>
+            <span>成交 ¥{{ insights.confirmed_revenue ?? 0 }}</span>
+            <span>订单最多客群 {{ crowdLabel(insights.top_crowds?.[0]?.target_crowd) || '暂无' }}</span>
+          </div>
+          <ul v-if="signals.length" class="signal-list"><li v-for="(signal, index) in signals" :key="index">{{ signal.message }}</li></ul>
+          <table class="reply-table">
+            <thead><tr><th>产品</th><th>类别</th><th>金额</th><th>日期</th><th>状态</th></tr></thead>
+            <tbody><tr v-for="row in orderRows.slice(0, 8)" :key="row.product_name + row.target_date"><td>{{ row.product_name }}</td><td>{{ row.category }}</td><td>¥{{ row.amount }}</td><td>{{ row.target_date }}</td><td>{{ row.status }}</td></tr></tbody>
+          </table>
+          <p class="muted">仅使用汇总经营数据，不含游客个人信息。</p>
+        </div>
+
+        <div v-if="panel === 'weather'" class="evidence-body">
+          <div class="chip-row">
+            <span>天气：{{ overview.weather?.scenario || '—' }}</span>
+            <span>气温：{{ overview.weather?.temperature_min ?? '—' }}–{{ overview.weather?.temperature_max ?? '—' }}℃</span>
+            <span>降雨概率：{{ overview.weather?.precipitation_probability ?? '—' }}%</span>
+            <span>核验状态：{{ overview.weather?.usable ? '已核验' : '待确认' }}</span>
+          </div>
+          <p>{{ overview.weather?.advisory || '天气信息读取中。' }}</p>
+        </div>
+
+        <div v-if="panel === 'knowledge'" class="evidence-body">
+          <p class="muted">知识库共 {{ knowledgeTotal }} 条，含开放时间、预约提示与来源，只作为行程参考，不构成套餐权益。</p>
+          <table class="reply-table">
+            <thead><tr><th>地点</th><th>类别</th><th>区域</th></tr></thead>
+            <tbody><tr v-for="row in (overview.knowledge || []).slice(0, 8)" :key="row.name"><td>{{ row.name }}</td><td>{{ row.category_label || row.category }}</td><td>{{ row.area }}</td></tr></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+
+    <!-- ⑦ AI 执行摘要：人话版，技术细节再折叠 -->
+    <section v-if="executionSummary.length" class="panel stage-panel">
+      <details class="evidence-fold">
+        <summary>AI 执行摘要<span class="muted"> · 这一轮读了什么、校验了什么</span></summary>
+        <ul class="summary-list">
+          <li v-for="item in executionSummary" :key="item.label"><b>✓ {{ item.label }}</b><span>{{ item.value }}</span></li>
+        </ul>
+        <details v-if="judgement.trace?.length" class="tech-fold">
+          <summary>查看技术详情</summary>
+          <ol class="trace-list">
+            <li v-for="step in judgement.trace" :key="step.tool" :class="step.status">
+              <b>{{ step.tool_label || step.tool }}</b><span>{{ step.detail }}</span><em>{{ step.status === 'ok' ? '已通过' : step.status === 'pass' ? '已通过' : '需注意' }}</em>
+            </li>
+          </ol>
+          <p class="muted">技术详情保留原始工具标识，供开发与评审核对。</p>
+        </details>
+      </details>
+    </section>
+
+    <!-- ⑧ 吸底输入区 -->
+    <form class="composer" @submit.prevent="submit()">
+      <div class="composer__context">
+        <span v-if="editingProduct" class="context-chip is-editing">正在微调：{{ editingProduct.name }}<button type="button" @click="stopEditing">结束</button></span>
+        <span v-else class="context-chip">正在调整：{{ currentObjectLabel }}</span>
+        <button v-if="advisor || operationLog.length" type="button" class="ghost-link" @click="clearConversation">重新开始</button>
+      </div>
+      <div class="composer__quick">
+        <button v-for="cmd in quickCommands" :key="cmd" type="button" @click="ask(cmd)">{{ cmd }}</button>
+      </div>
+      <div class="composer__main">
+        <textarea v-model="brief" rows="1" :placeholder="editingProduct ? '例如：价格做到 700 以内；或者换个更适合两个人的体验' : '例如：价格低一点 / 换成双人 / 不要亲子 / 改成 9 月 27 日'" @input="growInput" @keydown.enter.exact.prevent="submit()" />
+        <button type="submit" :disabled="!brief.trim() || submitting">{{ submitting ? '重算中…' : '调整方案' }}</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- 操作历史：只记录「指令 → 变化」，不保留聊天式对话 -->
+  <el-drawer v-model="historyOpen" title="操作历史" size="380px">
+    <div v-if="operationLog.length" class="log-list">
+      <div v-for="(item, index) in operationLog" :key="`log-${index}`" class="log-item">
+        <span class="log-time">{{ item.at }}</span>
+        <b>{{ item.instruction }}</b>
+        <p>{{ item.change || '已按这条指令重算当前方案。' }}</p>
+      </div>
+    </div>
+    <p v-else class="muted">还没有操作记录。用输入框或按钮调整一次方案后，这里会显示「指令 → 变化」。</p>
+  </el-drawer>
 </template>
 
 <style scoped>
-.ai-operations{display:grid;gap:14px}.page-head,.section-head{display:flex;align-items:end;justify-content:space-between;gap:14px}.page-head>div>span,.section-head span{color:var(--muted);font-size:10px;letter-spacing:.09em}.page-head h1{margin:5px 0 0;font-size:25px;letter-spacing:-.7px}.page-head p{max-width:680px;margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.65}.fact-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.fact-strip article,.task-panel,.audit-panel,.proposal-card{border:1px solid var(--line);border-radius:11px;background:var(--paper)}.fact-strip article{display:grid;gap:4px;padding:12px}.fact-strip span,.fact-strip small{color:var(--muted);font-size:10px}.fact-strip strong{font-family:var(--font-mono);font-size:16px}.workspace-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);gap:10px}.task-panel,.audit-panel{padding:14px}.section-head h2{margin:4px 0 0;font-size:16px}.section-head small{color:var(--muted);font-size:10px}.task-panel textarea{display:block;box-sizing:border-box;width:100%;min-height:104px;margin-top:13px;padding:10px;border:1px solid var(--line);border-radius:8px;resize:vertical;background:var(--panel-soft);color:var(--ink);font:13px/1.65 var(--font-sans)}.task-actions{display:flex;align-items:center;justify-content:space-between;margin-top:9px;color:var(--muted);font-size:10px}.task-messages{display:grid;gap:5px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.task-messages p{margin:0;padding:7px 8px;border-radius:7px;background:var(--panel-soft);color:var(--muted);font-size:11px;line-height:1.55}.task-messages p.assistant{background:#f0f5f2;color:var(--ink)}.task-messages b{margin-right:7px;font-size:10px}.audit-panel ul{display:grid;gap:8px;margin:14px 0;padding:0;list-style:none}.audit-panel li{display:flex;gap:7px;color:var(--ink);font-size:11px;line-height:1.5}.audit-panel li i,.proposal-meta i{width:5px;height:5px;margin-top:6px;border-radius:50%;background:#55977b;flex:0 0 auto}.audit-note{margin:12px 0 0;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;line-height:1.6}.proposal-section{padding:14px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}.proposal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}.proposal-card{overflow:hidden}.proposal-card header{display:flex;justify-content:space-between;gap:8px;padding:12px;border-bottom:1px solid var(--line)}.proposal-card header span,.proposal-card header p{color:var(--muted);font-size:10px}.proposal-card h3{margin:4px 0;font-size:14px}.proposal-card header p{margin:0}.proposal-card header b{font-family:var(--font-mono);font-size:15px;white-space:nowrap}.proposal-meta{display:flex;flex-wrap:wrap;gap:5px;padding:9px 11px}.proposal-meta span{display:inline-flex;align-items:center;gap:4px;padding:3px 5px;border-radius:999px;background:var(--panel-soft);color:var(--muted);font-size:9px}.proposal-meta .VERIFY_REQUIRED i{background:#c78b4a}.proposal-meta .PENDING i{background:#9a6b42}.proposal-reason{min-height:32px;margin:0;padding:0 11px 11px;color:var(--muted);font-size:11px;line-height:1.55}.proposal-card footer{display:flex;justify-content:flex-end;gap:7px;padding:9px 11px;border-top:1px solid var(--line)}.empty-state{padding:30px;color:var(--muted);font-size:12px;text-align:center}@media(max-width:820px){.fact-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace-grid,.proposal-grid{grid-template-columns:1fr}.page-head{align-items:start}.page-head h1{font-size:22px}}
-</style>
+/* 正文控制在易读宽度内，超宽屏不出现横跨整屏的中文长行。 */
+.ai-ops { display: grid; gap: 14px; max-width: 1280px; margin-inline: auto; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.page-head__text strong { display: block; font-size: 15px; }
+.page-head__text p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-<style scoped>
-.execution-record{display:grid;gap:7px;margin-top:11px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-soft)}
-.execution-record>span{color:var(--muted);font-size:9px;letter-spacing:.08em}
-.execution-main{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
-.execution-main b{font-family:var(--font-mono);font-size:11px}
-.execution-main em{padding:2px 5px;border-radius:4px;background:var(--paper);font-family:var(--font-mono);font-size:9px;font-style:normal}
-.execution-main small,.execution-record p{margin:0;color:var(--muted);font-size:10px;line-height:1.55}
-.execution-tools{display:flex;flex-wrap:wrap;gap:4px}
-.execution-tools span{padding:3px 5px;border:1px solid var(--line);border-radius:999px;background:var(--paper);color:var(--muted);font-size:9px}
-.execution-tools b{color:var(--ink);font-weight:600}
+/* 步骤条 */
+.stage-bar ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.stage-bar li { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.stage-bar i { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%; background: var(--panel-soft); color: var(--muted); font-size: 11px; font-style: normal; }
+.stage-bar b { display: block; font-size: 12.5px; }
+.stage-bar small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+.stage-bar li.active { border-color: var(--teal); background: #f1f8f4; }
+.stage-bar li.active i { background: var(--teal-dark); color: #fff; }
+.stage-bar li.done i { background: #dcece4; color: var(--teal-dark); }
+
+/* 经营指标 */
+.fact-strip { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+.fact-card { flex: 1 1 168px; min-width: 0; display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); text-align: left; cursor: pointer; transition: border-color .18s, background .18s; }
+.fact-card:hover { border-color: var(--teal); }
+.fact-card.active { border-color: var(--teal); background: #f1f8f4; }
+.fact-card span { color: var(--muted); font-size: 10px; }
+.fact-card strong { font-family: var(--font-mono); font-size: 16px; overflow-wrap: anywhere; }
+.fact-card small { color: var(--muted); font-size: 10px; }
+.fact-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.weather-chip { padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 11px; white-space: nowrap; }
+.fact-warn { padding: 4px 9px; border-radius: 999px; background: #fff6e5; color: #9a6b2a; font-size: 10px; white-space: nowrap; }
+
+/* 分区容器 */
+.stage-panel { display: grid; gap: 12px; }
+.stage-panel__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stage-panel__head h2 { margin: 0; font-size: 15px; }
+.recomputing { color: var(--teal-dark); font-size: 11.5px; }
+.change-note { margin: 0; padding: 8px 11px; border-radius: 9px; background: #f1f8f4; color: #2f6f60; font-size: 11.5px; line-height: 1.65; }
+
+/* 方案方向卡：固定列数，方案数量变化时卡片宽度不变，避免点击后整块布局跳动。 */
+.plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.plan-card { display: grid; gap: 6px; min-height: 196px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); align-content: start; }
+.plan-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.plan-card header b { color: var(--teal-dark); font-family: var(--font-mono); font-size: 15px; }
+.plan-badge { padding: 2px 9px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 10px; }
+.plan-card h3 { margin: 0; font-size: 13.5px; line-height: 1.4; }
+.plan-card ul { display: grid; gap: 2px; margin: 0; padding-left: 16px; color: #45524c; font-size: 11px; line-height: 1.6; }
+.plan-card.is-current { border-color: var(--teal); background: #f6fbf8; }
+.plan-card.is-current .plan-badge { background: var(--teal-dark); color: #fff; }
+.plan-card.is-cheaper .plan-badge { background: #eaf4ef; color: #2f6f60; }
+.plan-card.is-capacity .plan-badge { background: #eef2fb; color: #44548a; }
+.plan-card.is-rain .plan-badge { background: #eaf1f7; color: #3c6a92; }
+.plan-current { display: grid; place-items: center; min-height: 32px; color: var(--teal-dark); font-size: 11.5px; font-weight: 650; }
+.plan-card :deep(.el-button) { width: 100%; }
+
+/* 当前方案卡 */
+.decision-card { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--teal); border-radius: 12px; background: linear-gradient(180deg, #f6fbf8, #fff 45%); }
+.decision-card__top { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; }
+.decision-card__top > img { width: 100%; height: 100%; min-height: 132px; object-fit: cover; border-radius: 9px; }
+.decision-card__ph { display: grid; place-items: center; min-height: 132px; border-radius: 9px; background: var(--panel-soft); color: var(--teal); font-size: 22px; }
+.decision-card__head h3 { margin: 0 0 5px; font-size: 17px; line-height: 1.4; }
+.decision-card__head p { margin: 0 0 2px; font-size: 12px; }
+.decision-card__include { color: #45524c; }
+.figure-row { display: flex; flex-wrap: wrap; gap: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--muted); font-size: 11.5px; }
+.figure-row b { color: var(--teal-dark); font-family: var(--font-mono); font-size: 15px; }
+.key-evidence { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.key-evidence > div { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+.key-evidence span { color: var(--muted); font-size: 10px; }
+.key-evidence b { font-size: 12.5px; overflow-wrap: anywhere; }
+.conclusion { margin: 0; font-size: 13px; line-height: 1.7; }
+.budget-note { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid #e6cfa8; border-radius: 10px; background: #fffaf0; }
+.budget-note p { margin: 0; color: #8a6420; font-size: 12px; line-height: 1.7; }
+.reason-fold summary { cursor: pointer; color: var(--teal-dark); font-size: 11.5px; }
+.reason-fold ul { display: grid; gap: 4px; margin: 8px 0 0; padding-left: 17px; color: #45524c; font-size: 12px; line-height: 1.7; }
+.reason-fold p { margin: 6px 0 0; color: #55635d; font-size: 11.5px; line-height: 1.7; }
+.decision-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* 换资源展开区 */
+.adjust-panel { display: grid; gap: 9px; padding: 11px 12px; border: 1px dashed var(--teal); border-radius: 10px; background: #fbfdfc; }
+.adjust-panel__head { display: grid; gap: 3px; }
+.adjust-panel__head b { font-size: 12.5px; }
+.adjust-panel__head span { font-size: 11px; }
+.alt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.alt-card { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.alt-card h3 { margin: 0; font-size: 13px; }
+.alt-card p { margin: 0; font-size: 11px; }
+.alt-card__why { color: #55635d; font-size: 11px; line-height: 1.6; }
+
+/* 详情 Tab */
+.detail-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.detail-tabs button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 11px; cursor: pointer; }
+.detail-tabs button.active { border-color: var(--teal); background: #f1f8f4; color: var(--teal-dark); }
+.detail-body { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel-soft); }
+.detail-body p { margin: 0; color: #45524c; font-size: 12px; line-height: 1.8; }
+.check-row, .constraint-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.check-row span { padding: 3px 9px; border-radius: 999px; background: #eaf4ef; color: #2f6f60; font-size: 10px; }
+.constraint-row span { display: flex; gap: 6px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 10px; }
+.constraint-row b { color: var(--ink); font-weight: 600; }
+
+/* 候选产品卡 */
+.candidate-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.candidate-card { display: grid; grid-template-columns: 118px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.candidate-card > img { width: 100%; height: 100%; min-height: 168px; object-fit: cover; }
+.candidate-card__ph { display: grid; place-items: center; min-height: 168px; background: var(--panel-soft); color: var(--teal); font-size: 20px; }
+.candidate-card__body { min-width: 0; display: grid; gap: 6px; padding: 11px 12px; align-content: start; }
+.candidate-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.candidate-card h3 { margin: 0; font-size: 13px; line-height: 1.4; }
+.candidate-card header b { color: var(--teal-dark); font-family: var(--font-mono); font-size: 14px; white-space: nowrap; }
+.candidate-card__body p { margin: 0; }
+.candidate-card__exp { color: #45524c; font-size: 11px; line-height: 1.6; }
+.candidate-card__figures { color: var(--muted); font-size: 10.5px; }
+.badge-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.badge-row span { padding: 2px 7px; border-radius: 999px; background: #eaf4ef; color: #2f6f60; font-size: 9.5px; }
+.candidate-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+/* 执行摘要 */
+.summary-list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.summary-list li { display: grid; gap: 2px; padding: 8px 11px; border-left: 2px solid #cfe2d9; background: #f7fbf9; }
+.summary-list b { color: #2f6f60; font-size: 12px; font-weight: 600; }
+.summary-list span { color: #55635d; font-size: 11px; }
+.tech-fold { margin-top: 12px; }
+.tech-fold summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.trace-list { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
+.trace-list li { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 6px 10px; border-left: 2px solid #cfe2d9; background: #f7fbf9; font-size: 11px; }
+.trace-list li b { color: #2f6f60; font-size: 10.5px; }
+.trace-list li span { color: #55635d; }
+.trace-list li em { color: #3f8a69; font-style: normal; font-size: 10px; }
+.trace-list li.failed { border-left-color: #e0b473; background: #fff8ec; }
+.trace-list li.failed em { color: #a4703a; }
+
+/* 经营证据 */
+.evidence-fold summary, .tech-fold summary { cursor: pointer; color: var(--teal-dark); font-size: 12px; }
+.evidence-fold summary .muted { font-size: 11px; }
+.evidence-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.evidence-tabs button { padding: 4px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 11px; cursor: pointer; }
+.evidence-tabs button.active { border-color: var(--teal); background: #f1f8f4; color: var(--teal-dark); }
+.evidence-body { display: grid; gap: 8px; margin-top: 10px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip-row span { padding: 4px 9px; border-radius: 999px; background: var(--panel-soft); color: var(--ink); font-size: 11px; }
+.signal-list { display: grid; gap: 4px; margin: 0; padding-left: 17px; color: #45524c; font-size: 11.5px; line-height: 1.7; }
+.reply-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.reply-table th, .reply-table td { padding: 6px 8px; overflow-wrap: anywhere; text-align: left; }
+.reply-table th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
+.reply-table td { border-bottom: 1px solid var(--panel-soft); }
+
+/* 其他 */
+.empty-candidate { display: grid; gap: 8px; justify-items: start; padding: 8px 0; }
+.empty-candidate > div { font-size: 22px; color: var(--teal); }
+.empty-candidate h3 { margin: 0; font-size: 15px; }
+.empty-candidate p { margin: 0; color: var(--muted); font-size: 12px; }
+.option-row { display: flex; flex-wrap: wrap; gap: 7px; }
+.option-row button { padding: 6px 12px; border: 1px solid var(--teal); border-radius: 999px; background: var(--paper); color: var(--teal-dark); font-size: 11px; cursor: pointer; }
+.ghost-link { padding: 4px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--teal-dark); font-size: 11px; text-decoration: none; cursor: pointer; }
+.ghost-link:hover { text-decoration: underline; }
+.ghost-link.active { background: #f1f8f4; text-decoration: none; }
+.refine-row { display: grid; gap: 7px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.refine-row:last-child { border-bottom: 0; }
+.refine-row p { margin: 0; font-size: 12.5px; line-height: 1.7; }
+.layer-badge { margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: var(--teal-dark); color: #fff; font-size: 10px; }
+
+/* 吸底输入区 */
+.composer { position: sticky; bottom: 10px; z-index: 3; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 -8px 24px rgba(18, 20, 19, .1); }
+.composer__context { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.context-chip { padding: 4px 10px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 11px; }
+.context-chip.is-editing { background: #fff4ec; color: #9a6427; }
+.context-chip button { margin-left: 8px; border: 0; background: transparent; color: #c9550a; font-size: 11px; cursor: pointer; }
+.composer__quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.composer__quick button { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 10.5px; cursor: pointer; }
+.composer__quick button:hover { border-color: var(--teal); color: var(--teal-dark); }
+.composer__main { display: flex; gap: 8px; align-items: flex-end; }
+.composer__main textarea { flex: 1; min-width: 0; min-height: 44px; max-height: 140px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: transparent; color: var(--ink); font: 13px/1.6 var(--font-sans); resize: none; outline: none; }
+.composer__main textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(35, 121, 108, .12); }
+.composer__main button { flex: 0 0 auto; height: 44px; padding: 0 22px; border: 0; border-radius: 11px; background: var(--teal-dark); color: #fff; font-size: 13px; font-weight: 650; cursor: pointer; }
+.composer__main button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 操作历史 Drawer */
+.log-list { display: grid; gap: 10px; }
+.log-item { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.log-time { color: var(--muted); font-size: 10.5px; }
+.log-item b { font-size: 12.5px; }
+.log-item p { margin: 0; color: #45524c; font-size: 11.5px; line-height: 1.7; }
+
+@media (max-width: 1000px) {
+  .stage-bar ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .key-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .decision-card__top { grid-template-columns: 1fr; }
+  .decision-card__top > img, .decision-card__ph { min-height: 168px; }
+}
+@media (max-width: 700px) {
+  .candidate-grid { grid-template-columns: 1fr; }
+  .candidate-card { grid-template-columns: 96px minmax(0, 1fr); }
+  .candidate-card > img, .candidate-card__ph { min-height: 128px; }
+  .stage-bar ol { grid-template-columns: 1fr; }
+  .trace-list li { grid-template-columns: 1fr; }
+}
 </style>

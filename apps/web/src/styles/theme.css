@@ -196,3 +196,376 @@ body{background:var(--canvas);font-family:var(--font-sans)}.admin-shell{backgrou
 /* Workbench cards reserve a real image column, so a photo can never become a
    background that competes with operational labels, price, or actions. */
 .admin-shell .product-grid .product-card--editorial:not(.product-card--compact){display:grid;grid-template-columns:108px minmax(0,1fr);min-height:148px}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact)>.media-image{height:100%;min-height:148px;aspect-ratio:auto;border-radius:0}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) .product-card__body{min-width:0;padding:11px 12px}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) h3{margin:6px 0 4px;font-size:15px}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) .product-card__hook{min-height:0;font-size:10px;line-height:1.45}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) .product-card__resources{max-height:36px;overflow:hidden;margin:8px 0}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) .product-card__bottom{padding-top:8px}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) .product-card__bottom strong{font-size:16px}@media(max-width:700px){.admin-shell .product-grid{grid-template-columns:1fr}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact){grid-template-columns:94px minmax(0,1fr);min-height:126px}.admin-shell .product-grid .product-card--editorial:not(.product-card--compact)>.media-image{min-height:126px}}
+
+
+/* Public storefront cards use image-first commerce styling instead of framed text blocks. */
+.visitor-shell .product-card--editorial {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 3px 14px rgba(35, 30, 25, .08);
+}
+.visitor-shell .product-card--editorial:hover {
+  transform: translateY(-2px);
+  border-color: transparent;
+  box-shadow: 0 9px 22px rgba(35, 30, 25, .12);
+}
+.visitor-shell .product-card--editorial > .media-image {
+  border-radius: 10px 10px 0 0;
+}
+.visitor-shell .product-card--editorial .product-card__body { padding: 13px 14px 14px; }
+.visitor-shell .product-card--editorial .product-card__eyebrow {
+  color: #999;
+  font-size: 10px;
+  letter-spacing: .02em;
+}
+.visitor-shell .product-card--editorial h3 {
+  margin: 8px 0 6px;
+  color: #222;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.visitor-shell .product-card--editorial .product-card__hook {
+  min-height: 0;
+  color: #888;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.visitor-shell .product-card--editorial .product-card__resources {
+  gap: 0;
+  margin: 9px 0;
+}
+.visitor-shell .product-card--editorial .product-card__resources span {
+  padding: 0 9px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #999;
+  font-size: 10px;
+}
+.visitor-shell .product-card--editorial .product-card__resources span + span {
+  padding-left: 9px;
+  border-left: 1px solid #ddd6d0;
+}
+.visitor-shell .product-card--editorial .product-card__resources b { color: #ff6a00; }
+.visitor-shell .product-card--editorial .product-card__bottom {
+  padding-top: 10px;
+  border-top: 1px solid #f0ebe6;
+}
+.visitor-shell .product-card--editorial .product-card__bottom strong {
+  color: #ff6a00;
+  font-family: var(--font-mono);
+  font-size: 19px;
+}
+.visitor-shell .product-card--editorial .product-card__bottom .muted { color: #aaa; font-size: 10px; }
+
+/* Card facts and the experience list must never clip: cards sit in a 3–4
+   column storefront grid, so every line wraps instead of truncating. */
+.visitor-shell .product-card--editorial .product-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 9px 0 0;
+  color: #8b8b8b;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: normal;
+}
+.visitor-shell .product-card--editorial .product-card__facts span { margin: 0; padding: 0; }
+.visitor-shell .product-card__experiences {
+  display: grid;
+  gap: 6px;
+  margin: 11px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.visitor-shell .product-card__experiences li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.visitor-shell .product-card__experiences b {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #fff2e6;
+  color: #d56835;
+  font-size: 10px;
+  font-weight: 600;
+}
+.visitor-shell .product-card__experiences span {
+  overflow-wrap: anywhere;
+  color: #4a4a4a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.visitor-shell .product-card__experiences small { color: #a8a8a8; font-size: 10px; }
+.visitor-shell .product-card--editorial .product-card__bottom { margin-top: 12px; }
+.visitor-shell .product-card__sale { display: grid; justify-items: end; gap: 3px; }
+.visitor-shell .product-card__countdown { color: #d56835; font-size: 10px; font-variant-numeric: tabular-nums; }
+.visitor-shell .product-card__countdown.expired { color: #a8a8a8; }
+/* 卡片图片轮播 */
+.product-card__media { position: relative; }
+.product-card__media .card-hero-nav { position: absolute; top: 50%; z-index: 2; width: 26px; height: 26px; margin-top: -13px; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .38); color: #fff; font-size: 15px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .2s; }
+.product-card__media:hover .card-hero-nav { opacity: 1; }
+.product-card__media .card-hero-nav--prev { left: 8px; }
+.product-card__media .card-hero-nav--next { right: 8px; }
+.product-card__media .card-hero-dots { position: absolute; left: 0; right: 0; bottom: 8px; z-index: 2; display: flex; justify-content: center; gap: 5px; }
+.product-card__media .card-hero-dots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, .55); cursor: pointer; }
+.product-card__media .card-hero-dots i.active { background: #fff; }
+/* 工作台产品池：窄窗口下卡片自适应，图片不再被拉成长条 */
+.admin-shell .product-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) > .product-card__media,
+.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) > .media-image { max-height: 176px; }
+.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) { align-items: start; }
+@media (max-width: 1100px) { .admin-shell .product-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); } }
+.admin-shell .product-card__experiences {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.admin-shell .product-card__experiences li { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.admin-shell .product-card__experiences b { flex: 0 0 auto; color: var(--teal); font-size: 10px; }
+.admin-shell .product-card__experiences span { overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
+.admin-shell .product-card__experiences small { margin-left: auto; color: #a9b3af; font-size: 10px; }
+@media (max-width: 700px) {
+  .visitor-shell .product-card--editorial .product-card__body { padding: 10px 11px 11px; }
+  .visitor-shell .product-card--editorial h3 { margin: 6px 0 4px; font-size: 14px; }
+  .visitor-shell .product-card--editorial .product-card__hook { font-size: 10px; }
+  .visitor-shell .product-card--editorial .product-card__resources { margin: 7px 0; }
+  .visitor-shell .product-card--editorial .product-card__resources span { font-size: 9px; }
+  .visitor-shell .product-card--editorial .product-card__bottom strong { font-size: 17px; }
+}
+
+
+/* Product cards show date, place and package scope without repeating the title. */
+.visitor-shell .product-card--editorial .product-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 4px 10px;
+  margin: 10px 0 0;
+  color: #888;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.visitor-shell .product-card--editorial .product-card__facts span {
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.visitor-shell .product-card--editorial .product-card__facts span + span {
+  margin-left: 0;
+  padding-left: 8px;
+  border-left: 1px solid #e5dfda;
+}
+.visitor-shell .product-card--editorial .product-card__stock {
+  flex: 0 0 auto;
+  color: #999;
+  font-size: 10px;
+}
+.visitor-shell .product-card--compact .product-card__facts { display: none; }
+@media (max-width: 700px) {
+  .visitor-shell .product-card--editorial .product-card__facts { font-size: 9px; }
+  .visitor-shell .product-card--editorial .product-card__facts span + span { margin-left: 5px; padding-left: 5px; }
+}
+
+/* ------------------------------------------------------------------ *
+ * 卡片主图容器（.product-card__media）
+ *
+ * ProductCard 为了支持轮播，把主图包进了 .product-card__media。此前压扁
+ * 成横向排版的规则仍然只命中 > .media-image，于是缩略图丢失高度、缩到左上
+ * 角变成一个小方块。下面的规则把「容器铺满 + 内层图片铺满」补齐，横向卡片
+ * 和旅居助手的推荐卡片都会恢复成图左文右、等高对齐。
+ * ------------------------------------------------------------------ */
+.product-card__media {
+  position: relative;
+  display: block;
+  overflow: hidden;
+}
+.product-card__media > .media-image {
+  width: 100%;
+  height: 100%;
+}
+
+/* 横向整行卡片：主图在左、正文在右，一行一个占满宽度。 */
+.product-card--horizontal {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: stretch;
+  overflow: hidden;
+}
+.product-card--horizontal > .product-card__media {
+  height: 100%;
+  min-height: 150px;
+}
+.product-card--horizontal > .product-card__media > .media-image {
+  height: 100%;
+  min-height: 150px;
+  aspect-ratio: auto;
+  border-radius: inherit;
+}
+.product-card--horizontal .product-card__body {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+}
+@media (max-width: 700px) {
+  .product-card--horizontal { grid-template-columns: 120px minmax(0, 1fr); }
+  .product-card--horizontal > .product-card__media,
+  .product-card--horizontal > .product-card__media > .media-image { min-height: 132px; }
+}
+
+/* 横向卡片：主图撑满左侧整列，正文在右侧。 */
+.product-card--compact > .product-card__media,
+.product-card--horizontal > .product-card__media {
+  height: 100%;
+  min-height: 112px;
+}
+.product-card--compact > .product-card__media > .media-image,
+.product-card--horizontal > .product-card__media > .media-image {
+  height: 100%;
+  min-height: 112px;
+  aspect-ratio: auto;
+  border-radius: inherit;
+}
+
+/* 工作台产品池：横向卡片同样铺满左侧主图，避免出现长条或空白。 */
+.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) > .product-card__media {
+  height: 100%;
+  min-height: 148px;
+  max-height: 176px;
+}
+.admin-shell .product-grid .product-card--editorial:not(.product-card--compact) > .product-card__media > .media-image {
+  height: 100%;
+  min-height: 148px;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+/* 旅居助手 / 对话里的推荐卡片：固定成图左文右、整行等高。 */
+.assistant-cards .product-card--compact,
+.chat-suggestions .product-card--compact {
+  display: grid !important;
+  grid-template-columns: 108px minmax(0, 1fr) !important;
+  align-items: stretch;
+  width: 100%;
+  min-height: 104px;
+  overflow: hidden;
+}
+.assistant-cards .product-card--compact > .product-card__media,
+.chat-suggestions .product-card--compact > .product-card__media {
+  height: 100%;
+  min-height: 104px;
+}
+.assistant-cards .product-card--compact > .product-card__media > .media-image,
+.chat-suggestions .product-card--compact > .product-card__media > .media-image {
+  height: 100% !important;
+  min-height: 104px !important;
+  aspect-ratio: auto !important;
+}
+.assistant-cards .product-card--compact .product-card__body,
+.chat-suggestions .product-card--compact .product-card__body {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  gap: 5px;
+}
+
+@media (max-width: 700px) {
+  .assistant-cards .product-card--compact,
+  .chat-suggestions .product-card--compact {
+    grid-template-columns: 92px minmax(0, 1fr) !important;
+    min-height: 96px;
+  }
+  .assistant-cards .product-card--compact > .product-card__media,
+  .assistant-cards .product-card--compact > .product-card__media > .media-image,
+  .chat-suggestions .product-card--compact > .product-card__media,
+  .chat-suggestions .product-card--compact > .product-card__media > .media-image {
+    min-height: 96px !important;
+  }
+}
+
+/* ---------- 响应式：工作台与游客端在窄窗口 / 手机 H5 下自适应 ---------- */
+/* ---------- 对话页（旅居助手 / 生成产品）的关键布局放全局 ----------
+ * 这两页的高度与宽度必须和视口绑定：如果等懒加载的路由 chunk 应用，
+ * 会先渲染一帧「按内容撑开」的窄布局，再跳成正常宽度。
+ * 这里用 align-items:center + 明确 width，避免 auto margin 触发 shrink-to-fit。 */
+.visitor-shell--chat {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+.visitor-shell--chat .visitor-main,
+.visitor-shell--chat .visitor-main--editorial {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 14px 14px;
+  overflow: hidden;
+}
+.visitor-shell--chat .visitor-footer { display: none; }
+.visitor-shell--chat .assistant-page {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 820px;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+}
+@media (max-width: 700px) {
+  .visitor-shell--chat .visitor-main,
+  .visitor-shell--chat .visitor-main--editorial { padding: 8px 12px 10px; }
+  .visitor-shell--chat .assistant-page { max-width: 100%; }
+}
+
+/* ---------- 表格统一变紧凑：字号更小、行高与内边距更小 ---------- */
+.el-table { font-size: 12px; }
+.el-table .el-table__cell { padding: 6px 0; }
+.el-table th.el-table__cell { padding: 5px 0; }
+.el-table .cell { padding: 0 10px; line-height: 1.4; }
+.el-table .el-tag { font-size: 11px; }
+.data-table { font-size: 12px; }
+.data-table th { padding: 0 10px 7px; font-size: 10px; }
+.data-table td { padding: 8px 10px; }
+.el-dialog .el-table, .panel .el-table { font-size: 12px; }
+
+.admin-main { min-width: 0; }
+.admin-shell .page-container { max-width: 100%; overflow-x: hidden; }
+.admin-shell .page-head { flex-wrap: wrap; gap: 10px; }
+@media (max-width: 1180px) {
+  .admin-shell .product-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+}
+@media (max-width: 900px) {
+  .admin-shell .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-shell .page-head h1 { font-size: 20px; }
+}
+@media (max-width: 700px) {
+  .admin-shell .page-container { padding: 16px 12px 26px; }
+  .admin-shell .panel { padding: 13px; }
+  .admin-shell .detail-grid, .admin-shell .marketing-focus { grid-template-columns: 1fr; }
+  .visitor-header { padding: 0 14px; }
+  .visitor-header nav { gap: 12px; font-size: 12px; }
+  .visitor-live { display: none; }
+  .visitor-main, .visitor-main--editorial { padding: 14px 12px 44px; }
+  .visitor-footer { padding: 0 12px 20px; }
+}
+@media (max-width: 520px) {
+  .admin-shell .metric-grid { grid-template-columns: 1fr; }
+  .visitor-header { height: 56px; }
+  .visitor-brand small { display: none; }
+}

@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..models import HotelService, Merchant, PartnerResource, RoomInventory, TravelProduct, VisitorIntent
@@ -22,6 +22,64 @@ class OperationsInsightService:
     def __init__(self, db: Session, hotel_id: int) -> None:
         self.db = db
         self.hotel_id = hotel_id
+
+    def room_night_pressure(self, *, window_days: int = 10) -> dict[str, Any]:
+        """未售房量汇总：未来若干天按「房型 × 日期」统计，供经营看板顶部指标使用。
+
+        这里只做聚合，不解释、不预测；真正的容量与价格仍由产品生成链路计算。
+        """
+
+        today = date.today()
+        horizon = today + timedelta(days=max(1, window_days))
+        rooms = list(
+            self.db.scalars(
+                select(RoomInventory).where(
+                    RoomInventory.hotel_id == self.hotel_id,
+                    RoomInventory.available_date >= today,
+                    RoomInventory.available_date < horizon,
+                    RoomInventory.available_count > 0,
+                    RoomInventory.status == "AVAILABLE",
+                )
+            ).all()
+        )
+        total = sum(int(room.available_count or 0) for room in rooms)
+        focus = max(
+            rooms,
+            key=lambda room: int(room.available_count or 0) * Decimal(str(room.normal_price or 0)),
+            default=None,
+        )
+        focus_date = focus.available_date if focus is not None else today
+        resource_count = int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(PartnerResource)
+                .join(Merchant)
+                .where(
+                    Merchant.hotel_id == self.hotel_id,
+                    PartnerResource.available_date == focus_date,
+                    PartnerResource.package_enabled.is_(True),
+                    PartnerResource.remaining_capacity > 0,
+                    PartnerResource.status == "AVAILABLE",
+                )
+            )
+            or 0
+        )
+        return {
+            "window_days": window_days,
+            "unsold_room_nights": total,
+            "room_type_count": len({str(room.room_type) for room in rooms}),
+            "date_count": len({room.available_date for room in rooms}),
+            "focus_room": (
+                {
+                    "room_type": str(focus.room_type),
+                    "target_date": focus.available_date.isoformat(),
+                    "remaining": int(focus.available_count or 0),
+                }
+                if focus is not None
+                else None
+            ),
+            "available_resource_count": resource_count,
+        }
 
     def snapshot(self, *, target_date: date, window_days: int = 14) -> dict[str, Any]:
         today = date.today()

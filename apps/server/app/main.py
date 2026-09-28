@@ -7,12 +7,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+import httpx
 
 from .api.v1.router import api_router
 from .api.websocket_manager import manager
 from .config import settings
 from .core.exceptions import AppError
-from .core.security import decode_access_token
+from .core.security import decode_websocket_ticket
 from .db import SessionLocal, engine
 from .models import Base, User
 from .seed import seed_demo
@@ -57,17 +58,41 @@ def create_app() -> FastAPI:
             db.close()
         return {"status": "ok" if database == "ok" else "degraded", "app": settings.app_name, "database": database, "agent_provider": settings.agent_provider}
 
+    @application.get("/ready")
+    def ready():
+        """Readiness check for routing traffic, including the live Agent."""
+        db = SessionLocal()
+        try:
+            db.execute(text("SELECT 1"))
+        except Exception:
+            return JSONResponse(status_code=503, content={"status": "not_ready", "database": "error"})
+        finally:
+            db.close()
+        if settings.live_agent_required:
+            if not settings.openclaw_live_ready or not settings.openclaw_base_url:
+                return JSONResponse(status_code=503, content={"status": "not_ready", "database": "ok", "agent": "not_ready"})
+            try:
+                response = httpx.get(f"{settings.openclaw_base_url.rstrip('/')}/readyz", timeout=2)
+                if not response.is_success:
+                    return JSONResponse(status_code=503, content={"status": "not_ready", "database": "ok", "agent": response.status_code})
+            except httpx.HTTPError:
+                return JSONResponse(status_code=503, content={"status": "not_ready", "database": "ok", "agent": "unreachable"})
+        return {"status": "ready", "database": "ok", "agent": "ok" if settings.live_agent_required else "demo"}
+
     application.include_router(api_router, prefix="/api/v1")
 
     @application.websocket("/ws/hotel/{hotel_id}")
     async def hotel_websocket(websocket: WebSocket, hotel_id: int):
-        token = websocket.query_params.get("token")
+        ticket = websocket.query_params.get("ticket")
         db = SessionLocal()
         try:
-            if not token:
+            if not ticket:
                 await websocket.close(code=1008)
                 return
-            payload = decode_access_token(token)
+            payload = decode_websocket_ticket(ticket)
+            if int(payload.get("hotel_id")) != hotel_id:
+                await websocket.close(code=1008)
+                return
             user = db.get(User, int(payload.get("user_id")))
             if not user or user.status != "ACTIVE" or user.role != "HOTEL" or resolve_hotel_id(db, user) != hotel_id:
                 await websocket.close(code=1008)

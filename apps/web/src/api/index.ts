@@ -26,6 +26,15 @@ export const hotelApi = {
   refineProductMarketing: (payload: { product_ids: number[]; natural_language: string; style?: 'ARTISTIC' | 'PROMOTIONAL' | 'EMPATHETIC' | 'SEEDING'; generate_image?: boolean }) => api.post<TravelProduct[]>('/hotel/products/refine-marketing', payload),
   product: (id: number) => api.get<TravelProduct>(`/hotel/products/${id}`),
   updateProduct: (id: number, payload: Record<string, unknown>) => api.patch<TravelProduct>(`/hotel/products/${id}`, payload),
+  refineProduct: (id: number, natural_language: string) => api.post<{
+    layer: string
+    layer_label: string
+    version: number
+    changes: Array<Record<string, any>>
+    checks: Array<Record<string, any>>
+    message: string
+    product: TravelProduct
+  }>(`/hotel/products/${id}/refine`, { natural_language }),
   deleteProduct: (id: number) => api.delete<{ deleted: boolean; archived: boolean; message: string }>(`/hotel/products/${id}`),
   regenerateMarketing: (id: number, payload: { style?: 'ARTISTIC' | 'PROMOTIONAL' | 'EMPATHETIC' | 'SEEDING'; generate_image?: boolean } = {}) => api.post<TravelProduct>(`/hotel/products/${id}/marketing-assets`, payload),
   productStatus: (id: number, status: string) => api.patch<TravelProduct>(`/hotel/products/${id}/status`, { status }),
@@ -38,8 +47,34 @@ export const hotelApi = {
   aiConversations: () => api.get<Array<Record<string, unknown>>>('/hotel/ai/conversations'),
   createAiConversation: (title = '酒店 AI 运营任务') => api.post<Record<string, unknown>>('/hotel/ai/conversations', { title }),
   sendAiMessage: (conversationId: number, natural_language: string) => api.post<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}/messages`, { natural_language }),
+  advisor: (conversationId: number, natural_language: string, auto = false) => api.post<{
+    conversation: Record<string, any>
+    advisor: Record<string, any>
+    proposals: Array<Record<string, any>>
+  }>(`/hotel/ai/conversations/${conversationId}/advisor`, { natural_language, auto }),
   aiProposals: (status?: string) => api.get<Array<Record<string, unknown>>>('/hotel/ai/proposals', { params: status ? { status } : undefined }),
-  confirmAiProposal: (proposalId: number, action: 'DRAFT' | 'PUBLISH') => api.post<Record<string, unknown>>(`/hotel/ai/proposals/${proposalId}/confirm`, { action })
+  confirmAiProposal: (proposalId: number, action: 'DRAFT' | 'PUBLISH') => api.post<Record<string, unknown>>(`/hotel/ai/proposals/${proposalId}/confirm`, { action }),
+  clearAiConversation: (conversationId: number) => api.post<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}/clear`),
+  deleteAiConversation: (conversationId: number) => api.delete<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}`),
+  knowledge: (params?: { q?: string; category?: string; limit?: number }) => api.get<{ items: Array<Record<string, unknown>>; categories: string[]; total: number; disclosure: string }>('/hotel/knowledge', { params }),
+  refreshKnowledge: () => api.post<{ checked: number; refreshed: number; failed_count: number; failed: Array<{ name: string; reason: string }>; checked_at: string }>('/hotel/knowledge/refresh'),
+  salesCommand: (natural_language: string) => api.post<{ action: string; scope: string; affected: Array<Record<string, unknown>>; message: string }>('/hotel/products/sales-command', { natural_language }),
+  ordersOverview: () => api.get<{
+    total: number
+    confirmed: number
+    held: number
+    cancelled: number
+    confirmed_revenue: string
+    categories: Array<{ label: string; count: number; confirmed: number; revenue: string }>
+    orders: Array<{ id: number; product_name: string; category: string; amount: string; target_date: string; status: string; contact_name: string; contact_phone: string; note: string }>
+  }>('/hotel/orders/overview'),
+  integrationSettings: () => api.get<Record<string, any>>('/hotel/settings/integrations'),
+  updateIntegrationSettings: (payload: Record<string, unknown>) => api.put<Record<string, any>>('/hotel/settings/integrations', payload),
+  agentTokens: () => api.get<{ items: Array<{ id: number; name: string; is_active: boolean; created_at: string; last_used_at: string | null }> }>('/hotel/agent-tokens'),
+  createAgentToken: (name: string) => api.post<{ token: string; item: { id: number; name: string; is_active: boolean; created_at: string; last_used_at: string | null }; notice: string }>('/hotel/agent-tokens', { name }),
+  revokeAgentToken: (id: number) => api.post<{ revoked: boolean }>(`/hotel/agent-tokens/${id}/revoke`),
+  wsTicket: () => api.post<{ ticket: string; expires_in: number }>('/hotel/ws-ticket'),
+  exportData: () => api.get<Record<string, unknown>>('/hotel/settings/export')
 }
 
 export const merchantApi = {
@@ -56,12 +91,35 @@ export const merchantApi = {
 
 export const visitorApi = {
   products: (params?: Record<string, unknown>) => api.get<TravelProduct[]>('/visitor/products', { params }),
-  product: (id: number) => api.get<TravelProduct>(`/visitor/products/${id}`),
+  product: (id: number, nights = 1, roomInventoryId?: number | null) => api.get<TravelProduct>(`/visitor/products/${id}`, { params: roomInventoryId ? { nights, room_inventory_id: roomInventoryId } : { nights } }),
+  productDates: (id: number) => api.get<{ theme: string; dates: Array<{ id: number; target_date: string; weekday: string; sale_quantity: number; status: string; price: string; room_type: string }> }>(`/visitor/products/${id}/dates`),
+  productRooms: (id: number) => api.get<{ product_id: number; date: string; rooms: Array<{ room_inventory_id: number; room_type: string; max_guests: number; features: string; price: string; price_delta: string; sale_quantity: number; available: boolean; is_current: boolean }> }>(`/visitor/products/${id}/rooms`),
+  productAlternatives: (id: number) => api.get<{ date: string; current_room_type: string; room_types: Array<Record<string, any>>; same_room_packages: Array<Record<string, any>> }>(`/visitor/products/${id}/alternatives`),
   consult: (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/visitor/consult', payload),
+  assistantIntro: (productId?: number | null) => api.get<{ greeting: string; suggestions: string[] }>('/visitor/assistant/intro', { params: productId ? { product_id: productId } : undefined }),
   interpret: (payload: { natural_language: string }) => api.post<{ interpreted_needs: Record<string, unknown>; follow_up_questions: string[] }>('/visitor/interpret', payload),
   recommend: (payload: Record<string, unknown>) => api.post<{ results: Recommendation[]; trace_id: string; fallback_used: boolean; interpreted_needs: Record<string, unknown>; provider: string; skill_name: string; skill_version: string }>('/visitor/recommend', payload),
   intent: (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/visitor/intents', payload),
-  publicResources: (weather = 'RAIN') => api.get<Array<Record<string, unknown>>>('/visitor/public-resources', { params: { weather } })
+  publicResources: (weather = 'RAIN') => api.get<Array<Record<string, unknown>>>('/visitor/public-resources', { params: { weather } }),
+  guides: (query: string, near?: string) => api.get<Array<{
+    source: string
+    title: string
+    summary: string
+    content?: string
+    url: string
+    address?: string
+    area?: string
+    category_label?: string
+    crowds_label?: string
+    weather_label?: string
+    duration_minutes?: number | null
+    opening_hours?: string
+    reservation_notice?: string
+    best_time?: string
+    transport?: string
+    verified_at?: string | null
+    verification_status?: string
+  }>>('/visitor/guides', { params: near ? { query, near } : { query } })
 }
 
 export const demoApi = {

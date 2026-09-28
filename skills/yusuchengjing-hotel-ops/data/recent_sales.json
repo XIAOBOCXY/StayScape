@@ -1,0 +1,34 @@
+{
+  "data_type": "competition_test_data",
+  "period_days": 7,
+  "segments": [
+    {
+      "segment": "情侣/双人客",
+      "views": 260,
+      "inquiries": 72,
+      "intentions": 31,
+      "bookings": 18
+    },
+    {
+      "segment": "亲子家庭",
+      "views": 180,
+      "inquiries": 52,
+      "intentions": 21,
+      "bookings": 11
+    },
+    {
+      "segment": "年轻朋友结伴",
+      "views": 150,
+      "inquiries": 28,
+      "intentions": 12,
+      "bookings": 5
+    },
+    {
+      "segment": "本地周末微度假",
+      "views": 120,
+      "inquiries": 26,
+      "intentions": 11,
+      "bookings": 4
+    }
+  ]
+}

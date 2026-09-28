@@ -17,11 +17,11 @@ const replacementCandidates = computed(() => {
     .filter((item, index, list) => list.findIndex((candidate) => candidate.url === item.url) === index)
 })
 const currentMedia = computed(() => replacementIndex.value < 0 ? props.media : replacementCandidates.value[replacementIndex.value] || props.media)
+const showSource = computed(() => false)
 const loadMode = computed(() => props.eager || props.aspect === 'hero' ? 'eager' : 'lazy')
 // Tiny, operational cards need the whole frame for the actual image.  Keep
 // attribution available on detail/gallery/poster views where it can be read
 // without sitting on top of a title or a price.
-const showSource = computed(() => props.aspect !== 'card')
 
 function reset() { failed.value = false; loaded.value = false; replacementIndex.value = -1 }
 function useNextImage() {
@@ -37,7 +37,7 @@ watch(() => props.media.url, reset)
   <div :class="['media-image', `media-image--${aspect}`, { 'is-failed': failed, 'is-loading': !failed && !loaded, 'is-loaded': loaded }]">
     <img v-if="!failed" :src="currentMedia.url" :alt="currentMedia.alt" :loading="loadMode" :fetchpriority="loadMode === 'eager' ? 'high' : 'low'" decoding="async" @load="markLoaded" @error="useNextImage" />
     <div v-else class="media-fallback" role="img" :aria-label="`${media.alt}（图片暂不可用）`">
-      <span class="media-fallback__mark">S</span>
+      <span class="media-fallback__mark" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 32c6-9 11-14 16-14s10 5 16 14" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 35h24" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="33" cy="15" r="4" fill="currentColor"/></svg></span>
       <strong>{{ media.kind === 'culture' ? '一段在地体验' : '杭州旅行灵感' }}</strong>
       <small>图片加载失败，可在管理端上传实拍图</small>
     </div>

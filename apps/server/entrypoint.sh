@@ -2,7 +2,7 @@
 set -eu
 
 alembic upgrade head
-if [ "${SEED_DEMO_ON_STARTUP:-true}" = "true" ]; then
+if [ "${SEED_DEMO_ON_STARTUP:-false}" = "true" ] && [ "${APP_ENV:-development}" != "production" ]; then
   python /app/scripts/seed_demo.py
 fi
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000

@@ -43,9 +43,9 @@ def _created_sort_key(value: datetime | None) -> float:
     return value.timestamp()
 
 
-def _requirements(product: TravelProduct) -> dict[tuple[str, int], int]:
+def _requirements(product: TravelProduct, room_inventory_id: int | None = None) -> dict[tuple[str, int], int]:
     requirements: dict[tuple[str, int], int] = defaultdict(int)
-    requirements[("ROOM", product.room_inventory_id)] += 1
+    requirements[("ROOM", room_inventory_id or product.room_inventory_id)] += 1
     for row in product.resources:
         if row.resource_type in {"HOTEL_SERVICE", "PARTNER_RESOURCE"}:
             requirements[(row.resource_type, row.resource_id)] += max(1, int(row.quantity_per_package))
@@ -126,10 +126,10 @@ def _validate_source(product: TravelProduct, resource_type: str, source: Any) ->
             raise AppError("PARTNER_RESOURCE_UNAVAILABLE", f"合作资源{_source_name(source)}当前不可占用", retryable=True)
 
 
-def reserve_product_inventory(db: Session, product: TravelProduct) -> dict[str, Any]:
+def reserve_product_inventory(db: Session, product: TravelProduct, *, room_inventory_id: int | None = None) -> dict[str, Any]:
     """Atomically reserve one package from every physical source."""
 
-    requirements = _requirements(product)
+    requirements = _requirements(product, room_inventory_id)
     loaded: list[tuple[str, int, int, Any]] = []
     for (resource_type, resource_id), quantity in requirements.items():
         source = _source(db, product, resource_type, resource_id)
@@ -160,7 +160,11 @@ def reserve_product_inventory(db: Session, product: TravelProduct) -> dict[str, 
                 "after": after,
             }
         )
-    return {"allocations": allocations, "created_at": datetime.now(timezone.utc).isoformat()}
+    return {
+        "allocations": allocations,
+        "room_inventory_id": room_inventory_id or product.room_inventory_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _set_product_quantity_status(product: TravelProduct, quantity: int, preferred_status: str | None = None) -> None:

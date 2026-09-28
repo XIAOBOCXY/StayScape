@@ -25,6 +25,14 @@ const requestSchema = Type.Object({
     }, { additionalProperties: false }))),
 }, { additionalProperties: false });
 const insightSchema = Type.Object({ target_date: Type.Optional(Type.String()) }, { additionalProperties: false });
+const opportunitySchema = Type.Object({
+    target_date: Type.Optional(Type.String()),
+    target_crowd: Type.Optional(Type.String({ maxLength: 60 })),
+    party_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+    theme: Type.Optional(Type.String({ maxLength: 160 })),
+    knowledge_query: Type.Optional(Type.String({ maxLength: 500 })),
+    direction_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 8 })),
+}, { additionalProperties: false });
 const knowledgeSchema = Type.Object({
     query: Type.Optional(Type.String()),
     target_crowd: Type.Optional(Type.String()),
@@ -34,6 +42,11 @@ const knowledgeSchema = Type.Object({
 const proposalConfirmSchema = Type.Object({
     proposal_id: Type.Integer({ minimum: 1 }),
     action: Type.Union([Type.Literal("DRAFT"), Type.Literal("PUBLISH")]),
+}, { additionalProperties: false });
+const productHealthSchema = Type.Object({
+    target_date: Type.Optional(Type.String()),
+    product_id: Type.Optional(Type.Integer({ minimum: 1 })),
+    refresh_weather: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 function runtimeRequester(context) {
     const requesterId = context.requesterSenderId;
@@ -141,6 +154,17 @@ export default defineToolPlugin({
             },
         }),
         tool({
+            name: "stayscape_analyze_hotel_opportunity",
+            label: "余宿成景酒店机会分析",
+            description: "Read a fact-only near-term room, demand, weather, approved-resource, and sourced-knowledge brief before proposing a hotel product. This tool never creates or publishes a product.",
+            parameters: opportunitySchema,
+            outputSchema: Type.Object({ target_date: Type.String(), inventory_opportunities: Type.Array(Type.Unknown()), candidate_directions: Type.Array(Type.Unknown()) }, { additionalProperties: true }),
+            optional: true,
+            async execute(params, config, context) {
+                return callApi("hotel-opportunity", { hotel_id: Number(config.hotelId), payload: params }, config, context);
+            },
+        }),
+        tool({
             name: "stayscape_search_travel_knowledge",
             label: "StayScape Travel Knowledge",
             description: "Search curated Hangzhou tourism facts with source and verification state. Unverified facts are never bookable resources.",
@@ -171,6 +195,17 @@ export default defineToolPlugin({
             optional: true,
             async execute(params, config, context) {
                 return callApi("proposal-confirm", { hotel_id: Number(config.hotelId), payload: params }, config, context);
+            },
+        }),
+        tool({
+            name: "stayscape_recheck_product_health",
+            label: "余宿成景产品复核",
+            description: "After a hotel operator asks to recheck a weather, capacity, or service change, recalculate existing products. It may reduce quantity, use a valid substitute, or pause a product; it never publishes a new product.",
+            parameters: productHealthSchema,
+            outputSchema: Type.Object({ items: Type.Array(Type.Unknown()) }, { additionalProperties: true }),
+            optional: true,
+            async execute(params, config, context) {
+                return callApi("product-health-check", { hotel_id: Number(config.hotelId), payload: params }, config, context);
             },
         }),
     ],

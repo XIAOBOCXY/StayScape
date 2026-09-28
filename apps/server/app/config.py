@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     mock_agent_mode: str = "normal"
     # Server-only key; never serialized to a browser response.
     qwen_api_key: str = ""
+    deepseek_api_key: str = ""
     openclaw_base_url: str = ""
     openclaw_gateway_token: str = ""
     # OpenResponses routes to the Agent target; OpenClaw itself selects the

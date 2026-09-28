@@ -81,6 +81,49 @@ def test_agent_tool_returns_hotel_context_and_visitor_safe_products(client, monk
         assert "unit_cost" not in item
 
 
+def test_yusuchengjing_opportunity_brief_is_fact_only_and_uses_sourced_knowledge(client, monkeypatch):
+    configure_tool_auth(monkeypatch, settings)
+    context = client.post(
+        "/api/v1/agent-tools/hotel-context",
+        headers=tool_headers(settings),
+        json={"hotel_id": 1, "payload": {}},
+    ).json()
+    target_date = context["rooms"][0]["available_date"]
+    response = client.post(
+        "/api/v1/agent-tools/hotel-opportunity",
+        headers=tool_headers(settings),
+        json={
+            "hotel_id": 1,
+            "payload": {
+                "target_date": target_date,
+                "target_crowd": "FAMILY",
+                "party_size": 3,
+                "knowledge_query": "想带孩子去博物馆",
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["inventory_opportunities"]
+    assert body["candidate_directions"]
+    assert body["travel_knowledge"]
+    knowledge = body["travel_knowledge"][0]
+    assert knowledge["bookable"] is False
+    assert knowledge["knowledge_role"] == "PUBLIC_REFERENCE"
+    assert knowledge["source_url"]
+    assert "成本" not in str(body["eligible_partner_resources"])
+
+
+def test_only_operator_can_recheck_product_health(client, monkeypatch):
+    configure_tool_auth(monkeypatch, settings)
+    response = client.post(
+        "/api/v1/agent-tools/product-health-check",
+        headers=tool_headers(settings, role="HOTEL_SUPPORT"),
+        json={"hotel_id": 1, "payload": {}},
+    )
+    assert response.status_code == 403
+
+
 def test_visitor_or_support_cannot_create_product_draft(client, monkeypatch):
     configure_tool_auth(monkeypatch, settings)
     response = client.post(

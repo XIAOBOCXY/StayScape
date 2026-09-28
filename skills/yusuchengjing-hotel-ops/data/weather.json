@@ -1,0 +1,11 @@
+{
+  "data_type": "competition_test_data",
+  "date": "2026-09-12",
+  "condition": "小雨",
+  "temperature_min": 19,
+  "temperature_max": 24,
+  "rain_level": "LIGHT",
+  "outdoor_suitability": 0.45,
+  "source_type": "test_data",
+  "verification_status": "VERIFY_REQUIRED"
+}

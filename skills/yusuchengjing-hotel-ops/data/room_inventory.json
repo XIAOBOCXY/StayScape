@@ -1,0 +1,40 @@
+{
+  "data_type": "competition_test_data",
+  "as_of": "2026-09-11T14:00:00+08:00",
+  "stay_date": "2026-09-12",
+  "rooms": [
+    {
+      "room_id": "R001",
+      "room_type": "城景大床房",
+      "total_inventory": 20,
+      "remaining_inventory": 8,
+      "normal_price": 599,
+      "min_sell_price": 429,
+      "internal_cost": 240,
+      "recent_sales_velocity": 0.28,
+      "max_guests": 2
+    },
+    {
+      "room_id": "R002",
+      "room_type": "亲子双床房",
+      "total_inventory": 12,
+      "remaining_inventory": 5,
+      "normal_price": 699,
+      "min_sell_price": 529,
+      "internal_cost": 310,
+      "recent_sales_velocity": 0.41,
+      "max_guests": 3
+    },
+    {
+      "room_id": "R003",
+      "room_type": "朋友同行双床房",
+      "total_inventory": 10,
+      "remaining_inventory": 2,
+      "normal_price": 739,
+      "min_sell_price": 559,
+      "internal_cost": 335,
+      "recent_sales_velocity": 0.72,
+      "max_guests": 2
+    }
+  ]
+}

@@ -56,11 +56,13 @@ def _lookup(db: Session, model, hotel_id: int, field: str, value: str):
 
 def _normalize_legacy_themes(db: Session, hotel_id: int) -> None:
     for product in db.scalars(select(TravelProduct).where(TravelProduct.hotel_id == hotel_id)):
-        # Legacy showcase rows used local SVG/copy templates. Clear only the
-        # known SC demo rows so the UI never presents a template as an AI
-        # marketing result; real operator-generated assets are preserved.
+        # Legacy showcase rows used local SVG/copy templates. Drop only those
+        # placeholder assets: a generated poster (SVG payload) or an operator
+        # uploaded asset must survive a restart.
         if product.product_code.startswith("SC-"):
-            product.marketing_assets = []
+            assets = product.marketing_assets if isinstance(product.marketing_assets, list) else []
+            if not any(isinstance(asset, dict) and asset.get("poster_svg") for asset in assets):
+                product.marketing_assets = []
         replacement = LEGACY_THEME_RENAMES.get(product.theme)
         if not replacement:
             continue
@@ -81,7 +83,10 @@ def _copy_for(plan: dict[str, object], partner: PartnerResource, target_date: da
     """Visitor-facing demo words, without pretending an internal rule is copy."""
     name = str(plan["theme"])
     date_label = f"{target_date.month} 月 {target_date.day} 日"
-    title = f"{name} · 杭州一晚"
+    nights = int(plan.get("nights", 1) or 1)
+    # 1 晚沿用口语化的「杭州一晚」，多日产品直接写「4天3晚」，方便推荐时区分。
+    stay_suffix = f"{nights + 1}天{nights}晚" if nights > 1 else "杭州一晚"
+    title = f"{name} · {stay_suffix}"
     content = (
         f"{date_label}，先把行李放进房间，再去 {partner.address or '杭州城里'} 体验 {partner.resource_name}。"
         "不用把一天排满，给散步、吃饭和临时发现留一点空白。"
@@ -107,8 +112,21 @@ def seed_showcase_products(db: Session, hotel_id: int, target_date: date) -> dic
             )
         )
     )
-    start = target_date.toordinal() % len(SHOWCASE_PLANS)
-    plans = [SHOWCASE_PLANS[(start + offset * 7) % len(SHOWCASE_PLANS)] for offset in range(3)]
+    # Group the catalogue by room type and seed a consecutive slice, so each
+    # departure date gets several packages that share a room type.  That is what
+    # fills the detail page's「同一房型的其他搭配」with real, bookable options
+    # instead of a single card.
+    ordered_plans = sorted(SHOWCASE_PLANS, key=lambda plan: str(plan["room"]))
+    start = (target_date.toordinal() * 3) % len(ordered_plans)
+    plans = []
+    for offset in range(8):
+        plan = dict(ordered_plans[(start + offset) % len(ordered_plans)])
+        # 每四组留一组 3 晚的多日产品，让智能推荐有 3 天以上的长行程可选。
+        if offset % 4 == 3:
+            plan["nights"] = 3
+            plan["theme"] = f"{plan['theme']}·三日慢游"
+            plan["price"] = str(int(plan["price"]) + 1200)
+        plans.append(plan)
     created = 0
     for plan in plans:
         if plan["theme"] in existing_themes:
@@ -156,6 +174,45 @@ def seed_showcase_products(db: Session, hotel_id: int, target_date: date) -> dic
         ]
         unit_cost = Decimal(room.accounting_cost) + Decimal(partner.settlement_price) * int(plan["partner_quantity"])
         capacity = min(room.available_count, partner.remaining_capacity // max(1, int(plan["partner_quantity"])))
+        # 每个套餐再配一餐美食 + 一项其它体验，这样上午、下午、晚上都有内容，
+        # 多日产品也不会出现「整天自由安排」。
+        extra_partners = list(
+            db.scalars(
+                select(PartnerResource)
+                .join(PartnerResource.merchant)
+                .where(
+                    PartnerResource.available_date == target_date,
+                    PartnerResource.package_enabled.is_(True),
+                    PartnerResource.status == "AVAILABLE",
+                    PartnerResource.resource_name != plan["partner"],
+                    PartnerResource.remaining_capacity > 0,
+                )
+                .order_by(PartnerResource.remaining_capacity.desc())
+            ).all()
+        )
+        food_extra = next(
+            (item for item in extra_partners if any(word in item.resource_name for word in ("美食", "甜品", "杭帮菜", "点茶", "下午茶", "咖啡", "夜市"))),
+            None,
+        )
+        other_extra = next((item for item in extra_partners if item is not food_extra), None)
+        for extra in (food_extra, other_extra):
+            if extra is None:
+                continue
+            if any(row.resource_type == "PARTNER_RESOURCE" and row.resource_id == extra.id for row in rows):
+                continue
+            rows.append(
+                ProductResource(
+                    resource_type="PARTNER_RESOURCE",
+                    resource_id=extra.id,
+                    resource_name=extra.resource_name,
+                    quantity_per_package=1,
+                    unit_cost=extra.settlement_price,
+                    replaceable=True,
+                    required=False,
+                )
+            )
+            unit_cost += Decimal(extra.settlement_price)
+            capacity = min(capacity, int(extra.remaining_capacity or 0))
         for service_type, quantity in plan["services"]:
             service = db.scalar(
                 select(HotelService).where(
@@ -194,6 +251,7 @@ def seed_showcase_products(db: Session, hotel_id: int, target_date: date) -> dic
             weather=str(plan["weather"]),
             target_date=target_date,
             room_inventory_id=room.id,
+            nights=int(plan.get("nights", 1) or 1),
             listed_quantity=quantity,
             sale_quantity=quantity,
             unit_cost=unit_cost,

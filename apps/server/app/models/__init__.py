@@ -1,13 +1,16 @@
 from .base import Base
 from .entities import (
     AgentConversation,
+    AgentApiToken,
     Hotel,
     HotelService,
     Merchant,
     PartnerResource,
     ProductProposal,
     ProductAdjustmentRecord,
+    ProductRefinement,
     ProductResource,
+    ProductReview,
     PublicResource,
     ResourceChangeEvent,
     RoomInventory,
@@ -22,6 +25,7 @@ from .entities import (
 __all__ = [
     "Base",
     "AgentConversation",
+    "AgentApiToken",
     "User",
     "Hotel",
     "Merchant",
@@ -33,9 +37,11 @@ __all__ = [
     "TravelProduct",
     "ProductProposal",
     "ProductResource",
+    "ProductReview",
     "VisitorIntent",
     "WeatherSnapshot",
     "ResourceChangeEvent",
     "ProductAdjustmentRecord",
+    "ProductRefinement",
     "SkillCallLog",
 ]

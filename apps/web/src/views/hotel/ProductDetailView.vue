@@ -19,10 +19,29 @@ const marketingStyles = [
   { value: 'EMPATHETIC' as const, label: '情绪共鸣', hint: '从想放松、想陪伴、想换节奏的心情出发' },
   { value: 'SEEDING' as const, label: '轻松种草', hint: '朋友分享式的亮点和周末灵感' }
 ]
-const form = reactive({ target_date: '', target_crowd: 'FAMILY', theme: '', product_name: '', marketing_title: '', marketing_content: '', regenerate_marketing: true })
+const form = reactive({ target_date: '', target_crowd: 'FAMILY', theme: '', product_name: '', marketing_title: '', marketing_content: '', recommendation_reason: '', risk_message: '', regenerate_marketing: true })
+// 宣传素材逐条编辑：标题 / 正文 / 视觉方向 / 行动号召。
+const assetDialog = ref(false)
+const assetSaving = ref(false)
+const assetForm = reactive({ asset_type: '', title: '', content: '', visual_brief: '', call_to_action: '' })
 const activeAsset = computed(() => product.value?.marketing_assets?.find((asset) => asset.asset_type === activeAssetType.value) || product.value?.marketing_assets?.[0])
+// Operators read Chinese labels instead of raw resource enums.
+function resourceTypeLabel(value: string) {
+  return ({ ROOM: '酒店房间', HOTEL_SERVICE: '酒店服务', PARTNER_RESOURCE: '在地体验' } as Record<string, string>)[value] || '行程内容'
+}
+// Adjustment actions come from the engine as English codes; operators read the
+// business meaning instead.
+function adjustmentLabel(value: string) {
+  return ({
+    PAUSE_SHARED_CAPACITY: '共享资源不足，已暂停',
+    SHARED_CAPACITY_GUARD: '共享资源不足，已下调可售',
+    REPLACE_RESOURCE: '已替换资源',
+    RECALCULATE: '已重新计算',
+    PAUSE: '已暂停',
+  } as Record<string, string>)[value] || '已重新计算'
+}
 
-function fillForm(value: TravelProduct) { Object.assign(form, { target_date: value.target_date, target_crowd: value.target_crowd, theme: value.theme, product_name: value.product_name, marketing_title: value.marketing_title, marketing_content: value.marketing_content, regenerate_marketing: true }) }
+function fillForm(value: TravelProduct) { Object.assign(form, { target_date: value.target_date, target_crowd: value.target_crowd, theme: value.theme, product_name: value.product_name, marketing_title: value.marketing_title, marketing_content: value.marketing_content, recommendation_reason: value.recommendation_reason || '', risk_message: value.risk_message || '', regenerate_marketing: true }) }
 async function load() {
   loading.value = true
   try { const response = await hotelApi.product(Number(route.params.id)); product.value = response.data; adjustments.value = (response.data as TravelProduct & { adjustments?: Adjustment[] }).adjustments || []; fillForm(response.data) }
@@ -36,6 +55,22 @@ async function saveEdit() {
   catch (e) { ElMessage.error(errorMessage(e)) } finally { saving.value = false }
 }
 function openMarketingStudio() { marketingDialog.value = true }
+function openAssetEditor() {
+  const asset = activeAsset.value
+  if (!asset) { ElMessage.info('先生成一份宣传素材再编辑'); return }
+  Object.assign(assetForm, { asset_type: asset.asset_type, title: asset.title || '', content: asset.content || '', visual_brief: asset.visual_brief || '', call_to_action: asset.call_to_action || '' })
+  assetDialog.value = true
+}
+async function saveAsset() {
+  if (!product.value) return
+  assetSaving.value = true
+  try {
+    const updated = (await hotelApi.updateProduct(product.value.id, { marketing_assets: [{ ...assetForm }] })).data
+    product.value = updated
+    assetDialog.value = false
+    ElMessage.success('宣传素材已保存')
+  } catch (e) { ElMessage.error(errorMessage(e)) } finally { assetSaving.value = false }
+}
 async function regenerateMarketing() {
   if (!product.value) return
   marketingLoading.value = true
@@ -69,15 +104,15 @@ onMounted(load)
         <div><div class="eyebrow">产品详情 · {{ product.product_code }}</div><h1>{{ product.product_name }}</h1><p>{{ product.target_date }} · {{ product.theme }} · {{ product.party_size }} 人套餐</p></div>
         <div class="header-actions"><StatusTag :status="product.status" /><el-button plain @click="editDialog=true">编辑产品</el-button><el-button v-if="product.status === 'DRAFT'" type="primary" @click="setStatus('ON_SALE')">模拟发布</el-button><el-button v-if="['ON_SALE','LOW_STOCK'].includes(product.status)" plain @click="setStatus('PAUSED')">暂停销售</el-button><el-button type="danger" plain @click="removeProduct">删除</el-button></div>
       </div>
-      <div class="metric-grid"><div class="metric-card"><div class="metric-label">可售数量</div><div class="metric-value">{{ product.sale_quantity }} 套</div><div class="metric-hint">瓶颈：{{ product.bottleneck_resource }}</div></div><div class="metric-card"><div class="metric-label">单套成本</div><div class="metric-value">¥{{ product.unit_cost }}</div><div class="metric-hint">房间、服务、合作资源合计</div></div><div class="metric-card"><div class="metric-label">建议售价</div><div class="metric-value">¥{{ product.suggested_price }}</div><div class="metric-hint">最低允许 ¥{{ product.minimum_allowed_price }}</div></div><div class="metric-card"><div class="metric-label">单套毛利</div><div class="metric-value">¥{{ product.gross_profit }}</div><div class="metric-hint">毛利率 {{ (Number(product.gross_margin) * 100).toFixed(2) }}%</div></div></div>
+      <div class="metric-grid"><div class="metric-card"><div class="metric-label">可售数量</div><div class="metric-value">{{ product.sale_quantity }} 套</div></div><div class="metric-card"><div class="metric-label">单套成本</div><div class="metric-value">¥{{ product.unit_cost }}</div><div class="metric-hint">房间、服务、合作资源合计</div></div><div class="metric-card"><div class="metric-label">建议售价</div><div class="metric-value">¥{{ product.suggested_price }}</div><div class="metric-hint">最低允许 ¥{{ product.minimum_allowed_price }}</div></div><div class="metric-card"><div class="metric-label">单套毛利</div><div class="metric-value">¥{{ product.gross_profit }}</div><div class="metric-hint">毛利率 {{ (Number(product.gross_margin) * 100).toFixed(2) }}%</div></div></div>
 
       <div class="detail-grid">
         <div>
-          <div class="panel"><div class="section-title" style="margin-top:0"><h2>资源组成与时间</h2><span>这次出行包含什么</span></div><table class="data-table"><thead><tr><th>资源</th><th>日期</th><th>场次</th><th>每套消耗</th><th>单位成本</th></tr></thead><tbody><tr v-for="item in product.resources" :key="item.id"><td><strong>{{ item.resource_name }}</strong><div class="muted">{{ item.resource_type }}<span v-if="item.address"> · {{ item.address }}</span></div></td><td>{{ item.available_date || product.target_date }}</td><td>{{ item.start_time?.slice(0,5) || '--' }} - {{ item.end_time?.slice(0,5) || '--' }}</td><td>{{ item.quantity_per_package }}</td><td>¥{{ item.unit_cost }}</td></tr></tbody></table></div>
-          <div class="panel marketing-panel marketing-studio" style="margin-top:18px"><div class="section-title" style="margin-top:0"><div><div class="eyebrow">宣传素材</div><h2>把产品变成可发布的内容</h2><span>游客端会直接使用这里的海报、旅行灵感和卖点。</span></div><div class="marketing-panel-actions"><el-button plain @click="router.push(`/visitor/products/${product.id}`)">预览游客端</el-button><el-button type="primary" plain :loading="marketingLoading" @click="openMarketingStudio">生成宣传素材</el-button></div></div><h3>{{ product.marketing_title }}</h3><p class="muted marketing-copy">{{ product.marketing_content }}</p><div v-if="product.marketing_assets?.length" class="marketing-tabs"><button v-for="asset in product.marketing_assets" :key="asset.asset_type" :class="{active: activeAsset?.asset_type === asset.asset_type}" @click="activeAssetType = asset.asset_type">{{ asset.asset_type === 'POSTER' ? '海报' : asset.asset_type === 'SOCIAL_POST' ? '社媒种草' : asset.asset_type === 'SHORT_VIDEO_SCRIPT' ? '短视频脚本' : '门店卖点' }}</button></div><div v-if="activeAsset" class="marketing-focus"><div class="marketing-focus__visual"><img v-if="activeAsset.image_url" class="marketing-poster__image" :src="activeAsset.image_url" :alt="activeAsset.title" loading="lazy" decoding="async" /><img v-else-if="activeAsset.poster_svg" class="marketing-poster__image" :src="posterSvgDataUri(activeAsset.poster_svg)" :alt="activeAsset.title" loading="lazy" decoding="async" /><div v-else class="marketing-focus__text"><div class="eyebrow">{{ activeAsset.platform }}</div><h3>{{ activeAsset.title }}</h3><p>{{ activeAsset.content }}</p></div><el-button v-if="activeAsset.poster_svg" size="small" plain @click="downloadPoster(activeAsset)">下载 SVG 海报</el-button><small v-if="activeAsset.image_url" class="ai-image-note">AI 配图 · {{ activeAsset.image_model }}<span v-if="activeAsset.image_watermarked"> · 已加 AI 标识</span></small></div><div class="marketing-focus__meta"><span>{{ activeAsset.platform }}</span><p>{{ activeAsset.content }}</p><small>视觉方向：{{ activeAsset.visual_brief }}</small><strong>{{ activeAsset.call_to_action }}</strong></div></div><div v-if="!product.marketing_assets?.length" class="empty-state">暂无营销素材，点击重新生成。</div><p class="danger-text" style="line-height:1.7">{{ product.risk_message }}</p></div>
+          <div class="panel"><div class="section-title" style="margin-top:0"><h2>资源组成与时间</h2><span>这次出行包含什么</span></div><table class="data-table"><thead><tr><th>资源</th><th>日期</th><th>场次</th><th>每套消耗</th><th>单位成本</th></tr></thead><tbody><tr v-for="item in product.resources" :key="item.id"><td><strong>{{ item.resource_name }}</strong><div class="muted">{{ resourceTypeLabel(item.resource_type) }}<span v-if="item.address"> · {{ item.address }}</span></div></td><td>{{ item.available_date || product.target_date }}</td><td>{{ item.start_time?.slice(0,5) || '--' }} - {{ item.end_time?.slice(0,5) || '--' }}</td><td>{{ item.quantity_per_package }}</td><td>¥{{ item.unit_cost }}</td></tr></tbody></table></div>
+          <div class="panel marketing-panel marketing-studio" style="margin-top:18px"><div class="section-title" style="margin-top:0"><div><h2>宣传素材</h2></div><div class="marketing-panel-actions"><el-button plain @click="router.push(`/visitor/products/${product.id}`)">预览游客端</el-button><el-button plain @click="openAssetEditor">编辑当前素材</el-button><el-button type="primary" plain :loading="marketingLoading" @click="openMarketingStudio">生成宣传素材</el-button></div></div><h3>{{ product.marketing_title }}</h3><p class="muted marketing-copy">{{ product.marketing_content }}</p><div v-if="product.marketing_assets?.length" class="marketing-tabs"><button v-for="asset in product.marketing_assets" :key="asset.asset_type" :class="{active: activeAsset?.asset_type === asset.asset_type}" @click="activeAssetType = asset.asset_type">{{ asset.asset_type === 'POSTER' ? '海报' : asset.asset_type === 'SOCIAL_POST' ? '社媒种草' : asset.asset_type === 'SHORT_VIDEO_SCRIPT' ? '短视频脚本' : '门店卖点' }}</button></div><div v-if="activeAsset" class="marketing-focus"><div class="marketing-focus__visual"><img v-if="activeAsset.image_url" class="marketing-poster__image" :src="activeAsset.image_url" :alt="activeAsset.title" loading="lazy" decoding="async" /><img v-else-if="activeAsset.poster_svg" class="marketing-poster__image" :src="posterSvgDataUri(activeAsset.poster_svg)" :alt="activeAsset.title" loading="lazy" decoding="async" /><div v-else class="marketing-focus__text"><div class="eyebrow">{{ activeAsset.platform }}</div><h3>{{ activeAsset.title }}</h3><p>{{ activeAsset.content }}</p></div><el-button v-if="activeAsset.poster_svg" size="small" plain @click="downloadPoster(activeAsset)">下载 SVG 海报</el-button><small v-if="activeAsset.image_url" class="ai-image-note">AI 配图 · {{ activeAsset.image_model }}<span v-if="activeAsset.image_watermarked"> · 已加 AI 标识</span></small></div><div class="marketing-focus__meta"><span>{{ activeAsset.platform }}</span><p>{{ activeAsset.content }}</p><small>视觉方向：{{ activeAsset.visual_brief }}</small><strong>{{ activeAsset.call_to_action }}</strong></div></div><div v-if="!product.marketing_assets?.length" class="empty-state">暂无营销素材，点击重新生成。</div><p class="danger-text" style="line-height:1.7">{{ product.risk_message }}</p></div>
         </div>
         <div>
-          <div class="panel"><div class="section-title" style="margin-top:0"><h2>动态调整</h2><span>{{ adjustments.length }} 条</span></div><div v-if="!adjustments.length" class="empty-state">资源变化会出现在这里</div><div v-for="item in adjustments" :key="item.id" style="padding:13px 0;border-top:1px solid var(--line)"><div style="display:flex;justify-content:space-between"><strong>{{ item.old_quantity }} → {{ item.new_quantity }} 套</strong><span class="muted">{{ item.action }}</span></div><p class="muted" style="line-height:1.6">{{ item.reason }}</p></div></div>
+          <div class="panel"><div class="section-title" style="margin-top:0"><h2>动态调整</h2><span>{{ adjustments.length }} 条</span></div><div v-if="!adjustments.length" class="empty-state">资源变化会出现在这里</div><div v-for="item in adjustments" :key="item.id" style="padding:13px 0;border-top:1px solid var(--line)"><div style="display:flex;justify-content:space-between"><strong>{{ item.old_quantity }} → {{ item.new_quantity }} 套</strong><span class="muted">{{ adjustmentLabel(item.action) }}</span></div><p class="muted" style="line-height:1.6">{{ item.reason }}</p></div></div>
           <div class="panel" style="margin-top:18px"><div class="section-title" style="margin-top:0"><h2>推荐说明</h2></div><p class="muted" style="line-height:1.8">{{ product.recommendation_reason }}</p><p class="danger-text" style="line-height:1.7">{{ product.risk_message }}</p></div>
         </div>
       </div>
@@ -100,8 +135,12 @@ onMounted(load)
   </el-dialog>
 
   <el-dialog v-model="editDialog" title="编辑产品内容与时间" width="680px">
-    <el-form label-position="top"><div class="form-grid"><el-form-item label="产品名称" class="full"><el-input v-model="form.product_name" /></el-form-item><el-form-item label="入住日期"><el-date-picker v-model="form.target_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item><div class="form-weather-note">天气会在保存时从服务器获取可信预报；超出预报范围时会明确标记为“需确认”。</div><el-form-item label="目标客群"><el-select v-model="form.target_crowd" style="width:100%"><el-option label="亲子家庭" value="FAMILY" /><el-option label="情侣" value="COUPLE" /><el-option label="本地周末客" value="LOCAL" /></el-select></el-form-item><el-form-item label="主题方向"><el-input v-model="form.theme" /></el-form-item><el-form-item label="营销标题" class="full"><el-input v-model="form.marketing_title" /></el-form-item><el-form-item label="营销内容" class="full"><el-input v-model="form.marketing_content" type="textarea" :rows="4" /></el-form-item><el-form-item label="保存后重新生成营销素材" class="full"><el-switch v-model="form.regenerate_marketing" active-text="是" inactive-text="否" /></el-form-item></div></el-form>
+    <el-form label-position="top"><div class="form-grid"><el-form-item label="产品名称" class="full"><el-input v-model="form.product_name" /></el-form-item><el-form-item label="入住日期"><el-date-picker v-model="form.target_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item><div class="form-weather-note">天气会在保存时从服务器获取可信预报；超出预报范围时会明确标记为“需确认”。</div><el-form-item label="目标客群"><el-select v-model="form.target_crowd" style="width:100%"><el-option label="亲子家庭" value="FAMILY" /><el-option label="情侣" value="COUPLE" /><el-option label="本地周末客" value="LOCAL" /></el-select></el-form-item><el-form-item label="主题方向"><el-input v-model="form.theme" /></el-form-item><el-form-item label="营销标题" class="full"><el-input v-model="form.marketing_title" /></el-form-item><el-form-item label="营销内容" class="full"><el-input v-model="form.marketing_content" type="textarea" :rows="4" /></el-form-item><el-form-item label="推荐理由" class="full"><el-input v-model="form.recommendation_reason" type="textarea" :rows="3" /></el-form-item><el-form-item label="风险说明" class="full"><el-input v-model="form.risk_message" type="textarea" :rows="2" /></el-form-item><el-form-item label="保存后重新生成营销素材" class="full"><el-switch v-model="form.regenerate_marketing" active-text="是" inactive-text="否" /></el-form-item></div></el-form>
     <template #footer><el-button @click="editDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveEdit">保存并重算</el-button></template>
+  </el-dialog>
+  <el-dialog v-model="assetDialog" title="编辑宣传素材" width="620px">
+    <el-form label-position="top"><el-form-item label="标题"><el-input v-model="assetForm.title" /></el-form-item><el-form-item label="正文"><el-input v-model="assetForm.content" type="textarea" :rows="5" /></el-form-item><el-form-item label="视觉方向"><el-input v-model="assetForm.visual_brief" type="textarea" :rows="2" /></el-form-item><el-form-item label="行动号召"><el-input v-model="assetForm.call_to_action" /></el-form-item></el-form>
+    <template #footer><el-button @click="assetDialog=false">取消</el-button><el-button type="primary" :loading="assetSaving" @click="saveAsset">保存素材</el-button></template>
   </el-dialog>
 </template>
 

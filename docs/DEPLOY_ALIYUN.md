@@ -93,8 +93,8 @@ bash scripts/deploy.sh live
 3. 生成私密 Token
 4. 渲染不入 Git 的 OpenClaw 配置
 5. 构建 PostgreSQL、FastAPI、Vue、Nginx 和固定版本官方 `ghcr.io/openclaw/openclaw:2026.6.9-slim`，同时安装版本匹配的 Qwen 与 Feishu 官方插件
-6. 启动 Alembic、幂等演示 Seed、单 Agent `stayscape-main`、三个 Skill 和 Tool Plugin
-7. 通过 `openclaw skills list --agent stayscape-main --json` 检查三个 Skill，并检查 Qwen provider、StayScape Tool Plugin 和模型清单
+6. 启动 Alembic、幂等演示 Seed、单 Agent `stayscape-main`、四个 Skill 和 Tool Plugin
+7. 通过 `openclaw skills list --agent stayscape-main --json` 检查四个 Skill，并检查 Qwen provider、StayScape Tool Plugin 和模型清单
 8. 通过一次真实 `POST /v1/responses` smoke test 后才把 FastAPI 的 `OPENCLAW_LIVE_READY` 标记为 true；模型 Key 无效时部署失败，不伪装成 Live
 
 访问 `http://<ECS公网IP>/`。演示账号由 Seed 创建并由部署输出提示，登录页不会预填用户名或密码。正式比赛前请在服务端更换演示密码；确认演示数据后，把 `SEED_DEMO_ON_STARTUP=false` 写入 `.env`，再执行：

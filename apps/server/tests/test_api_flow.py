@@ -520,3 +520,41 @@ def test_public_reference_cannot_be_selected_for_formal_package(client, hotel_to
         "visitor_budget": "900",
     })
     assert response.status_code == 400
+
+
+
+def test_public_items_excludes_expired_products(monkeypatch):
+    from datetime import date, timedelta
+    from types import SimpleNamespace
+    from app.api.v1 import visitor
+
+    active = SimpleNamespace(id=1, target_date=date.today() + timedelta(days=1), status='ON_SALE')
+    expired = SimpleNamespace(id=2, target_date=date.today() - timedelta(days=1), status='ON_SALE')
+    monkeypatch.setattr(visitor, 'list_products', lambda *args, **kwargs: [active, expired])
+
+    result = visitor.public_items(object())
+    assert [item.id for item in result] == [1]
+
+
+
+def test_compact_product_payload_omits_detail_fields():
+    from app.api.v1.visitor import compact_product_payload
+
+    payload = {
+        "marketing_content": "long story",
+        "marketing_assets": [{"title": "poster"}],
+        "resources": [{"resource_name": "room"}],
+        "day_plan": [{"title": "day"}],
+        "route_plan": [{"title": "route"}],
+        "detail_sections": {"intro": ["detail"]},
+        "reviews": [{"content": "review"}],
+        "rating_average": 4.8,
+        "rating_count": 2,
+        "product_name": "card",
+    }
+    compact = compact_product_payload(payload)
+    assert compact["product_name"] == "card"
+    assert compact["marketing_content"] == ""
+    assert compact["resources"] == []
+    assert compact["day_plan"] == []
+    assert compact["route_plan"] == []

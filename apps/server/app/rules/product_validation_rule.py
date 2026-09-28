@@ -37,7 +37,7 @@ def validate_package(
     unit_cost: Decimal,
     room_minimum_price: Decimal,
     minimum_gross_margin: Decimal,
-    visitor_budget: Decimal,
+    visitor_budget: Decimal | None,
     preferred_price: Decimal | None,
     warnings: list[str] | None = None,
 ) -> PackageValidation:
@@ -50,4 +50,3 @@ def validate_package(
         preferred_price=preferred_price,
     )
     return PackageValidation(capacity=capacity, pricing=pricing, warnings=warnings or [])
-

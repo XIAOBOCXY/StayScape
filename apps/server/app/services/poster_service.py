@@ -279,6 +279,11 @@ def render_poster_svg(
     theme: str,
     weather: str,
     target_date: str = "",
+    stay_label: str = "",
+    experience_line: str = "",
+    highlights: list[str] | None = None,
+    route_stops: list[str] | None = None,
+    hero_image_url: str | None = None,
     variant_index: int = 0,
     media_url: str | None = None,
     media_data_uri: str | None = None,
@@ -287,8 +292,12 @@ def render_poster_svg(
     """Render a standalone share card with a product-specific visual hierarchy."""
     category = classify_poster(title, subtitle, partner_name, theme, target_crowd=target_crowd)
     accent, ink, paper = _PALETTES.get(category, _PALETTES["city_walk"])
-    chosen_url = media_url or select_media_url(category, variant_index)
+    # Prefer the product's own current image (the locally hosted web photo),
+    # then the caller-supplied media, then the curated catalog fallback.
+    chosen_url = hero_image_url or media_url or select_media_url(category, variant_index)
     media = media_data_uri or _local_media_data_uri(chosen_url) or _remote_data_uri(chosen_url)
+    if media is None and hero_image_url and hero_image_url != media_url:
+        media = _remote_data_uri(media_url or "") or _local_media_data_uri(select_media_url(category, variant_index))
     image_svg = (
         f'<image href="{_xml(media)}" x="44" y="126" width="992" height="622" preserveAspectRatio="xMidYMid slice" clip-path="url(#heroClip)"/>'
         if media else ""
@@ -300,11 +309,31 @@ def render_poster_svg(
     )
     crowd = _CROWD_LABEL.get(target_crowd, "杭州周末")
     category_label = _CATEGORY_LABEL.get(category, "杭州漫游")
-    experience = _text_block(f"{room_name} · {partner_name}", 82, 1035, 840, 24, ink, max_lines=1, weight=680)
-    story = _text_block(subtitle or creative_angle or f"把这一晚和{partner_name}留给自己。", 82, 1118, 820, 24, "#5D6B68", max_lines=2, weight=430, line_gap=34)
-    address_line = _text_block(address or "杭州", 82, 1245, 560, 18, "#7B8986", max_lines=1, weight=500)
+    experience = _text_block(experience_line or f"{room_name} · {partner_name}", 82, 1006, 840, 24, ink, max_lines=1, weight=680)
+    address_line = _text_block(address or "杭州", 82, 1268, 620, 18, "#7B8986", max_lines=1, weight=500)
     art = _decorative_art(category, accent, paper, variant_index)
     style = f"{category}-publish-{variant_index % 3}"
+    highlight_lines = [str(item)[:42] for item in (highlights or [])][:3]
+    highlights_svg = "".join(
+        f'<circle cx="92" cy="{1050 + index * 34}" r="5" fill="{accent}"/>'
+        f'<text x="110" y="{1058 + index * 34}" fill="#4C5A56" font-size="22" font-weight="520" font-family="Inter, Arial, Microsoft YaHei, sans-serif">{_xml(line)}</text>'
+        for index, line in enumerate(highlight_lines)
+    )
+    stops = [str(item)[:10] for item in (route_stops or [])][:4]
+    route_svg = ""
+    if stops:
+        positions = [150, 420, 690, 960][: len(stops)]
+        route_svg = (
+            f'<text x="82" y="{1198 if highlight_lines else 1080}" fill="{ink}" font-size="20" font-weight="700" '
+            f'font-family="Inter, Arial, Microsoft YaHei, sans-serif">路线</text>'
+            + f'<line x1="{positions[0]}" y1="{1256 if highlight_lines else 1138}" x2="{positions[-1]}" y2="{1256 if highlight_lines else 1138}" stroke="{accent}" stroke-width="4" opacity=".5"/>'
+            + "".join(
+                f'<circle cx="{positions[index]}" cy="{1256 if highlight_lines else 1138}" r="14" fill="{accent}"/>'
+                f'<text x="{positions[index]}" y="{1262 if highlight_lines else 1144}" text-anchor="middle" fill="#fff" font-size="16" font-weight="700" font-family="Inter, Arial, Microsoft YaHei, sans-serif">{index + 1}</text>'
+                f'<text x="{positions[index]}" y="{1290 if highlight_lines else 1172}" text-anchor="middle" fill="#6F7B78" font-size="17" font-family="Inter, Arial, Microsoft YaHei, sans-serif">{_xml(name)}</text>'
+                for index, name in enumerate(stops)
+            )
+        )
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" viewBox="0 0 1080 1440" data-layout="{style}" data-category="{category}">
   <defs>
     <clipPath id="heroClip"><rect x="44" y="126" width="992" height="622" rx="42"/></clipPath>
@@ -325,13 +354,14 @@ def render_poster_svg(
   <rect x="82" y="658" width="236" height="48" rx="24" fill="#111" opacity=".34"/>
   <text x="200" y="690" text-anchor="middle" fill="#fff" font-size="19" font-weight="650" font-family="Inter, Arial, Microsoft YaHei, sans-serif">{_xml(crowd)}</text>
   <rect x="744" y="658" width="252" height="48" rx="24" fill="{accent}" opacity=".96"/>
-  <text x="870" y="690" text-anchor="middle" fill="{ink}" font-size="19" font-weight="760" font-family="Inter, Arial, Microsoft YaHei, sans-serif">杭州 · 一晚一游</text>
+  <text x="870" y="690" text-anchor="middle" fill="{ink}" font-size="19" font-weight="760" font-family="Inter, Arial, Microsoft YaHei, sans-serif">{_xml(stay_label or "住宿 + 在地体验")}</text>
   <rect x="58" y="778" width="964" height="500" rx="38" fill="#fff"/>
   <rect x="58" y="778" width="964" height="500" rx="38" fill="url(#paperGlow)"/>
   {title_svg}
   <rect x="80" y="968" width="114" height="6" rx="3" fill="{accent}"/>
   {experience}
-  {story}
+  {highlights_svg}
+  {route_svg}
   {address_line}
   <rect x="80" y="1306" width="920" height="1" fill="{ink}" opacity=".13"/>
   <text x="82" y="1362" fill="{ink}" font-size="20" font-weight="670" font-family="Inter, Arial, Microsoft YaHei, sans-serif">收藏这个周末</text>
@@ -354,6 +384,11 @@ def poster_asset(
     theme: str,
     weather: str,
     target_date: str = "",
+    stay_label: str = "",
+    experience_line: str = "",
+    highlights: list[str] | None = None,
+    route_stops: list[str] | None = None,
+    hero_image_url: str | None = None,
     variant_index: int = 0,
     creative_angle: str = "",
     media_url: str | None = None,
@@ -371,6 +406,11 @@ def poster_asset(
             theme=theme,
             weather=weather,
             target_date=target_date,
+            stay_label=stay_label,
+            experience_line=experience_line,
+            highlights=highlights,
+            route_stops=route_stops,
+            hero_image_url=hero_image_url,
             variant_index=variant_index,
             creative_angle=creative_angle,
             media_url=media_url,

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "YuSuChengJingProduct",
+  "type": "object",
+  "required": ["product_id", "status", "stay_date", "name", "target_segment", "room", "included_components", "capacity", "finance", "validation"],
+  "properties": {
+    "product_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["READY_FOR_REVIEW", "DRAFT", "ACTIVE", "PAUSED"]},
+    "stay_date": {"type": "string", "format": "date"},
+    "name": {"type": "string", "minLength": 1},
+    "tagline": {"type": "string"},
+    "business_goal": {"type": "string"},
+    "target_segment": {"type": "string"},
+    "purchase_scenario": {"type": "string"},
+    "room": {"type": "object"},
+    "included_components": {"type": "array", "minItems": 2},
+    "capacity": {"type": "object", "required": ["max_sellable", "bottleneck_resource"]},
+    "finance": {"type": "object", "required": ["total_cost", "suggested_price", "gross_margin_rate", "minimum_margin_rate"]},
+    "recommended_route": {"type": "array"},
+    "marketing": {"type": "object"},
+    "validation": {"type": "object", "required": ["status", "validated_at"]}
+  },
+  "additionalProperties": true
+}

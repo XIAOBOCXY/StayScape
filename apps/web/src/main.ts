@@ -13,4 +13,6 @@ app.use(createPinia())
 app.use(router)
 app.use(ElementPlus)
 app.use(VanButton)
-app.mount('#app')
+// 等首屏路由解析完再挂载：否则会先渲染一帧「未匹配任何路由」的布局
+// （旅居助手会因此先闪一下窄屏再变宽）。
+void router.isReady().then(() => app.mount('#app'))

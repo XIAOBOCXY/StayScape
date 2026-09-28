@@ -12,7 +12,7 @@ import sys
 from typing import Any
 
 
-REQUIRED = {"qwen", "stayscape-openclaw-plugin"}
+REQUIRED = {"stayscape-openclaw-plugin"}
 
 
 def strings(value: Any):
