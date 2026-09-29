@@ -579,7 +579,29 @@ class ProductAdvisor:
             room_row = next((row for row in rooms if row["room_type"] == chosen_room), rooms[0])
             chosen_date = room_row["date"]
 
-        # 后续的推荐方向、选中标记和当前产品都以本轮真正选中的日期和房型为准。
+        if int(room_row.get("max_guests") or 0) < party_size:
+            same_day_capacity = [
+                row for row in rooms
+                if row["date"] == chosen_date
+                and int(row["remaining"]) > 0
+                and int(row.get("max_guests") or 0) >= party_size
+            ]
+            if same_day_capacity and parsed["room_type"] is None:
+                room_row = max(same_day_capacity, key=lambda row: int(row["remaining"]))
+                chosen_room = room_row["room_type"]
+            else:
+                room_label = room_row["room_type"]
+                capacity = room_row["max_guests"]
+                return self._date_validation_answer(
+                    state,
+                    {
+                        "code": "ROOM_CAPACITY_INSUFFICIENT",
+                        "message": f"{room_label}最多接待 {capacity} 人，无法承接 {party_size} 人套餐；当前方案未修改",
+                    },
+                    available_dates,
+                )
+
+
         planning_state = {
             **state,
             "room_type": str(room_row["room_type"]),
@@ -720,7 +742,7 @@ class ProductAdvisor:
         hotel_address = str(getattr(hotel, "address", "") or "")
         # 2) 库存压力：未来几天里「余量 × 房价」最高的那天/房型
         pressure = sorted(
-            (row for row in rooms if int(row["remaining"]) > 0),
+            (row for row in rooms if int(row["remaining"]) > 0 and int(row.get("max_guests") or 0) >= party_size),
             key=lambda row: (-(int(row["remaining"]) * float(row["normal_price"])), row["date"]),
         )
         if not pressure:

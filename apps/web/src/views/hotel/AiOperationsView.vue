@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { showToast } from 'vant'
 import { hotelApi } from '../../api'
 import { errorMessage } from '../../api/client'
-import { validationChangeNote } from './productGenerationState.mjs'
+import { primaryFromRefinedProduct, validationChangeNote } from './productGenerationState.mjs'
 
 type AnyRecord = Record<string, any>
 
@@ -100,8 +100,7 @@ const knowledgeTotal = computed(() => Number(overview.value.knowledge_total ?? (
 const primarySpec = computed<AnyRecord | null>(() => (advisor.value?.primary as AnyRecord) || null)
 const judgement = computed<AnyRecord>(() => (advisor.value?.judgement as AnyRecord) || {})
 const primaryExperience = computed<AnyRecord | null>(() => ((primarySpec.value?.experiences as AnyRecord[]) || [])[0] || null)
-// 推荐卡和当前选择只保留一份状态：当前主方案的日期、房型和第一项体验
-// 决定哪张卡显示“当前选择”，后端返回的 is_current 只作为兼容旧快照的兜底。
+// 顶部只显示主推与备选；完整的当前选择只在下方展开，避免同一结论重复出现。
 const rawPlans = computed<AnyRecord[]>(() => ((judgement.value.plans as AnyRecord[]) || []).slice(0, 4))
 function planKey(item: AnyRecord) {
   return [item.target_date, item.room_type, item.resource_name].map((value) => String(value || '')).join('|')
@@ -110,44 +109,19 @@ const selectedPlanKey = computed(() => {
   const primary = primarySpec.value
   return primary ? planKey({ target_date: primary.target_date, room_type: primary.room_type, resource_name: primary.experiences?.[0]?.name }) : ''
 })
-function currentPlanCard() {
-  const primary = primarySpec.value
-  if (!primary) return null
-  const experienceNames = ((primary.experiences || []) as AnyRecord[]).map((item) => String(item.name || '')).filter(Boolean)
-  return {
-    label: '当前选择',
-    name: String(primary.room_type || '') + ' × ' + (experienceNames.join('、') || '待选体验'),
-    target_date: primary.target_date,
-    weekday: primary.weekday,
-    crowd_label: primary.crowd_label,
-    party_size: primary.party_size,
-    room_type: primary.room_type,
-    resource_name: experienceNames[0] || '',
-    address: primary.experiences?.[0]?.address || '',
-    window: primary.experiences?.map((item: AnyRecord) => item.window).filter(Boolean).join('、'),
-    estimated_price: primary.price,
-    remaining: primary.room_quantity,
-    max_sellable: primary.max_sellable,
-    fit_label: primary.selection_notice ? '需留意' : '当前方案',
-    fit_reason: [primary.conclusion, primary.route_reason, primary.selection_notice].filter(Boolean).join('；'),
-    is_current: true,
-    is_ai_primary: false,
-    message: '',
-  } as AnyRecord
+function concisePlanReason(item: AnyRecord) {
+  const text = String(item.fit_reason || planReason(item) || '').trim()
+  const first = text.split(/[；。]/).map((part) => part.trim()).find(Boolean) || ''
+  const compact = first.replace(/^(?:推荐理由|适配点|主推理由|备选特点)\s*(?:[：:]\s*|\s+)/, '')
+  return compact.length > 42 ? compact.slice(0, 42) + '…' : compact
 }
 const plans = computed<AnyRecord[]>(() => {
-  const selected = currentPlanCard()
   const list: AnyRecord[] = rawPlans.value.map((item) => ({
     ...item,
     is_current: selectedPlanKey.value ? planKey(item) === selectedPlanKey.value : Boolean(item.is_current),
     is_ai_primary: Boolean(item.is_ai_primary) || item.label === 'AI主推',
   }))
-  if (!selected) return list
-  const selectedIndex = list.findIndex((item) => item.is_current)
-  if (selectedIndex < 0) return [selected, ...list].slice(0, 4)
-  const original: AnyRecord = list[selectedIndex]
-  list[selectedIndex] = { ...original, ...selected, label: original.label, is_ai_primary: original.is_ai_primary } as AnyRecord
-  return list
+  return list.filter((item) => !item.is_current || item.is_ai_primary)
 })
 const inventoryRoomOptions = computed<AnyRecord[]>(() => inventoryRooms.value
   .filter((room) => room.status === 'AVAILABLE' && Number(room.available_count || 0) > 0 && Number(room.max_guests || 0) > 0)
@@ -437,15 +411,8 @@ function applyRefinedProduct(refinedProduct: AnyRecord | undefined, instruction:
   if (!refinedProduct) return
   const current = primarySpec.value || {}
   const nextPrimary: AnyRecord = {
-    ...current,
-    product_id: refinedProduct.id,
-    product_name: refinedProduct.product_name || current.product_name,
-    target_date: refinedProduct.target_date || current.target_date,
-    crowd: refinedProduct.target_crowd || current.crowd,
+    ...primaryFromRefinedProduct(refinedProduct, current),
     crowd_label: crowdLabel(refinedProduct.target_crowd || current.crowd),
-    party_size: refinedProduct.party_size ?? current.party_size,
-    price: refinedProduct.suggested_price ?? current.price,
-    max_sellable: refinedProduct.sale_quantity ?? current.max_sellable,
   }
   const changes = primaryDiffs(previousPrimary.value, nextPrimary)
   changeDetails.value = changes
@@ -463,8 +430,10 @@ async function submit() {
   submitting.value = true
   processingMessage.value = '正在根据你的要求重新计算方案…'
   try {
-    if (editingProduct.value) {
-      const response = await hotelApi.refineProduct(Number(editingProduct.value.id), text)
+    const cardAction = ['resources', 'price', 'crowd', 'route', 'service'].includes(activeAdjust.value)
+    const refineId = Number(editingProduct.value?.id || (cardAction ? primarySpec.value?.product_id : 0))
+    if (refineId) {
+      const response = await hotelApi.refineProduct(refineId, text)
       refinements.value.push({ instruction: text, ...response.data })
       applyRefinedProduct(response.data.product as AnyRecord | undefined, text)
       brief.value = ''
@@ -1179,9 +1148,8 @@ onMounted(async () => { await load(); await autoStart() })
           <ul>
             <li class="plan-capacity-line">房型余量 <b>{{ item.remaining }} 间</b><span>·</span>最多可售 <b>{{ item.max_sellable }} 套</b></li>
           </ul>
-          <p class="plan-fit-note" :class="{ caution: String(item.fit_label || '').startsWith('需核对'), negative: item.fit_label === '不建议优先' }"><b>{{ item.fit_label || (item.is_current ? '当前方案' : '推荐依据') }}</b>{{ item.fit_reason || planReason(item) }}</p>
-          <span v-if="item.is_current" class="plan-current">当前选择 · 详情与调整入口已展开</span>
-          <el-button v-else size="small" plain :disabled="submitting" @click="ask(item.message)">切换为当前方案</el-button>
+          <p class="plan-fit-note" :class="{ caution: String(item.fit_label || '').startsWith('需核对'), negative: item.fit_label === '不建议优先' }"><b>{{ item.is_ai_primary ? '主推理由' : '备选特点' }}</b>{{ concisePlanReason(item) }}</p>
+          <el-button v-if="!item.is_current" size="small" plain :disabled="submitting" @click="ask(item.message)">切换为当前方案</el-button>
         </article>
       </div>
       <p v-else-if="!submitting" class="muted">{{ judgement.text || '当前没有可推荐的组合，可以调整日期、客群、体验或价格目标后继续。' }}</p>
@@ -1246,16 +1214,22 @@ onMounted(async () => { await load(); await autoStart() })
                   <strong>{{ item.title }}</strong>
                   <span v-if="item.route_only" class="route-only-badge">路线建议 · 非套餐权益</span>
                   <p>{{ item.description }}</p>
-                  <small>{{ [item.address, item.duration_text, item.area].filter(Boolean).join(' · ') }}</small>
-                  <small v-if="item.notes" class="itinerary-entry__note">出行前核验：{{ item.notes }}</small>
+                  <details v-if="item.address || item.duration_text || item.area || item.notes" class="itinerary-entry__details">
+                    <summary>路线详情</summary>
+                    <small>{{ [item.address, item.duration_text, item.area].filter(Boolean).join(' · ') }}</small>
+                    <small v-if="item.notes" class="itinerary-entry__note">出行前核验：{{ item.notes }}</small>
+                  </details>
                 </div>
               </div>
-              <div v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-list">
-                <p v-for="leg in (routeForDay(day.day_index)?.legs || [])" :key="leg.from_stop + leg.to_stop">
-                  {{ leg.from_stop }} → {{ leg.to_stop }} · {{ leg.distance_label || '交通机动' }}<template v-if="leg.minutes"> · 预留约 {{ leg.minutes }} 分钟</template><template v-else> · 具体地点待定，暂不估算耗时</template>
-                  <small>{{ leg.note }}</small>
-                </p>
-              </div>
+              <details v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-fold">
+                <summary>查看转场与核验</summary>
+                <div class="route-transfer-list">
+                  <p v-for="leg in (routeForDay(day.day_index)?.legs || [])" :key="leg.from_stop + leg.to_stop">
+                    {{ leg.from_stop }} → {{ leg.to_stop }} · {{ leg.distance_label || '交通机动' }}<template v-if="leg.minutes"> · 预留约 {{ leg.minutes }} 分钟</template><template v-else> · 具体地点待定，暂不估算耗时</template>
+                    <small>{{ leg.note }}</small>
+                  </p>
+                </div>
+              </details>
             </article>
           </div>
 
@@ -1272,8 +1246,6 @@ onMounted(async () => { await load(); await autoStart() })
             </div>
             <p v-if="primarySpec.pricing_basis?.length" class="muted">定价依据：{{ primarySpec.pricing_basis.join('；') }}</p>
           </details>
-
-          <p v-if="primarySpec.conclusion" class="conclusion"><b>AI建议：</b>{{ primarySpec.conclusion }}</p>
 
           <div class="decision-card__actions">
             <el-button type="primary" :disabled="submitting || Boolean(budgetShortfall)" @click="generateFromPlan(primarySpec)">{{ primarySpec.product_id ? '继续优化当前产品' : '生成候选产品' }}</el-button>
@@ -1566,19 +1538,20 @@ onMounted(async () => { await load(); await autoStart() })
 .structure-row > span { color: #33443c; }
 .itinerary-days { display: grid; gap: 9px; }
 .itinerary-day { display: grid; gap: 7px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbf9; }
-.itinerary-day > header { display: flex; justify-content: space-between; gap: 9px; color: var(--teal-dark); font-size: 11px; }
+.itinerary-day > header { display: flex; justify-content: space-between; gap: 9px; color: var(--teal-dark); font-size:  14px; }
 .itinerary-day > header span { color: var(--muted); font-family: var(--font-mono); }
-.itinerary-day__summary { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
-.itinerary-entry { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 9px; padding: 7px 0; border-top: 1px solid #e8eeea; }
-.itinerary-entry > time { color: var(--teal-dark); font-family: var(--font-mono); font-size: 10px; }
-.itinerary-entry strong { color: var(--ink); font-size: 11px; }
-.itinerary-entry p { margin: 3px 0; color: #55635d; font-size: 10px; line-height: 1.5; }
+.itinerary-day__summary { margin: 0; color: var(--muted); font-size:  14px; line-height: 1.65; }
+.itinerary-entry { display: grid; grid-template-columns:  92px minmax(0, 1fr); gap: 10px; padding: 10px 0; border-top: 1px solid #e8eeea; }
+.itinerary-entry > time { color: var(--teal-dark); font-family: var(--font-mono); font-size:  13px; font-weight: 700; }
+.itinerary-entry strong { color: var(--ink); font-size:  15px; line-height: 1.45; }
+.itinerary-entry p { margin:  4px 0; color: #55635d; font-size: 14px; line-height: 1.65; }
 .itinerary-entry small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .itinerary-entry__note { color: #8a642c !important; }
 .route-only-badge { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; background: #eaf2ed; color: #426452; font-size: 9px; }
-.route-transfer-list { display: grid; gap: 5px; padding-top: 5px; border-top: 1px dashed var(--line); }
-.route-transfer-list p { margin: 0; color: #50615a; font-size: 9px; line-height: 1.55; }
-.route-transfer-list small { display: block; color: var(--muted); font-size: 9px; }
+.route-transfer-fold { padding-top: 5px; border-top: 1px dashed var(--line); }
+.route-transfer-list { display: grid; gap: 5px; padding-top: 7px; }
+.route-transfer-list p { margin: 0; color: #50615a; font-size:  12px; line-height: 1.65; }
+.route-transfer-list small { display: block; color: var(--muted); font-size:  11px; }
 .calculation-list { display: grid; gap: 4px; margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--line); }
 .calculation-list > div { display: flex; justify-content: space-between; gap: 8px; color: #55635d; font-size: 11px; }
 .calculation-list b { color: var(--ink); font-family: var(--font-mono); }

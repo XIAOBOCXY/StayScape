@@ -1363,7 +1363,7 @@ def refine_product_conversationally(
     result = ProductRefiner(db, hotel_id).refine(product, request.natural_language)
     db.commit()
     db.refresh(product)
-    return {**result, "product": product_to_dict(product)}
+    return {**result, "product": visitor_product_to_dict(product, nights=max(1, int(product.nights or 1)))}
 
 
 @router.get("/products/{product_id}/refinements")

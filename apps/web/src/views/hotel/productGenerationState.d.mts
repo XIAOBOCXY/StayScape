@@ -6,3 +6,4 @@ export function prepareAdvisorResponse(currentAdvisor: any, previousPrimary: any
   primary: any
   validationNote: string
 }
+export function primaryFromRefinedProduct(product: any, previousPrimary?: any): any

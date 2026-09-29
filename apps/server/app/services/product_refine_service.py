@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..core.exceptions import AppError
-from ..models import HotelService, PartnerResource, ProductRefinement, RoomInventory, TravelProduct, VisitorIntent
+from ..models import HotelService, PartnerResource, ProductRefinement, ProductResource, RoomInventory, TravelProduct, VisitorIntent
 from .knowledge_service import KnowledgeService
 from .product_service import ProductService
 from .public_copy import build_day_plan, build_stay_plan
@@ -33,6 +33,7 @@ EQUITY_WORDS = (
     "房型", "大床", "双床", "亲子房", "套房", "景观房", "榻榻米", "换房",
     "人数", "几个大人", "套餐人数", "几大几小", "加早餐", "早餐", "延迟退房",
     "换成", "替换", "换个体验", "换体验", "去掉体验", "住几晚", "晚",
+    "增加体验", "增加资源", "增加酒店权益", "增加酒店服务", "添加体验", "添加酒店权益", "添加酒店服务",
 )
 EXPERIENCE_WORDS = (
     "路线", "行程", "顺序", "太满", "别排", "不要排", "排满", "自由", "附近", "顺路",
@@ -239,7 +240,6 @@ class ProductRefiner:
             if slot not in relax:
                 relax.append(slot)
         state["relax"] = relax
-        product.experience_notes = state
 
         stay = build_stay_plan(product, 1)
         resources = [
@@ -264,6 +264,29 @@ class ProductRefiner:
                 after_items.append("自由活动")
             else:
                 after_items.append(str(item.get("title")))
+
+        # 行程调整必须写入可序列化的 itinerary 覆盖层，否则接口虽记录成功，
+        # 前端重新读取商品时仍会根据资源生成旧路线，用户会误以为“没有变化”。
+        visitor_copy = dict(state.get("visitor_copy") or {})
+        itinerary = [dict(item) for item in (visitor_copy.get("itinerary") or []) if isinstance(item, dict)]
+        day_override = next((item for item in itinerary if int(item.get("day_index") or 0) == 1), None)
+        if day_override is None:
+            day_override = {"day_index": 1}
+            itinerary.append(day_override)
+        item_overrides = [dict(item) if isinstance(item, dict) else {} for item in (day_override.get("items") or [])]
+        while len(item_overrides) < len(first_day):
+            item_overrides.append({})
+        for index, title in enumerate(after_items):
+            if title == "自由活动":
+                item_overrides[index] = {
+                    **item_overrides[index],
+                    "title": "自由活动（自主安排）",
+                    "description": "此时段不再安排强制体验，可按抵达节奏自由休息、用餐或在周边慢逛。",
+                }
+        day_override["items"] = item_overrides
+        visitor_copy["itinerary"] = itinerary
+        state["visitor_copy"] = visitor_copy
+        product.experience_notes = state
         changes.append({"field": "route_plan", "label": "推荐路线", "before": before, "after": " → ".join(after_items)})
         notes.append("已按你的要求放宽行程，价格、房型与库存不受影响。")
         room = self.db.get(RoomInventory, product.room_inventory_id)
@@ -599,6 +622,109 @@ class ProductRefiner:
                 product.nights = nights
                 notes.append(f"住店晚数改为 {nights} 晚，行程会按新天数重排。")
 
+        add_partner_intent = any(word in text for word in ("增加体验", "添加体验", "增加资源"))
+        add_service_intent = any(word in text for word in ("增加酒店权益", "增加酒店服务", "添加酒店权益", "添加酒店服务"))
+
+        def crowd_matches(suitable_crowds: str) -> bool:
+            tags = {item.strip().upper() for item in str(suitable_crowds or "").split(",") if item.strip()}
+            return not tags or "ALL" in tags or str(product.target_crowd or "").upper() in tags
+
+        def has_time_conflict(start, end, skip_source: tuple[str, int] | None = None) -> bool:
+            if start is None or end is None:
+                return False
+            for current_resource in product.resources:
+                if skip_source is not None and (
+                    current_resource.resource_type,
+                    int(current_resource.resource_id),
+                ) == skip_source:
+                    continue
+                source = (
+                    self.db.get(PartnerResource, current_resource.resource_id)
+                    if current_resource.resource_type == "PARTNER_RESOURCE"
+                    else self.db.get(HotelService, current_resource.resource_id)
+                    if current_resource.resource_type == "HOTEL_SERVICE"
+                    else None
+                )
+                if source is None or source.start_time is None or source.end_time is None:
+                    continue
+                # 寄存、停车等全天可用的配套权益不占用体验时间，不能阻止替换或新增体验。
+                if current_resource.resource_type == "HOTEL_SERVICE" and str(getattr(source, "service_type", "")) in {"LUGGAGE_STORAGE", "PARKING"}:
+                    continue
+                if start < source.end_time and source.start_time < end:
+                    return True
+            return False
+
+        package_size = max(1, int(product.party_size or 1))
+        if add_partner_intent:
+            partners = list(self.db.scalars(
+                select(PartnerResource).where(
+                    PartnerResource.available_date == product.target_date,
+                    PartnerResource.package_enabled.is_(True),
+                    PartnerResource.status == "AVAILABLE",
+                    PartnerResource.remaining_capacity > 0,
+                )
+            ).all())
+            target_partner = next((item for item in partners if str(item.resource_name) in text), None)
+            existing_ids = {int(item.resource_id) for item in product.resources if item.resource_type == "PARTNER_RESOURCE"}
+            if target_partner is None:
+                notes.append("没有找到名称匹配且可组包的合作体验，本轮未增加体验。")
+            elif int(target_partner.id) in existing_ids:
+                notes.append(f"「{target_partner.resource_name}」已经在当前产品中，无需重复加入。")
+            elif not crowd_matches(target_partner.suitable_crowds):
+                notes.append(f"「{target_partner.resource_name}」不适合当前客群，本轮未增加体验。")
+            elif int(target_partner.remaining_capacity or 0) < package_size:
+                notes.append(f"「{target_partner.resource_name}」名额不足，本轮未增加体验。")
+            elif has_time_conflict(target_partner.start_time, target_partner.end_time):
+                notes.append(f"「{target_partner.resource_name}」与当前套餐场次重叠，本轮未增加体验。")
+            else:
+                product.resources.append(ProductResource(
+                    resource_type="PARTNER_RESOURCE",
+                    resource_id=target_partner.id,
+                    resource_name=target_partner.resource_name,
+                    quantity_per_package=package_size,
+                    unit_cost=target_partner.settlement_price,
+                    replaceable=True,
+                    required=True,
+                ))
+                changes.append({"field": "partner_resource_add", "label": "增加体验", "before": "—", "after": target_partner.resource_name})
+                checks.append({"label": "体验名额", "value": f"通过（{target_partner.resource_name} 剩 {target_partner.remaining_capacity} 个名额）"})
+                notes.append(f"已增加体验「{target_partner.resource_name}」，并重新核验场次、容量、成本与利润。")
+
+        if add_service_intent:
+            services = list(self.db.scalars(
+                select(HotelService).where(
+                    HotelService.hotel_id == self.hotel_id,
+                    HotelService.available_date == product.target_date,
+                    HotelService.status == "AVAILABLE",
+                    HotelService.available_quantity > 0,
+                )
+            ).all())
+            target_service = next((item for item in services if str(item.service_name) in text), None)
+            existing_ids = {int(item.resource_id) for item in product.resources if item.resource_type == "HOTEL_SERVICE"}
+            if target_service is None:
+                notes.append("没有找到名称匹配且有可用名额的酒店权益，本轮未增加酒店权益。")
+            elif int(target_service.id) in existing_ids:
+                notes.append(f"「{target_service.service_name}」已经在当前产品中，无需重复加入。")
+            elif not crowd_matches(target_service.suitable_crowds):
+                notes.append(f"「{target_service.service_name}」不适合当前客群，本轮未增加酒店权益。")
+            elif int(target_service.available_quantity or 0) < package_size:
+                notes.append(f"「{target_service.service_name}」余量不足，本轮未增加酒店权益。")
+            elif has_time_conflict(target_service.start_time, target_service.end_time):
+                notes.append(f"「{target_service.service_name}」与当前套餐场次重叠，本轮未增加酒店权益。")
+            else:
+                product.resources.append(ProductResource(
+                    resource_type="HOTEL_SERVICE",
+                    resource_id=target_service.id,
+                    resource_name=target_service.service_name,
+                    quantity_per_package=package_size,
+                    unit_cost=target_service.unit_cost,
+                    replaceable=target_service.replaceable,
+                    required=True,
+                ))
+                changes.append({"field": "hotel_service_add", "label": "增加酒店权益", "before": "—", "after": target_service.service_name})
+                checks.append({"label": "酒店权益", "value": f"通过（{target_service.service_name} 余量 {target_service.available_quantity}）"})
+                notes.append(f"已增加酒店权益「{target_service.service_name}」，并重新核验容量、成本与利润。")
+
         swap = re.search(r"换成\s*([^\s，。,.！!？?]{2,12})", text) or re.search(r"换(?:一个|个)?\s*([^\s，。,.！!？?]{2,12})", text)
         if swap:
             keyword = swap.group(1)
@@ -614,7 +740,17 @@ class ProductRefiner:
             ).all()
             target_resource = next((row for row in candidates if keyword in row.resource_name), None)
             row = next((item for item in product.resources if item.resource_type == "PARTNER_RESOURCE"), None)
-            if target_resource is not None and row is not None:
+            if target_resource is None or row is None:
+                notes.append(f"合作资源库里没找到匹配「{keyword}」的可售体验，可以换个说法或换一个方向。")
+            elif int(target_resource.id) == int(row.resource_id):
+                notes.append(f"「{target_resource.resource_name}」已经是当前体验，无需重复替换。")
+            elif not crowd_matches(target_resource.suitable_crowds):
+                notes.append(f"「{target_resource.resource_name}」不适合当前客群，本轮未更换体验。")
+            elif int(target_resource.remaining_capacity or 0) < int(row.quantity_per_package or package_size):
+                notes.append(f"「{target_resource.resource_name}」名额不足，本轮未更换体验。")
+            elif has_time_conflict(target_resource.start_time, target_resource.end_time, (row.resource_type, int(row.resource_id))):
+                notes.append(f"「{target_resource.resource_name}」与当前套餐场次重叠，本轮未更换体验。")
+            else:
                 before_name = row.resource_name
                 row.resource_id = target_resource.id
                 row.resource_name = target_resource.resource_name
@@ -625,8 +761,6 @@ class ProductRefiner:
                     window = f"（{target_resource.start_time.strftime('%H:%M')}–{target_resource.end_time.strftime('%H:%M')}）"
                 checks.append({"label": "体验名额", "value": f"通过（{target_resource.resource_name} 剩 {target_resource.remaining_capacity} 个名额）"})
                 notes.append(f"已把「{before_name}」换成「{target_resource.resource_name}」{window}，结算 ¥{_money(target_resource.settlement_price)}/人，名额够用。")
-            else:
-                notes.append(f"合作资源库里没找到匹配「{keyword}」的可售体验，可以换个说法或换一个方向。")
 
         if changes:
             ProductService(self.db, self.hotel_id).recalculate_product(product)

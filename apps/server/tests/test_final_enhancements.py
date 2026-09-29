@@ -308,3 +308,110 @@ def test_advisor_keeps_solo_budget_route_and_date_through_candidate_generation(c
         assert product['target_crowd'] == 'SOLO'
         assert product['party_size'] == 1
         assert float(product['suggested_price']) <= 800
+
+def test_refine_product_adds_named_experience_and_hotel_service(client, hotel_token, merchant_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post('/api/v1/hotel/products/generate', headers=auth(hotel_token), json=request)
+    assert generated.status_code == 200, generated.text
+    product = generated.json()['product']
+    product_id = product['id']
+    target_date = product['target_date']
+
+    experience_name = '夜间回归文化体验'
+    created_resource = client.post('/api/v1/merchant/resources', headers=auth(merchant_token), json={
+        'resource_name': experience_name,
+        'category': 'CULTURE',
+        'description': '用于验证已生成产品可增加体验的夜间文化活动',
+        'available_date': target_date,
+        'start_time': '20:00',
+        'end_time': '21:00',
+        'remaining_capacity': 24,
+        'settlement_price': '35',
+        'market_price': '68',
+        'suitable_crowds': 'FAMILY',
+        'minimum_age': 3,
+        'maximum_age': 70,
+        'indoor': True,
+        'weather_tags': 'RAIN,SUNNY,CLOUDY',
+        'address': '杭州市西湖区文三路88号测试文化馆夜间活动厅',
+        'package_enabled': True,
+    })
+    assert created_resource.status_code == 200, created_resource.text
+
+    experience_result = client.post(
+        f'/api/v1/hotel/products/{product_id}/refine',
+        headers=auth(hotel_token),
+        json={'natural_language': f'增加体验：{experience_name}'},
+    )
+    assert experience_result.status_code == 200, experience_result.text
+    experience_payload = experience_result.json()
+    assert experience_payload['layer'] == 'EQUITY'
+    assert experience_name in [
+        item['resource_name'] for item in experience_payload['product']['resources']
+        if item['resource_type'] == 'PARTNER_RESOURCE'
+    ]
+
+    service_name = '夜间欢迎饮品回归权益'
+    created_service = client.post('/api/v1/hotel/services', headers=auth(hotel_token), json={
+        'service_name': service_name,
+        'service_type': 'OTHER',
+        'available_date': target_date,
+        'available_quantity': 24,
+        'unit_cost': '12',
+        'reference_price': '28',
+        'suitable_crowds': 'FAMILY',
+    })
+    assert created_service.status_code == 200, created_service.text
+
+    service_result = client.post(
+        f'/api/v1/hotel/products/{product_id}/refine',
+        headers=auth(hotel_token),
+        json={'natural_language': f'增加酒店权益：{service_name}'},
+    )
+    assert service_result.status_code == 200, service_result.text
+    assert service_name in [
+        item['resource_name'] for item in service_result.json()['product']['resources']
+        if item['resource_type'] == 'HOTEL_SERVICE'
+    ]
+
+def test_refine_route_persists_visible_free_time(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post('/api/v1/hotel/products/generate', headers=auth(hotel_token), json=request)
+    assert generated.status_code == 200, generated.text
+    product_id = generated.json()['product']['id']
+
+    response = client.post(
+        f'/api/v1/hotel/products/{product_id}/refine',
+        headers=auth(hotel_token),
+        json={'natural_language': '路线安排轻松一点，下午留自由时间'},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['layer'] == 'EXPERIENCE'
+    assert any(item['field'] == 'route_plan' for item in payload['changes'])
+    titles = [item['title'] for day in payload['product']['day_plan'] for item in day['items']]
+    assert '自由活动（自主安排）' in titles
+
+def test_refine_product_swap_returns_recalculated_resources(client, hotel_token):
+    request, _ = generate_request(client, hotel_token)
+    generated = client.post('/api/v1/hotel/products/generate', headers=auth(hotel_token), json=request)
+    assert generated.status_code == 200, generated.text
+    product_id = generated.json()['product']['id']
+    response = client.post(f'/api/v1/hotel/products/{product_id}/refine', headers=auth(hotel_token), json={'natural_language': '换成儿童茶文化课堂'})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    partner_names = [item['resource_name'] for item in payload['product']['resources'] if item['resource_type'] == 'PARTNER_RESOURCE']
+    assert any(item['field'] == 'partner_resource' for item in payload['changes']), payload['message']
+    assert partner_names == ['儿童茶文化课堂']
+    assert int(payload['product']['sale_quantity']) > 0
+
+def test_advisor_never_recommends_room_below_party_capacity(client, hotel_token):
+    created = client.post('/api/v1/hotel/ai/conversations', headers=auth(hotel_token), json={'title': '容量回归测试'})
+    assert created.status_code == 200, created.text
+    response = client.post(f"/api/v1/hotel/ai/conversations/{created.json()['id']}/advisor", headers=auth(hotel_token), json={'natural_language': '亲子家庭，一家三口，周末住一晚'})
+    assert response.status_code == 200, response.text
+    primary = response.json()['advisor']['primary']
+    assert primary['party_size'] == 3
+    rooms = client.get('/api/v1/hotel/rooms', headers=auth(hotel_token)).json()
+    selected = next(item for item in rooms if item['room_type'] == primary['room_type'] and item['available_date'] == primary['target_date'])
+    assert int(selected['max_guests']) >= int(primary['party_size'])
