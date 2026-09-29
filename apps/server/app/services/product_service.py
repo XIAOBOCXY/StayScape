@@ -260,8 +260,6 @@ class ProductService:
             and resource.available_date == request.target_date
             and resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=resource.package_enabled, resource_status=resource.status, capacity=resource.remaining_capacity, source_type=resource.source_type)
             and resource.remaining_capacity >= request.party_size
-            and crowd_supported(resource.suitable_crowds, request.target_crowd, minimum_age=resource.minimum_age, maximum_age=resource.maximum_age)
-            and is_weather_supported(resource.weather_tags, request.weather)
         )
 
     def _payload(self, request: GenerateProductRequest, room: RoomInventory, selections: list[dict[str, Any]], *, variant_index: int = 0) -> dict[str, Any]:
@@ -326,6 +324,36 @@ class ProductService:
             if manual_selections
             else self._default_selections(request, room, variant_index=variant_index)
         )
+        selected_partner_ids = [int(item["resource_id"]) for item in selections if item["resource_type"] == "PARTNER_RESOURCE"]
+        selected_partners_for_arrival = list(self.db.scalars(
+            select(PartnerResource).where(
+                PartnerResource.id.in_(selected_partner_ids),
+                PartnerResource.available_date == request.target_date,
+            )
+        ).all()) if selected_partner_ids else []
+        early_start = any(item.start_time is not None and item.start_time.hour < 15 for item in selected_partners_for_arrival)
+        baggage_service = self.db.scalar(
+            select(HotelService).where(
+                HotelService.hotel_id == self.hotel_id,
+                HotelService.available_date == request.target_date,
+                HotelService.status == "AVAILABLE",
+                HotelService.available_quantity > 0,
+                or_(HotelService.service_type == "LUGGAGE_STORAGE", HotelService.service_name.contains("行李寄存")),
+            ).order_by(HotelService.id)
+        )
+        selected_service_ids = {int(item["resource_id"]) for item in selections if item["resource_type"] == "HOTEL_SERVICE"}
+        if baggage_service is not None and baggage_service.id not in selected_service_ids:
+            # Include the hotel-front desk as the first itinerary stop when
+            # an experience starts before check-in, and as a checkout-day
+            # benefit for multi-day visitor itineraries.
+            selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": baggage_service.id, "quantity_per_package": 1})
+        elif early_start and baggage_service is None:
+            raise AppError(
+                "LUGGAGE_STORAGE_UNAVAILABLE",
+                f"{request.target_date.isoformat()} 的首项体验早于15:00入住时间，请先补充当天的行李寄存服务。",
+                field="resource_selections",
+                retryable=True,
+            )
         payload = self._payload(request, room, selections, variant_index=variant_index)
         agent_result = self.orchestrator.generate_product(payload)
         output: ProductAgentOutput = agent_result.value  # type: ignore[assignment]
@@ -346,12 +374,18 @@ class ProductService:
         capacity_inputs = [CapacityInput(room.room_type, room.available_count, 1)]
         unit_cost = room.accounting_cost
         warnings: list[str] = []
+        compatibility_notes: list[str] = []
+        weather_label = {"RAIN": "有雨", "SUNNY": "晴天", "CLOUDY": "多云"}.get(str(request.weather or "").upper(), "当前天气")
+        crowd_label = {"FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友同行", "SOLO": "独自出行", "LOCAL_WEEKEND": "本地周末客", "ALL": "不限客群"}.get(str(request.target_crowd or "").upper(), "当前客群")
+        crowd_names = {"FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友同行", "SOLO": "独自出行", "LOCAL_WEEKEND": "本地周末客", "ALL": "不限人群"}
         schedule_slots: list[tuple[time | None, time | None, str]] = []
         for service in services:
             if service is None:
                 continue
             requested_quantity = requested_by_type.get(("HOTEL_SERVICE", service.id), {}).get("quantity_per_package", DEFAULT_QUANTITIES.get(service.service_type, 1))
-            q = requested_quantity if not manual_selections else output.resource_quantities.get(str(service.id), requested_quantity)
+            # Explicit operator selections are authoritative; a generated
+            # draft must not silently change their per-package quantities.
+            q = requested_quantity
             self._validate_service(service, request, q)
             if blocks_schedule(service) and any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
                 raise AppError("TIME_CONFLICT", f"酒店服务{service.service_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
@@ -362,8 +396,18 @@ class ProductService:
                 schedule_slots.append((service.start_time, service.end_time, service.service_name))
         for partner in selected_partners:
             requested_quantity = requested_by_type.get(("PARTNER_RESOURCE", partner.id), {}).get("quantity_per_package", 1)
-            q = requested_quantity if not manual_selections else output.resource_quantities.get(str(partner.id), requested_quantity)
+            q = requested_quantity
             self._validate_partner(partner, request, q)
+            if not is_weather_supported(partner.weather_tags, request.weather):
+                compatibility_notes.append(
+                    f"天气提示：{partner.resource_name}登记的适用天气未覆盖{weather_label}，仍可生成；请在行程建议中说明现场天气风险，并提供合适的替代体验。"
+                )
+            if not crowd_supported(partner.suitable_crowds, request.target_crowd, minimum_age=partner.minimum_age, maximum_age=partner.maximum_age):
+                tags = [tag.strip().upper() for tag in str(partner.suitable_crowds or "").split(",") if tag.strip()]
+                suitable = "、".join(crowd_names.get(tag, "其他客群") for tag in tags) or "未注明"
+                compatibility_notes.append(
+                    f"客群提示：当前按{crowd_label}设计，但{partner.resource_name}登记适合{suitable}；保留该体验，商品说明中应提示运营确认接待与年龄要求。"
+                )
             if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in schedule_slots):
                 raise AppError("TIME_CONFLICT", f"文化体验{partner.resource_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
             resource_rows.append(ProductResource(resource_type="PARTNER_RESOURCE", resource_id=partner.id, resource_name=partner.resource_name, quantity_per_package=q, unit_cost=partner.settlement_price, replaceable=True, required=True))
@@ -404,8 +448,8 @@ class ProductService:
             marketing_title=output.marketing_title,
             marketing_content=output.marketing_content,
             marketing_assets=self._marketing_assets(output.marketing_assets, product_name=output.product_name, theme=output.theme, target_crowd=request.target_crowd, weather=request.weather, target_date=request.target_date, price=validation.pricing.suggested_price, room=room, resources=resource_rows, variant_index=variant_index),
-            recommendation_reason=output.recommendation_reason,
-            risk_message=output.risk_message,
+            recommendation_reason=" ".join([str(output.recommendation_reason or "").strip(), *compatibility_notes]).strip(),
+            risk_message=" ".join([str(output.risk_message or "").strip(), *compatibility_notes]).strip(),
             status=initial_status,
             resources=resource_rows,
         )
@@ -491,8 +535,6 @@ class ProductService:
             raise AppError("VALIDATION_ERROR", "每套服务消耗量必须大于0", field=f"service_{service.id}")
         if service.available_date != request.target_date or service.status != "AVAILABLE" or service.available_quantity <= 0:
             raise AppError("HOTEL_SERVICE_UNAVAILABLE", f"酒店服务{service.service_name}当前不可用", field="resource_selections", retryable=True)
-        if not crowd_supported(service.suitable_crowds, request.target_crowd):
-            raise AppError("CROWD_NOT_SUPPORTED", f"酒店服务{service.service_name}不适合当前客群", field="target_crowd", retryable=True)
         validate_interval(service.start_time, service.end_time, service.service_name)
 
     def _validate_partner(self, partner: PartnerResource, request: GenerateProductRequest, quantity: int) -> None:
@@ -503,10 +545,6 @@ class ProductService:
             raise AppError("PARTNER_RESOURCE_UNAVAILABLE", f"合作资源{partner.resource_name}当前不可组包", field="resource_selections", retryable=True)
         if partner.available_date != request.target_date:
             raise AppError("DATE_NOT_MATCHED", "合作资源日期与入住日期不一致", field="target_date", retryable=True)
-        if not is_weather_supported(partner.weather_tags, request.weather):
-            raise AppError("WEATHER_NOT_SUPPORTED", f"{partner.resource_name}不支持当前天气", field="weather", retryable=True)
-        if not crowd_supported(partner.suitable_crowds, request.target_crowd, minimum_age=partner.minimum_age, maximum_age=partner.maximum_age):
-            raise AppError("CROWD_NOT_SUPPORTED", f"{partner.resource_name}不适合当前客群", field="target_crowd", retryable=True)
         validate_interval(partner.start_time, partner.end_time, partner.resource_name)
 
     def recalculate_for_event(self, event: ResourceChangeEvent) -> list[dict[str, Any]]:
@@ -559,9 +597,6 @@ class ProductService:
                 if service.start_time and service.end_time and service.start_time >= service.end_time:
                     invalid_reason = f"酒店服务{row.resource_name}时间无效"
                     break
-                if not crowd_supported(service.suitable_crowds, product.target_crowd):
-                    invalid_reason = f"酒店服务{row.resource_name}不适合当前客群"
-                    break
                 if blocks_schedule(service) and any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
                     invalid_reason = f"酒店服务{row.resource_name}与套餐内其他活动时间冲突"
                     break
@@ -593,28 +628,6 @@ class ProductService:
                 if partner.available_date != product.target_date:
                     invalid_reason = f"{partner.resource_name}日期与产品入住日期不一致"
                     break
-                if not is_weather_supported(partner.weather_tags, product.weather):
-                    replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
-                    if replacement:
-                        replacement_id = replacement.id
-                        row.resource_id = replacement.id
-                        row.resource_name = replacement.resource_name
-                        row.unit_cost = replacement.settlement_price
-                        partner = replacement
-                    else:
-                        invalid_reason = f"{partner.resource_name}不支持产品天气{product.weather}且没有替代资源"
-                        break
-                if not crowd_supported(partner.suitable_crowds, product.target_crowd, minimum_age=partner.minimum_age, maximum_age=partner.maximum_age):
-                    replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
-                    if replacement:
-                        replacement_id = replacement.id
-                        row.resource_id = replacement.id
-                        row.resource_name = replacement.resource_name
-                        row.unit_cost = replacement.settlement_price
-                        partner = replacement
-                    else:
-                        invalid_reason = f"{partner.resource_name}不适合产品客群且没有替代资源"
-                        break
                 if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in schedule_slots):
                     replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
                     if replacement and not any(intervals_overlap(replacement.start_time, replacement.end_time, start, end) for start, end, _ in schedule_slots):

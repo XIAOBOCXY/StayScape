@@ -17,7 +17,7 @@ const saving = ref(false)
 const current = ref<HotelService | null>(null)
 const selectedDate = ref('')
 const viewMode = ref<'cards' | 'list'>('cards')
-const form = reactive({ available_date: '', available_quantity: 0, start_time: '', end_time: '', image_url: '', image_source: '', image_attribution: '', status: 'AVAILABLE', reason: '酒店服务时间与名额调整' })
+const form = reactive({ available_date: '', available_quantity: 0, unit_cost: '0', reference_price: '0', start_time: '', end_time: '', image_url: '', image_source: '', image_attribution: '', status: 'AVAILABLE', reason: '酒店服务时间与名额调整' })
 const visibleItems = computed(() => selectedDate.value ? items.value.filter((item) => item.available_date === selectedDate.value) : items.value)
 
 function serviceMedia(row: HotelService) {
@@ -28,8 +28,8 @@ function serviceMedia(row: HotelService) {
 }
 function session(row: HotelService) { return row.start_time && row.end_time ? `${row.start_time.slice(0, 5)} – ${row.end_time.slice(0, 5)}` : '到店后确认时间' }
 async function load() { loading.value = true; try { items.value = (await hotelApi.services()).data } catch (e) { ElMessage.error(errorMessage(e)) } finally { loading.value = false } }
-function open(row: HotelService) { current.value = row; Object.assign(form, { available_date: row.available_date, available_quantity: row.available_quantity, start_time: row.start_time?.slice(0, 5) || '', end_time: row.end_time?.slice(0, 5) || '', image_url: row.image_url || '', image_source: row.image_source || '', image_attribution: row.image_attribution || '', status: row.status, reason: '酒店服务时间与名额调整' }); dialog.value = true }
-async function save() { if (!current.value) return; if (form.start_time && form.end_time && form.start_time >= form.end_time) { ElMessage.warning('开始时间应早于结束时间'); return } saving.value = true; try { await hotelApi.updateService(current.value.id, { ...form, start_time: form.start_time || undefined, end_time: form.end_time || undefined }); ElMessage.success('服务名额已更新，相关产品会自动重算'); dialog.value = false; await load() } catch (e) { ElMessage.error(errorMessage(e)) } finally { saving.value = false } }
+function open(row: HotelService) { current.value = row; Object.assign(form, { available_date: row.available_date, available_quantity: row.available_quantity, unit_cost: String(row.unit_cost), reference_price: String(row.reference_price), start_time: row.start_time?.slice(0, 5) || '', end_time: row.end_time?.slice(0, 5) || '', image_url: row.image_url || '', image_source: row.image_source || '', image_attribution: row.image_attribution || '', status: row.status, reason: '酒店服务时间与名额调整' }); dialog.value = true }
+async function save() { if (!current.value) return; if (form.start_time && form.end_time && form.start_time >= form.end_time) { ElMessage.warning('开始时间应早于结束时间'); return } saving.value = true; try { await hotelApi.updateService(current.value.id, { ...form, available_quantity: Number(form.available_quantity), unit_cost: Number(form.unit_cost), reference_price: Number(form.reference_price), start_time: form.start_time || undefined, end_time: form.end_time || undefined }); ElMessage.success('酒店服务已更新'); dialog.value = false; await load() } catch (e) { ElMessage.error(errorMessage(e)) } finally { saving.value = false } }
 onMounted(load)
 </script>
 
@@ -39,28 +39,15 @@ onMounted(load)
   <div v-if="viewMode === 'cards'" v-loading="loading" class="service-grid"><button v-for="row in visibleItems" :key="row.id" class="service-card" @click="open(row)"><MediaImage :media="serviceMedia(row)" aspect="card" /><div class="service-card__body"><div class="service-card__top"><span>{{ row.available_date }}</span><StatusTag :status="row.status" /></div><h2>{{ row.service_name }}</h2><p>{{ session(row) }}</p><div class="service-card__facts"><span><b>{{ row.available_quantity }}</b> 个可用名额</span><span>¥{{ row.unit_cost }} / 份</span></div></div></button></div>
   <div v-else class="panel table-wrap"><el-table v-loading="loading" :data="visibleItems" style="width:100%" @row-click="open"><el-table-column prop="service_name" label="服务名称" min-width="190" /><el-table-column prop="available_date" label="日期" width="120" /><el-table-column label="时间" width="150"><template #default="{row}">{{ session(row) }}</template></el-table-column><el-table-column label="剩余名额" width="110"><template #default="{row}"><strong>{{ row.available_quantity }}</strong></template></el-table-column><el-table-column label="成本" width="100"><template #default="{row}">¥{{ row.unit_cost }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="{row}"><StatusTag :status="row.status" /></template></el-table-column><el-table-column label="操作" width="90"><template #default="{row}"><el-button link type="primary" @click.stop="open(row)">调整</el-button></template></el-table-column></el-table></div>
   <div v-if="!loading && !visibleItems.length" class="panel empty-state">这一天暂时没有可用服务。</div>
-  <el-dialog v-model="dialog" title="调整服务名额与时间" width="min(94vw, 620px)" class="service-dialog">
-    <div v-if="current" class="service-dialog__head">
-      <div><span class="eyebrow">酒店服务</span><h3>{{ current.service_name }}</h3></div>
-      <StatusTag :status="form.status" />
-    </div>
-    <div v-if="current" class="service-dialog__stats">
-      <div><small>当前名额</small><strong>{{ current.available_quantity }}</strong></div>
-      <div><small>调整为</small><strong class="is-target">{{ form.available_quantity }}</strong></div>
-      <div><small>单位成本</small><strong>¥{{ current.unit_cost }}</strong></div>
-    </div>
+  <el-dialog v-model="dialog" title="调整酒店服务" width="min(94vw, 680px)" class="service-dialog" top="6vh">
+    <div v-if="current" class="service-dialog__head"><div><span class="eyebrow">酒店服务</span><h3>{{ current.service_name }}</h3></div><StatusTag :status="form.status" /></div>
     <el-form label-position="top" class="service-form">
-      <div class="service-form__grid">
-        <el-form-item label="服务日期"><el-date-picker v-model="form.available_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
-        <el-form-item label="状态"><el-select v-model="form.status" style="width:100%"><el-option label="可用" value="AVAILABLE" /><el-option label="暂停" value="SUSPENDED" /><el-option label="不可用" value="UNAVAILABLE" /></el-select></el-form-item>
-        <el-form-item label="开始时间"><el-time-picker v-model="form.start_time" value-format="HH:mm" format="HH:mm" placeholder="如 08:00" style="width:100%" /></el-form-item>
-        <el-form-item label="结束时间"><el-time-picker v-model="form.end_time" value-format="HH:mm" format="HH:mm" placeholder="如 10:30" style="width:100%" /></el-form-item>
-        <el-form-item label="可用名额" class="full"><el-input-number v-model="form.available_quantity" :min="0" :max="9999" style="width:100%" /></el-form-item>
-        <el-form-item label="服务图片" class="full"><ResourceImagePicker v-model="form.image_url" v-model:source="form.image_source" v-model:attribution="form.image_attribution" :query="`${current?.service_name || '杭州'} 酒店服务`" /></el-form-item>
-        <el-form-item label="调整说明" class="full"><el-input v-model="form.reason" type="textarea" :rows="2" /></el-form-item>
-      </div>
+      <section class="service-edit-section"><h3>使用规则</h3><div class="service-form__grid"><el-form-item label="可用日期"><el-date-picker v-model="form.available_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item><el-form-item label="状态"><el-select v-model="form.status" style="width:100%"><el-option label="可用" value="AVAILABLE" /><el-option label="暂停" value="SUSPENDED" /><el-option label="不可用" value="UNAVAILABLE" /></el-select></el-form-item><el-form-item label="开始时间"><el-time-picker v-model="form.start_time" value-format="HH:mm" format="HH:mm" placeholder="不固定时可留空" style="width:100%" /></el-form-item><el-form-item label="结束时间"><el-time-picker v-model="form.end_time" value-format="HH:mm" format="HH:mm" placeholder="不固定时可留空" style="width:100%" /></el-form-item></div></section>
+      <section class="service-edit-section"><h3>供应信息</h3><div class="service-form__grid"><el-form-item label="可用名额"><el-input-number v-model="form.available_quantity" :min="0" :max="9999" style="width:100%" /></el-form-item><el-form-item label="单位成本"><el-input v-model="form.unit_cost"><template #prepend>¥</template></el-input></el-form-item><el-form-item label="市场参考价"><el-input v-model="form.reference_price"><template #prepend>¥</template></el-input></el-form-item></div></section>
+      <section class="service-edit-section"><h3>展示信息</h3><el-form-item label="服务图片"><ResourceImagePicker v-model="form.image_url" v-model:source="form.image_source" v-model:attribution="form.image_attribution" :query="`${current?.service_name || '杭州'} 酒店服务`" /></el-form-item></section>
+      <el-form-item label="调整说明"><el-input v-model="form.reason" placeholder="例如：更新早餐接待名额" /></el-form-item>
     </el-form>
-    <template #footer><span class="service-dialog__hint">保存后相关产品的名额与成本会自动重算。</span><el-button @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存调整</el-button></template>
+    <template #footer><el-button @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存调整</el-button></template>
   </el-dialog>
 </template>
 
@@ -78,4 +65,13 @@ onMounted(load)
 .service-form__grid .full{grid-column:1/-1}
 .service-dialog__hint{float:left;color:var(--muted);font-size:11px;line-height:32px}
 @media(max-width:620px){.service-dialog__stats{grid-template-columns:1fr 1fr}.service-form__grid{grid-template-columns:1fr}.service-dialog__hint{display:none}}@media(max-width:700px){.header-actions{justify-content:flex-start;margin-top:12px}.service-toolbar{align-items:stretch;flex-direction:column}.service-grid{grid-template-columns:1fr}.service-card{grid-template-columns:92px minmax(0,1fr);min-height:118px}.service-card :deep(.media-image){min-height:118px}.service-card__body{padding:9px}}
+</style>
+
+<style scoped>
+.service-form { display:grid; gap:12px; }
+.service-edit-section { padding:14px 15px 2px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+.service-edit-section h3 { margin:0 0 12px; color:#36574d; font-size:13px; }
+.service-edit-section .service-form__grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 14px; }
+.service-form :deep(.el-form-item) { margin-bottom:12px; }
+@media(max-width:620px) { .service-edit-section .service-form__grid { grid-template-columns:1fr; } }
 </style>

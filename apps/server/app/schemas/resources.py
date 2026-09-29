@@ -1,7 +1,17 @@
 from datetime import date, time
 from decimal import Decimal
+import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _validate_detailed_address(value: str | None) -> str | None:
+    if value is None:
+        return value
+    text = value.strip()
+    if len(text) < 10 or not re.search(r"\d+\s*(?:号|弄|幢|栋|座|室)|(?:路|街|巷)\s*\d+", text):
+        raise ValueError("请填写包含道路门牌号或明确场馆入口的详细地址")
+    return text
 
 
 class RoomRead(BaseModel):
@@ -171,7 +181,7 @@ class PartnerResourceCreate(BaseModel):
     maximum_age: int | None = Field(default=None, ge=0, le=120)
     indoor: bool = True
     weather_tags: str = "RAIN,SUNNY,CLOUDY"
-    address: str = ""
+    address: str = Field(min_length=10, max_length=255)
     booking_notice: str = ""
     cancellation_rule: str = ""
     image_url: str = ""
@@ -179,6 +189,11 @@ class PartnerResourceCreate(BaseModel):
     image_attribution: str = ""
     package_enabled: bool = False
     source_type: str = "PARTNER"
+
+    @field_validator("address")
+    @classmethod
+    def detailed_address(cls, value: str) -> str:
+        return _validate_detailed_address(value) or ""
 
     @field_validator("maximum_age")
     @classmethod
@@ -190,6 +205,7 @@ class PartnerResourceCreate(BaseModel):
 
 
 class PartnerResourceUpdate(BaseModel):
+    merchant_id: int | None = Field(default=None, gt=0)
     resource_name: str | None = Field(default=None, min_length=1, max_length=160)
     category: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = None
@@ -205,7 +221,7 @@ class PartnerResourceUpdate(BaseModel):
     maximum_age: int | None = Field(default=None, ge=0, le=120)
     indoor: bool | None = None
     weather_tags: str | None = None
-    address: str | None = None
+    address: str | None = Field(default=None, min_length=10, max_length=255)
     booking_notice: str | None = None
     cancellation_rule: str | None = None
     image_url: str | None = None
@@ -214,6 +230,11 @@ class PartnerResourceUpdate(BaseModel):
     source_type: str | None = None
     status: str | None = None
     reason: str = "合作资源更新"
+
+    @field_validator("address")
+    @classmethod
+    def detailed_address(cls, value: str | None) -> str | None:
+        return _validate_detailed_address(value)
 
 
 class PackageToggleRequest(BaseModel):
@@ -235,3 +256,12 @@ class ResourceMediaUpdate(BaseModel):
     image_url: str = Field(default="", max_length=500)
     image_source: str = Field(default="", max_length=120)
     image_attribution: str = Field(default="", max_length=500)
+
+
+class ResourceAddressUpdate(BaseModel):
+    address: str = Field(min_length=10, max_length=255)
+
+    @field_validator("address")
+    @classmethod
+    def detailed_address(cls, value: str) -> str:
+        return _validate_detailed_address(value) or ""

@@ -140,6 +140,7 @@ export interface StayPlan extends StayOption {
   room_type: string
   room_name: string
   hotel_name: string
+  hotel_address?: string
   requested_nights: number
   adjusted: boolean
   max_nights: number
@@ -159,6 +160,15 @@ export interface DayItem {
   duration_text?: string
   notes?: string
   address?: string
+  included?: boolean
+  route_only?: boolean
+  area?: string
+  source_name?: string
+  source_url?: string
+  verification_status?: string
+  opening_hours?: string
+  reservation_notice?: string
+  route_role?: string
 }
 
 export interface DayPlan {
@@ -177,6 +187,10 @@ export interface RouteStop {
   address: string
   kind: string
   slot: string
+  included?: boolean
+  route_only?: boolean
+  source_name?: string
+  source_url?: string
 }
 
 export interface RouteLeg {
@@ -185,6 +199,7 @@ export interface RouteLeg {
   mode: string
   minutes: number
   note: string
+  distance_label?: string
 }
 
 export interface DayRoute {
@@ -266,6 +281,7 @@ export interface TravelProduct {
   reviews?: ProductReview[]
   rating_average?: string | number | null
   rating_count?: number
+  visitor_copy?: Record<string, any>
 }
 
 export interface Adjustment {

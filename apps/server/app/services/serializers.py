@@ -63,6 +63,7 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
             }
             for item in product.resources
         ],
+        "visitor_copy": dict((getattr(product, "experience_notes", None) or {}).get("visitor_copy") or {}),
     }
     if include_adjustments:
         data["adjustments"] = [
@@ -121,7 +122,20 @@ def _resource_end(item: ProductResource):
 
 def _resource_address(item: ProductResource):
     source = _resource_object(item)
-    return getattr(source, "address", None)
+    address = str(getattr(source, "address", "") or "").strip()
+    if address:
+        return address
+    product = item.product
+    hotel = getattr(product, "hotel", None) if product else None
+    if item.resource_type == "PARTNER_RESOURCE" and source is not None:
+        merchant = getattr(source, "merchant", None)
+        address = str(getattr(merchant, "address", "") or "").strip()
+        if address:
+            return address
+    # Every visitor itinerary has a physical destination. Hotel services and
+    # any partner with no saved storefront address fall back to the owning
+    # hotel's full address instead of the vague city-only placeholder.
+    return str(getattr(hotel, "address", "") or "").strip() or None
 
 
 def _resource_description(item: ProductResource):

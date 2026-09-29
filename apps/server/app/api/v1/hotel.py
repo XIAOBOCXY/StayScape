@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,11 +16,11 @@ from ...models import AgentApiToken, AgentConversation, Hotel, HotelService, Mer
 from ...repositories.product_repository import get_product, list_products
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
-from ...schemas.products import AdjustmentRead, BatchMarketingRefinementRequest, GenerateProductRequest, MarketingRegenerationRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductRefineRequest, ProductRefineResponse, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
+from ...schemas.products import AdjustmentRead, BatchMarketingRefinementRequest, CopyRewriteRequest, GenerateProductRequest, MarketingRegenerationRequest, ProductBatchApplyRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductRefineRequest, ProductRefineResponse, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
 from ...schemas.ai_operations import AssistantConversationCreate, AssistantMessageCreate, AgentConversationRead, AssistantTaskResponse, ProductProposalRead, ProposalConfirmRequest
 from ...schemas.ai_operations import OrderOverviewResponse, SalesCommandRequest, SalesCommandResponse
 from ...schemas.visitor import VisitorIntentStatusUpdate
-from ...schemas.resources import MediaImportRequest, MediaSearchRequest, MerchantRead, PackageToggleRequest, PartnerResourceRead, ResourceMediaUpdate, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
+from ...schemas.resources import MediaImportRequest, MediaSearchRequest, MerchantRead, PackageToggleRequest, PartnerResourceCreate, PartnerResourceRead, PartnerResourceUpdate, ResourceAddressUpdate, ResourceMediaUpdate, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
 from ...services.product_refine_service import ProductRefiner
 from ...services.sales_command_service import CATEGORY_KEYWORDS, apply_sales_command
@@ -33,6 +34,7 @@ from ...services.knowledge_service import KnowledgeService
 from ...services.weather_service import WeatherService
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
 from ...services.serializers import partner_resource_to_dict, product_to_dict
+from ...services.public_copy import visitor_product_to_dict
 from ...services.media_library_service import MAX_MEDIA_BYTES, MediaLibraryService
 from ...services.agent_token_service import create_token, list_tokens, revoke_token
 from ...agent.openclaw import OpenClawAgent
@@ -41,6 +43,12 @@ from ..deps import get_hotel_user, resolve_hotel_id
 from ..websocket_manager import manager
 
 router = APIRouter(prefix="/hotel", tags=["hotel"])
+
+
+class HotelPartnerResourceCreate(PartnerResourceCreate):
+    """Hotel-side resource entry; the merchant must belong to this hotel."""
+
+    merchant_id: int = Field(gt=0)
 
 
 class AgentTokenCreateRequest(BaseModel):
@@ -63,6 +71,7 @@ class IntegrationSettingsUpdate(BaseModel):
     image_api_key: str | None = Field(default=None, max_length=500)
     image_workspace_id: str | None = Field(default=None, max_length=160)
     image_enabled: bool | None = None
+    hotel_address: str | None = Field(default=None, min_length=4, max_length=255)
 
 
 def _agent_token_view(row: AgentApiToken) -> dict[str, Any]:
@@ -214,8 +223,8 @@ def ai_overview(target_date: date | None = None, db: Session = Depends(get_db), 
     )
     return {
         "operations_insights": insights.snapshot(target_date=selected_date),
-        # 顶部指标：未来 10 天的未售房量、压力最大的房型和重点日期可组包资源数。
-        "inventory_pressure": insights.room_night_pressure(window_days=10),
+        # 顶部指标覆盖演示日期范围（今天至 10 月 15 日，共 17 天）。
+        "inventory_pressure": insights.room_night_pressure(window_days=17),
         "weather": WeatherService(db).get_forecast("杭州", selected_date),
         "knowledge": KnowledgeService(db).search(limit=12),
         "knowledge_total": KnowledgeService(db).total(),
@@ -253,18 +262,22 @@ def delete_ai_conversation(conversation_id: int, db: Session = Depends(get_db), 
 @router.get("/settings/integrations")
 def hotel_settings(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     """Current model / image-generation configuration shown in the workbench."""
-
-    _ = (db, user)
-    return public_settings()
+    hotel = db.get(Hotel, hotel_id_for(db, user))
+    return {**public_settings(), "hotel_address": (hotel.address if hotel and hotel.address else "杭州市西湖区")}
 
 
 @router.put("/settings/integrations")
 def update_hotel_settings(payload: IntegrationSettingsUpdate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     """Save operator overrides for the model, vision and image services."""
-
-    _ = (db, user)
-    save_settings(payload.model_dump(exclude_none=True))
-    return public_settings()
+    values = payload.model_dump(exclude_none=True)
+    hotel_address = values.pop("hotel_address", None)
+    hotel = db.get(Hotel, hotel_id_for(db, user))
+    if hotel is not None and hotel_address is not None:
+        hotel.address = hotel_address.strip()
+        db.commit()
+    if values:
+        save_settings(values)
+    return {**public_settings(), "hotel_address": (hotel.address if hotel and hotel.address else "杭州市西湖区")}
 
 
 @router.get("/settings/export")
@@ -410,9 +423,22 @@ def ai_conversation_advisor(
         conversation.messages = messages[-50:]
     plan = dict(answer.get("plan") or {})
     # 记住当前选中的体验，下一轮预算达不到时保持它不变，而不是悄悄换资源。
-    selected_experiences = ((answer.get("primary") or {}).get("experiences") or [])
-    if selected_experiences:
-        plan["selected_resource"] = str(selected_experiences[0].get("name") or "")
+    primary = answer.get("primary") or {}
+    selected_experiences = primary.get("experiences") or []
+    if primary:
+        # Persist the complete current product, not just its first experience.
+        # The next natural-language turn, recommendation badges and candidate
+        # generation all read this same state.
+        plan["room_type"] = str(primary.get("room_type") or plan.get("room_type") or "")
+        plan["target_date"] = str(primary.get("target_date") or plan.get("target_date") or "")
+        plan["crowd"] = str(primary.get("crowd") or plan.get("crowd") or "")
+        plan["party_size"] = int(primary.get("party_size") or plan.get("party_size") or 2)
+        plan["resources"] = [str(item.get("name") or "") for item in selected_experiences if item.get("name")]
+        plan["selected_resource"] = plan["resources"][0] if plan["resources"] else ""
+        plan["services"] = list(primary.get("services") or [])
+        plan["price"] = str(primary.get("price") or "")
+        plan["visitor_budget"] = primary.get("visitor_budget")
+        plan["route_note"] = str(primary.get("route_note") or "")
     conversation.last_execution = {
         "advisor": plan,
         "step": step,
@@ -443,15 +469,37 @@ def ai_conversation_advisor(
             # plan.crowd 现在存的是代码（COUPLE 等），旧快照里可能是中文标签，两种都要兼容。
             raw_crowd = str(plan.get("crowd") or "")
             crowd_code = CROWD_CODE_BY_LABEL.get(raw_crowd, raw_crowd if raw_crowd.isupper() else "FAMILY")
+            selected_resources: list[dict[str, Any]] = []
+            selected_names = [str(item) for item in (plan.get("resources") or [])]
+            if selected_names:
+                partner_rows = list(db.scalars(
+                    select(PartnerResource)
+                    .join(Merchant)
+                    .where(Merchant.hotel_id == hotel_id, PartnerResource.available_date == room.available_date, PartnerResource.resource_name.in_(selected_names), PartnerResource.status == "AVAILABLE")
+                ).all())
+                for partner in partner_rows[:3]:
+                    selected_resources.append({"resource_type": "PARTNER_RESOURCE", "resource_id": partner.id, "quantity_per_package": int(plan.get("party_size") or 2)})
+            for item in (plan.get("services") or []):
+                service_id = int(item.get("id") or 0) if isinstance(item, dict) else 0
+                if service_id:
+                    selected_resources.append({"resource_type": "HOTEL_SERVICE", "resource_id": service_id, "quantity_per_package": int(item.get("quantity") or plan.get("party_size") or 2)})
             generate_request = GenerateProductRequest(
                 target_date=room.available_date,
                 weather="CLOUDY",
                 target_crowd=crowd_code,
                 party_size=int(plan.get("party_size") or 2),
+                minimum_gross_margin=Decimal("0.20"),
+                visitor_budget=Decimal(str(plan["visitor_budget"])) if plan.get("visitor_budget") else None,
+                preferred_price=Decimal(str(plan["price"])) if plan.get("price") else None,
                 theme=theme[:60],
                 room_inventory_id=room.id,
-                variant_count=3,
-                creative_direction=" ".join(str(item) for item in (plan.get("resources") or []))[:400],
+                resource_selections=selected_resources,
+                variant_count=1,
+                creative_direction=(
+                    "正式体验：" + "、".join(str(item) for item in (plan.get("resources") or []))
+                    + "；酒店权益：" + "、".join(str(item.get("name") if isinstance(item, dict) else item) for item in (plan.get("services") or []))
+                    + ("；路线安排：" + str(plan.get("route_note")) if plan.get("route_note") else "")
+                )[:800],
             )
             service = ProductProposalService(
                 db,
@@ -814,6 +862,82 @@ def resources(db: Session = Depends(get_db), user: User = Depends(get_hotel_user
     return result
 
 
+@router.post("/resources", response_model=PartnerResourceRead)
+async def create_partner_resource(request: HotelPartnerResourceCreate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    if request.available_date < date.today():
+        raise AppError("DATE_INVALID", "合作资源可用日期不能早于今天", field="available_date")
+    merchant = db.scalar(select(Merchant).where(Merchant.id == request.merchant_id, Merchant.hotel_id == hotel_id))
+    if merchant is None:
+        raise AppError("MERCHANT_NOT_FOUND", "请选择当前酒店名下的合作商户", field="merchant_id", status_code=404)
+    if request.start_time and request.end_time and request.start_time >= request.end_time:
+        raise AppError("TIME_INVALID", "活动开始时间必须早于结束时间")
+    data = request.model_dump(exclude={"merchant_id"})
+    resource = PartnerResource(
+        merchant_id=merchant.id,
+        **data,
+        status="AVAILABLE" if request.remaining_capacity > 0 else "SOLD_OUT",
+    )
+    db.add(resource)
+    db.flush()
+    event = ResourceChangeEvent(
+        event_type="PARTNER_RESOURCE_ADDED",
+        resource_type="PARTNER_RESOURCE",
+        resource_id=resource.id,
+        hotel_id=hotel_id,
+        old_value={},
+        new_value={
+            "resource_name": resource.resource_name,
+            "available_date": resource.available_date.isoformat(),
+            "remaining_capacity": resource.remaining_capacity,
+            "package_enabled": resource.package_enabled,
+        },
+        reason="酒店在合作资源池新增资源",
+        operator_role=user.role,
+        operator_id=user.id,
+        processed=True,
+    )
+    db.add(event)
+    db.commit()
+    await manager.broadcast(hotel_id, {"type": "RESOURCE_CHANGE", "title": "新增合作资源", "message": f"{resource.resource_name}已加入合作资源池", "affectedProducts": []})
+    db.refresh(resource)
+    return partner_resource_to_dict(resource, 0)
+
+
+@router.patch("/resources/{resource_id}", response_model=PartnerResourceRead)
+async def update_partner_resource(resource_id: int, request: PartnerResourceUpdate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    resource = db.scalar(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(PartnerResource.id == resource_id, Merchant.hotel_id == hotel_id).with_for_update())
+    if resource is None:
+        raise AppError("NOT_FOUND", "合作资源不存在", status_code=404)
+    values = request.model_dump(exclude_unset=True, exclude={"reason"})
+    merchant_id = values.pop("merchant_id", None)
+    if merchant_id is not None:
+        merchant = db.scalar(select(Merchant).where(Merchant.id == merchant_id, Merchant.hotel_id == hotel_id))
+        if merchant is None:
+            raise AppError("MERCHANT_NOT_FOUND", "请选择当前酒店名下的合作商户", field="merchant_id", status_code=404)
+        resource.merchant_id = merchant.id
+    if values.get("available_date") and values["available_date"] < date.today():
+        raise AppError("DATE_INVALID", "合作资源可用日期不能早于今天", field="available_date")
+    start_time = values.get("start_time", resource.start_time)
+    end_time = values.get("end_time", resource.end_time)
+    if start_time and end_time and start_time >= end_time:
+        raise AppError("TIME_INVALID", "活动开始时间必须早于结束时间")
+    old = {key: (str(getattr(resource, key)) if getattr(resource, key) is not None else None) for key in values}
+    for key, value in values.items():
+        setattr(resource, key, value)
+    new = request.model_dump(exclude_unset=True, exclude={"reason"}, mode="json")
+    event = ResourceChangeEvent(event_type="PARTNER_RESOURCE_UPDATED", resource_type="PARTNER_RESOURCE", resource_id=resource.id, hotel_id=hotel_id, old_value=old, new_value=new, reason=request.reason, operator_role=user.role, operator_id=user.id)
+    db.add(event)
+    db.flush()
+    affected = ProductService(db, hotel_id).recalculate_for_event(event)
+    db.commit()
+    await manager.broadcast(hotel_id, {"type": "RESOURCE_CHANGE", "title": "合作资源已更新", "message": resource.resource_name, "affectedProducts": affected})
+    db.refresh(resource)
+    count = db.scalar(select(func.count(ProductResource.id)).where(ProductResource.resource_type == "PARTNER_RESOURCE", ProductResource.resource_id == resource.id)) or 0
+    return partner_resource_to_dict(resource, int(count))
+
+
 @router.patch("/resources/{resource_id}/package", response_model=PartnerResourceRead)
 async def toggle_package(
     resource_id: int,
@@ -855,6 +979,23 @@ async def update_resource_media(resource_id: int, request: ResourceMediaUpdate, 
     db.add(event)
     db.commit()
     await manager.broadcast(hotel_id, {"type": "RESOURCE_CHANGE", "title": "合作资源图片已更新", "message": resource.resource_name, "affectedProducts": []})
+    db.refresh(resource)
+    count = db.scalar(select(func.count(ProductResource.id)).where(ProductResource.resource_type == "PARTNER_RESOURCE", ProductResource.resource_id == resource.id)) or 0
+    return partner_resource_to_dict(resource, int(count))
+
+
+@router.patch("/resources/{resource_id}/address", response_model=PartnerResourceRead)
+async def update_resource_address(resource_id: int, request: ResourceAddressUpdate, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    resource = db.scalar(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(PartnerResource.id == resource_id, Merchant.hotel_id == hotel_id).with_for_update())
+    if not resource:
+        raise AppError("NOT_FOUND", "合作资源不存在", status_code=404)
+    old_address = resource.address or ""
+    resource.address = request.address.strip()
+    event = ResourceChangeEvent(event_type="PARTNER_RESOURCE_ADDRESS_CHANGED", resource_type="PARTNER_RESOURCE", resource_id=resource.id, hotel_id=hotel_id, old_value={"address": old_address}, new_value={"address": resource.address}, reason="酒店补充合作资源详细地址", operator_role=user.role, operator_id=user.id, processed=True)
+    db.add(event)
+    db.commit()
+    await manager.broadcast(hotel_id, {"type": "RESOURCE_CHANGE", "title": "合作资源地点已更新", "message": resource.resource_name, "affectedProducts": []})
     db.refresh(resource)
     count = db.scalar(select(func.count(ProductResource.id)).where(ProductResource.resource_type == "PARTNER_RESOURCE", ProductResource.resource_id == resource.id)) or 0
     return partner_resource_to_dict(resource, int(count))
@@ -907,7 +1048,11 @@ def product_detail(product_id: int, db: Session = Depends(get_db), user: User = 
     product = get_product(db, product_id)
     if not product or product.hotel_id != hotel_id_for(db, user):
         raise AppError("NOT_FOUND", "产品不存在", status_code=404)
-    return product_to_dict(product, include_adjustments=True)
+    data = visitor_product_to_dict(product)
+    # Draft preview and public detail share the same visitor-facing sections.
+    from .visitor import build_detail_sections
+    data["detail_sections"] = build_detail_sections(db, product, data)
+    return {**data, "adjustments": product_to_dict(product, include_adjustments=True).get("adjustments", [])}
 
 
 @router.patch("/products/{product_id}", response_model=ProductRead)
@@ -941,7 +1086,7 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
             if source is not None and source.available_date != target_date:
                 raise AppError("DATE_NOT_MATCHED", f"资源{row.resource_name}未维护目标日期，请先调整资源日期", field="target_date", retryable=True)
 
-    changed = request.model_dump(exclude_unset=True, exclude={"regenerate_marketing", "target_date", "room_inventory_id", "marketing_assets"})
+    changed = request.model_dump(exclude_unset=True, exclude={"regenerate_marketing", "target_date", "room_inventory_id", "marketing_assets", "visitor_copy"})
     if request.target_date is not None:
         changed["target_date"] = target_date
     if request.room_inventory_id is not None or target_date != product.target_date:
@@ -951,7 +1096,7 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
         if forecast.get("usable"):
             changed["weather"] = str(forecast.get("scenario") or product.weather)
         else:
-            note = "天气信息需确认，请以出发前最新预报为准。"
+            note = "出发日前一天更新天气预报。"
             changed["risk_message"] = f"{product.risk_message} {note}".strip()
     weather_or_context_changed = any(key in changed for key in ("target_date", "room_inventory_id", "weather", "target_crowd"))
     for key, value in changed.items():
@@ -972,6 +1117,25 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
                 merged.append(asset)
         merged.extend(incoming.values())
         product.marketing_assets = merged
+    if request.visitor_copy is not None:
+        notes = dict(product.experience_notes or {})
+        previous_copy = dict(notes.get("visitor_copy") or {})
+        incoming_copy = dict(request.visitor_copy)
+        if isinstance(incoming_copy.get("resource_descriptions"), dict):
+            previous_copy["resource_descriptions"] = {
+                **dict(previous_copy.get("resource_descriptions") or {}),
+                **incoming_copy.pop("resource_descriptions"),
+            }
+        if isinstance(incoming_copy.get("resource_names"), dict):
+            previous_copy["resource_names"] = {
+                **dict(previous_copy.get("resource_names") or {}),
+                **incoming_copy.pop("resource_names"),
+            }
+        if isinstance(incoming_copy.get("itinerary"), list):
+            previous_copy["itinerary"] = incoming_copy.pop("itinerary")
+        previous_copy.update(incoming_copy)
+        notes["visitor_copy"] = previous_copy
+        product.experience_notes = notes
     db.flush()
 
     service = ProductService(db, hotel_id)
@@ -981,7 +1145,201 @@ def update_product(product_id: int, request: ProductUpdateRequest, db: Session =
     if request.regenerate_marketing or any(key in changed for key in ("theme", "weather", "target_crowd")):
         service.regenerate_marketing(product)
     db.commit()
-    return product_to_dict(product)
+    return visitor_product_to_dict(product)
+
+
+@router.post("/products/{product_id}/copy-rewrite")
+def rewrite_product_copy(product_id: int, request: CopyRewriteRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    product = get_product(db, product_id)
+    if not product or product.hotel_id != hotel_id or product.status == "DELETED":
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    field_labels = {
+        "product_name": "产品名称", "marketing_title": "游客端标题", "marketing_content": "产品介绍",
+        "recommendation_reason": "推荐理由", "risk_message": "出行提示", "resource_title": "体验名称",
+        "resource_description": "体验介绍", "itinerary_title": "行程标题", "itinerary_description": "行程说明",
+        "itinerary_summary": "当日行程概述", "marketing_asset_title": "营销素材标题", "marketing_asset_content": "营销素材正文",
+        "detail_text": "游客端详情文案",
+    }
+    direction = (
+        f"只重写{field_labels[request.field]}，现有文案：{request.current_text}。"
+        f"上下文：{request.context}。只返回适合直接展示给游客的一段中文，不改变日期、地址、价格、包含权益和承诺，不写‘以实际情况为准’等空泛提示。"
+    )
+    service = ProductService(db, hotel_id)
+    payload = service._marketing_payload(product, creative_direction=direction, style="SEEDING")
+    result = service.orchestrator.generate_marketing(payload)
+    output = result.value
+    title_fields = {"product_name", "marketing_title", "resource_title", "itinerary_title", "marketing_asset_title"}
+    replacement = output.marketing_title if request.field in title_fields else output.marketing_content
+    replacement = str(replacement or "").strip()
+    if not replacement:
+        raise AppError("COPY_REWRITE_EMPTY", "本次没有生成可用文案，请重试", retryable=True)
+    return {"replacement_text": replacement, "field": request.field, "trace_id": result.trace_id, "fallback_used": result.fallback_used}
+
+
+@router.post("/products/{product_id}/batch-apply")
+def batch_apply_product(product_id: int, request: ProductBatchApplyRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    hotel_id = hotel_id_for(db, user)
+    source = get_product(db, product_id)
+    if not source or source.hotel_id != hotel_id or source.status == "DELETED":
+        raise AppError("NOT_FOUND", "产品不存在", status_code=404)
+    source_resources = [row for row in source.resources if row.resource_type != "ROOM"]
+    if not source_resources:
+        raise AppError("PRODUCT_RESOURCES_MISSING", "产品没有可复制的体验或酒店权益", status_code=409)
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    seen: set[tuple[date, int]] = set()
+
+    def date_copy(text: str, target: date) -> str:
+        old = source.target_date
+        result = str(text or "").replace(old.isoformat(), target.isoformat())
+        result = result.replace(f"{old.month}月{old.day}日", f"{target.month}月{target.day}日")
+        return result
+
+    for target in request.targets:
+        key = (target.target_date, target.room_inventory_id)
+        if key in seen:
+            skipped.append({"target_date": target.target_date.isoformat(), "room_inventory_id": target.room_inventory_id, "reason": "目标日期与房型重复"})
+            continue
+        seen.add(key)
+        room = db.scalar(select(RoomInventory).where(RoomInventory.id == target.room_inventory_id, RoomInventory.hotel_id == hotel_id))
+        if not room or room.available_date != target.target_date:
+            skipped.append({"target_date": target.target_date.isoformat(), "room_inventory_id": target.room_inventory_id, "reason": "房型与目标日期不匹配"})
+            continue
+        if room.status != "AVAILABLE" or room.available_count <= 0 or room.max_guests < source.party_size:
+            skipped.append({"target_date": target.target_date.isoformat(), "room_inventory_id": target.room_inventory_id, "room_type": room.room_type, "reason": "房间已售罄、停用或接待人数不足"})
+            continue
+
+        mapped: list[tuple[ProductResource, HotelService | PartnerResource]] = []
+        reason = ""
+        for row in source_resources:
+            if row.resource_type == "HOTEL_SERVICE":
+                resource = db.scalar(select(HotelService).where(
+                    HotelService.hotel_id == hotel_id,
+                    HotelService.available_date == target.target_date,
+                    HotelService.service_name == row.resource_name,
+                    HotelService.status == "AVAILABLE",
+                    HotelService.available_quantity >= row.quantity_per_package,
+                ).order_by(HotelService.id))
+                if resource is None:
+                    reason = f"{row.resource_name}在目标日期没有足够可用名额"
+                    break
+            elif row.resource_type == "PARTNER_RESOURCE":
+                resource = db.scalar(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(
+                    Merchant.hotel_id == hotel_id,
+                    PartnerResource.available_date == target.target_date,
+                    PartnerResource.resource_name == row.resource_name,
+                    PartnerResource.package_enabled.is_(True),
+                    PartnerResource.status == "AVAILABLE",
+                    PartnerResource.remaining_capacity >= row.quantity_per_package,
+                    Merchant.cooperation_status == "ACTIVE",
+                ).order_by(PartnerResource.id))
+                if resource is None:
+                    reason = f"{row.resource_name}在目标日期没有可组包名额"
+                    break
+            else:
+                continue
+            mapped.append((row, resource))
+        if reason:
+            skipped.append({"target_date": target.target_date.isoformat(), "room_type": room.room_type, "reason": reason})
+            continue
+
+        early = any(isinstance(resource, PartnerResource) and resource.start_time is not None and resource.start_time.hour < 15 for _, resource in mapped)
+        has_baggage = any(isinstance(resource, HotelService) and (resource.service_type == "LUGGAGE_STORAGE" or "行李寄存" in resource.service_name) for _, resource in mapped)
+        if early and not has_baggage:
+            baggage = db.scalar(select(HotelService).where(
+                HotelService.hotel_id == hotel_id,
+                HotelService.available_date == target.target_date,
+                HotelService.status == "AVAILABLE",
+                HotelService.available_quantity > 0,
+                or_(HotelService.service_type == "LUGGAGE_STORAGE", HotelService.service_name.contains("行李寄存")),
+            ).order_by(HotelService.id))
+            if baggage is None:
+                skipped.append({"target_date": target.target_date.isoformat(), "room_type": room.room_type, "reason": "首项体验早于入住时间，目标日期没有行李寄存服务"})
+                continue
+            extra_row = ProductResource(resource_type="HOTEL_SERVICE", resource_id=baggage.id, resource_name=baggage.service_name, quantity_per_package=1, unit_cost=baggage.unit_cost, replaceable=baggage.replaceable, required=True)
+            mapped.append((extra_row, baggage))
+
+        selection_request = GenerateProductRequest(
+            target_date=target.target_date,
+            weather=source.weather,
+            target_crowd=source.target_crowd,
+            party_size=source.party_size,
+            nights=source.nights,
+            minimum_gross_margin=source.minimum_gross_margin_requirement,
+            visitor_budget=source.visitor_budget_limit,
+            theme=source.theme,
+            room_inventory_id=room.id,
+            preferred_price=source.price_anchor,
+            resource_selections=[{"resource_type": row.resource_type, "resource_id": resource.id, "quantity_per_package": row.quantity_per_package} for row, resource in mapped],
+        )
+        engine = ProductService(db, hotel_id)
+        try:
+            for _, resource in mapped:
+                if isinstance(resource, HotelService):
+                    engine._validate_service(resource, selection_request, next(row.quantity_per_package for row, candidate in mapped if candidate.id == resource.id))
+                else:
+                    engine._validate_partner(resource, selection_request, next(row.quantity_per_package for row, candidate in mapped if candidate.id == resource.id))
+            with db.begin_nested():
+                old_room_name = str(getattr(getattr(source, "room_inventory", None), "room_type", "") or "")
+                title = date_copy(source.product_name, target.target_date).replace(old_room_name, room.room_type) if old_room_name else date_copy(source.product_name, target.target_date)
+                cloned_resources = [ProductResource(
+                    resource_type="ROOM", resource_id=room.id, resource_name=room.room_type,
+                    quantity_per_package=1, unit_cost=room.accounting_cost, replaceable=False, required=True,
+                )]
+                for source_row, resource in mapped:
+                    cloned_resources.append(ProductResource(
+                        resource_type=source_row.resource_type,
+                        resource_id=resource.id,
+                        resource_name=resource.service_name if isinstance(resource, HotelService) else resource.resource_name,
+                        quantity_per_package=source_row.quantity_per_package,
+                        unit_cost=resource.unit_cost if isinstance(resource, HotelService) else resource.settlement_price,
+                        replaceable=resource.replaceable if isinstance(resource, HotelService) else True,
+                        required=True,
+                    ))
+                clone = TravelProduct(
+                    hotel_id=hotel_id,
+                    product_code=f"SS-{target.target_date:%Y%m%d}-{uuid4().hex[:8].upper()}",
+                    product_name=title,
+                    theme=source.theme,
+                    target_crowd=source.target_crowd,
+                    party_size=source.party_size,
+                    nights=source.nights,
+                    weather=source.weather,
+                    target_date=target.target_date,
+                    room_inventory_id=room.id,
+                    listed_quantity=min(int(source.listed_quantity or 0), int(room.available_count or 0)),
+                    sale_quantity=min(int(source.sale_quantity or 0), int(room.available_count or 0)),
+                    unit_cost=source.unit_cost,
+                    minimum_allowed_price=source.minimum_allowed_price,
+                    suggested_price=source.suggested_price,
+                    gross_profit=source.gross_profit,
+                    gross_margin=source.gross_margin,
+                    minimum_gross_margin_requirement=source.minimum_gross_margin_requirement,
+                    visitor_budget_limit=source.visitor_budget_limit,
+                    price_anchor=source.price_anchor,
+                    bottleneck_resource=source.bottleneck_resource,
+                    marketing_title=date_copy(source.marketing_title, target.target_date),
+                    marketing_content=date_copy(source.marketing_content, target.target_date),
+                    marketing_assets=source.marketing_assets or [],
+                    recommendation_reason=date_copy(source.recommendation_reason, target.target_date),
+                    risk_message=source.risk_message,
+                    experience_notes=dict(source.experience_notes or {}),
+                    status="DRAFT",
+                    resources=cloned_resources,
+                )
+                db.add(clone)
+                db.flush()
+                engine.recalculate_product(clone)
+                if clone.sale_quantity <= 0 or clone.status in {"PAUSED", "SOLD_OUT"}:
+                    raise AppError("TARGET_CAPACITY_INSUFFICIENT", "目标日期的客房或体验容量不足，未创建产品")
+                clone.status = "DRAFT"
+                db.flush()
+                created.append({"id": clone.id, "product_name": clone.product_name, "target_date": clone.target_date.isoformat(), "room_type": room.room_type, "sale_quantity": clone.sale_quantity})
+        except AppError as exc:
+            skipped.append({"target_date": target.target_date.isoformat(), "room_type": room.room_type, "reason": exc.message})
+    db.commit()
+    return {"created": created, "skipped": skipped, "created_count": len(created), "skipped_count": len(skipped)}
 
 
 @router.post("/products/{product_id}/refine", response_model=ProductRefineResponse)
@@ -1118,6 +1476,8 @@ def product_status(product_id: int, request: ProductStatusRequest, db: Session =
     if product.status == "PENDING_CONFIRMATION":
         raise AppError("PROPOSAL_CONFIRMATION_REQUIRED", "请先在 AI 运营任务中确认该候选，再调整产品状态。", status_code=409)
     if request.status == "ON_SALE":
+        if product.target_date < date.today():
+            raise AppError("PRODUCT_DATE_PASSED", "产品出行日期已结束，不能重新上架；请调整出行日期并重新校验后发布。", status_code=409)
         ProductService(db, hotel_id_for(db, user)).ensure_publish_capacity(product)
         if product.sale_quantity <= 0:
             raise AppError("CAPACITY_INSUFFICIENT", "库存为0的产品不能发布", field="status")

@@ -18,6 +18,9 @@ export const hotelApi = {
   updateService: (id: number, payload: Record<string, unknown>) => api.patch<HotelService>(`/hotel/services/${id}`, payload),
   merchants: () => api.get<Merchant[]>('/hotel/merchants'),
   resources: () => api.get<PartnerResource[]>('/hotel/resources'),
+  createResource: (payload: Record<string, unknown>) => api.post<PartnerResource>('/hotel/resources', payload),
+  updateResource: (id: number, payload: Record<string, unknown>) => api.patch<PartnerResource>(`/hotel/resources/${id}`, payload),
+  updateResourceAddress: (id: number, address: string) => api.patch<PartnerResource>(`/hotel/resources/${id}/address`, { address }),
   toggleResourcePackage: (id: number, package_enabled: boolean) => api.patch<PartnerResource>(`/hotel/resources/${id}/package`, { package_enabled }),
   updateResourceMedia: (id: number, payload: { image_url: string; image_source: string; image_attribution: string }) => api.patch<PartnerResource>(`/hotel/resources/${id}/media`, payload),
   products: (status?: string) => api.get<{ items: TravelProduct[]; total: number }>('/hotel/products', { params: status ? { status } : undefined }),
@@ -26,6 +29,8 @@ export const hotelApi = {
   refineProductMarketing: (payload: { product_ids: number[]; natural_language: string; style?: 'ARTISTIC' | 'PROMOTIONAL' | 'EMPATHETIC' | 'SEEDING'; generate_image?: boolean }) => api.post<TravelProduct[]>('/hotel/products/refine-marketing', payload),
   product: (id: number) => api.get<TravelProduct>(`/hotel/products/${id}`),
   updateProduct: (id: number, payload: Record<string, unknown>) => api.patch<TravelProduct>(`/hotel/products/${id}`, payload),
+  batchApplyProduct: (id: number, targets: Array<{ target_date: string; room_inventory_id: number }>) => api.post<{ created: Array<Record<string, any>>; skipped: Array<Record<string, any>>; created_count: number; skipped_count: number }>(`/hotel/products/${id}/batch-apply`, { targets }),
+  rewriteProductCopy: (id: number, payload: { field: string; current_text: string; context?: string }) => api.post<{ replacement_text: string; field: string; trace_id: string; fallback_used: boolean }>(`/hotel/products/${id}/copy-rewrite`, payload),
   refineProduct: (id: number, natural_language: string) => api.post<{
     layer: string
     layer_label: string

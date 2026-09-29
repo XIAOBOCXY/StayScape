@@ -32,6 +32,13 @@ from .showcase_seed import seed_showcase_products
 DEMO_PASSWORD = "StayScape123!"
 
 
+def _demo_dates() -> list[date]:
+    """Demo inventory covers today through Oct. 15, and keeps a 17-day window later."""
+    today = date.today()
+    end_date = max(date(2026, 10, 15), today + timedelta(days=16))
+    return [today + timedelta(days=offset) for offset in range((end_date - today).days + 1)]
+
+
 def clear_all(db: Session) -> None:
     # Explicit order keeps this compatible with PostgreSQL foreign-key checks.
     for model in (
@@ -67,12 +74,13 @@ def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = Fals
     knowledge_created = KnowledgeService(db).seed_curated_hangzhou()
     existing = db.query(Hotel).first()
     if existing:
-        target_date = db.query(RoomInventory).order_by(RoomInventory.available_date).first().available_date
+        first_room = db.query(RoomInventory).order_by(RoomInventory.available_date).first()
+        target_date = first_room.available_date if first_room else date.today()
+        dates = _demo_dates()
         result = {"hotel_id": existing.id, "target_date": target_date.isoformat(), "created": False, "knowledge_created": knowledge_created}
         # Keep a rolling, date-specific inventory pool for the visitor and
         # merchant calendars.  This is idempotent: each catalog row is keyed
         # by its real availability date and resource name.
-        dates = [target_date + timedelta(days=offset) for offset in range(10)]
         for offset, available_date in enumerate(dates):
             seed_extra_catalog(db, existing.id, available_date, demo_password=DEMO_PASSWORD, variation=offset)
         if include_showcase:
@@ -141,23 +149,23 @@ def seed_demo(db: Session, *, reset: bool = False, include_showcase: bool = Fals
     photo = db.query(Merchant).filter(Merchant.merchant_name == "杭州亲子旅拍").one()
     db.add_all(
         [
-            PartnerResource(merchant_id=craft.id, resource_name="室内非遗手作体验", category="CULTURE", description="在室内完成一件杭州非遗手作，适合亲子共同参与。", available_date=target_date, start_time=time(16, 0), end_time=time(17, 30), remaining_capacity=12, settlement_price=Decimal("60"), market_price=Decimal("98"), suitable_crowds="FAMILY", minimum_age=5, maximum_age=70, indoor=True, weather_tags="RAIN,SUNNY,CLOUDY", address="拱宸桥非遗工坊", booking_notice="请提前10分钟到场", cancellation_rule="体验前24小时可调整", package_enabled=True, status="AVAILABLE"),
-            PartnerResource(merchant_id=tea.id, resource_name="儿童茶文化课堂", category="CULTURE", description="用儿童友好的方式认识茶叶、茶器与杭州茶文化。", available_date=target_date, start_time=time(16, 0), end_time=time(17, 15), remaining_capacity=12, settlement_price=Decimal("45"), market_price=Decimal("88"), suitable_crowds="FAMILY", minimum_age=5, maximum_age=14, indoor=True, weather_tags="RAIN,SUNNY,CLOUDY", address="西湖茶事体验馆", booking_notice="儿童需由家长陪同", cancellation_rule="体验前24小时可调整", package_enabled=True, status="AVAILABLE"),
-            PartnerResource(merchant_id=tea.id, resource_name="宋韵点茶体验", category="CULTURE", description="以宋韵点茶为主题的轻文化体验。", available_date=target_date, start_time=time(10, 30), end_time=time(12, 0), remaining_capacity=9, settlement_price=Decimal("55"), market_price=Decimal("108"), suitable_crowds="FAMILY,COUPLE", minimum_age=8, maximum_age=70, indoor=True, weather_tags="RAIN,SUNNY,CLOUDY", address="西湖茶事体验馆", booking_notice="建议穿着舒适服装", cancellation_rule="体验前24小时可调整", package_enabled=True, status="AVAILABLE"),
-            PartnerResource(merchant_id=photo.id, resource_name="运河亲子旅拍", category="PHOTO", description="沿运河完成一组亲子纪念照片。", available_date=target_date, start_time=time(15, 30), end_time=time(17, 0), remaining_capacity=10, settlement_price=Decimal("90"), market_price=Decimal("150"), suitable_crowds="FAMILY", minimum_age=3, maximum_age=70, indoor=False, weather_tags="SUNNY,CLOUDY", address="京杭大运河沿线", booking_notice="雨天不建议使用", cancellation_rule="天气原因可改期", package_enabled=False, status="AVAILABLE"),
+            PartnerResource(merchant_id=craft.id, resource_name="室内非遗手作体验", category="CULTURE", description="在室内完成一件杭州非遗手作，适合亲子共同参与。", available_date=target_date, start_time=time(16, 0), end_time=time(17, 30), remaining_capacity=12, settlement_price=Decimal("60"), market_price=Decimal("98"), suitable_crowds="FAMILY", minimum_age=5, maximum_age=70, indoor=True, weather_tags="RAIN,SUNNY,CLOUDY", address="杭州市拱墅区小河路334号杭州工艺美术博物馆手工艺活态馆入口", booking_notice="请提前10分钟到场", cancellation_rule="体验前24小时可调整", package_enabled=True, status="AVAILABLE"),
+            PartnerResource(merchant_id=tea.id, resource_name="儿童茶文化课堂", category="CULTURE", description="用儿童友好的方式认识茶叶、茶器与杭州茶文化。", available_date=target_date, start_time=time(16, 0), end_time=time(17, 15), remaining_capacity=12, settlement_price=Decimal("45"), market_price=Decimal("88"), suitable_crowds="FAMILY", minimum_age=5, maximum_age=14, indoor=True, weather_tags="RAIN,SUNNY,CLOUDY", address="杭州市西湖区龙井路88号中国茶叶博物馆双峰馆区体验厅入口", booking_notice="儿童需由家长陪同", cancellation_rule="体验前24小时可调整", package_enabled=True, status="AVAILABLE"),
+            PartnerResource(merchant_id=tea.id, resource_name="宋韵点茶体验", category="CULTURE", description="以宋韵点茶为主题的轻文化体验。", available_date=target_date, start_time=time(10, 30), end_time=time(12, 0), remaining_capacity=9, settlement_price=Decimal("55"), market_price=Decimal("108"), suitable_crowds="FAMILY,COUPLE", minimum_age=8, maximum_age=70, indoor=True, weather_tags="RAIN,SUNNY,CLOUDY", address="杭州市西湖区龙井路88号中国茶叶博物馆双峰馆区体验厅入口", booking_notice="建议穿着舒适服装", cancellation_rule="体验前24小时可调整", package_enabled=True, status="AVAILABLE"),
+            PartnerResource(merchant_id=photo.id, resource_name="运河亲子旅拍", category="PHOTO", description="沿运河完成一组亲子纪念照片。", available_date=target_date, start_time=time(15, 30), end_time=time(17, 0), remaining_capacity=10, settlement_price=Decimal("90"), market_price=Decimal("150"), suitable_crowds="FAMILY", minimum_age=3, maximum_age=70, indoor=False, weather_tags="SUNNY,CLOUDY", address="杭州市拱墅区环城北路208号武林门码头游客入口", booking_notice="雨天不建议使用", cancellation_rule="天气原因可改期", package_enabled=False, status="AVAILABLE"),
         ]
     )
     db.add(
-        PublicResource(resource_name="西湖博物馆", category="MUSEUM", description="可用于游客免费推荐，不参与正式套餐库存和收入计算。", address="西湖区孤山路", opening_hours="09:00-17:00", suitable_crowds="FAMILY,COUPLE", weather_tags="RAIN,SUNNY,CLOUDY", source="杭州市文化广电旅游局", verified_at=datetime.now(timezone.utc), status="ACTIVE")
+        PublicResource(resource_name="西湖博物馆", category="MUSEUM", description="可用于游客免费推荐，不参与正式套餐库存和收入计算。", address="杭州市上城区南山路89号杭州西湖博物馆正门", opening_hours="09:00-17:00", suitable_crowds="FAMILY,COUPLE", weather_tags="RAIN,SUNNY,CLOUDY", source="杭州市文化广电旅游局", verified_at=datetime.now(timezone.utc), status="ACTIVE")
     )
-    seed_extra_catalog(db, hotel.id, target_date, demo_password=DEMO_PASSWORD, variation=0)
-    for offset in range(1, 10):
-        seed_extra_catalog(db, hotel.id, target_date + timedelta(days=offset), demo_password=DEMO_PASSWORD, variation=offset)
+    dates = _demo_dates()
+    for offset, available_date in enumerate(dates):
+        seed_extra_catalog(db, hotel.id, available_date, demo_password=DEMO_PASSWORD, variation=offset)
     db.commit()
     result = {"hotel_id": hotel.id, "target_date": target_date.isoformat(), "created": True, "knowledge_created": knowledge_created}
     if include_showcase:
         created = 0
-        for offset in range(10):
-            created += seed_showcase_products(db, hotel.id, target_date + timedelta(days=offset)).get("created", 0)
+        for available_date in dates:
+            created += seed_showcase_products(db, hotel.id, available_date).get("created", 0)
         result.update({"showcase_products": db.query(TravelProduct).filter(TravelProduct.hotel_id == hotel.id).count(), "created_showcase_products": created})
     return result

@@ -3,7 +3,7 @@ import { posterSvgDataUri } from '../../utils/posterSvg'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast } from 'vant'
-import { visitorApi } from '../../api'
+import { hotelApi, visitorApi } from '../../api'
 import { errorMessage } from '../../api/client'
 import MediaImage from '../../components/MediaImage.vue'
 import ProductCard from '../../components/ProductCard.vue'
@@ -16,6 +16,8 @@ import { useCountdown } from '../../utils/countdown'
 
 const route = useRoute()
 const router = useRouter()
+const previewMode = computed(() => route.query.preview === '1')
+const embeddedMode = computed(() => route.query.embedded === '1')
 const product = ref<TravelProduct | null>(null)
 const loading = ref(true)
 const question = ref('')
@@ -29,7 +31,7 @@ const assistantMinimized = ref(false)
 const targetDateLabel = computed(() => {
   const value = String(product.value?.target_date || '')
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  return match ? `${Number(match[2])}月${Number(match[3])}日` : '日期以购买确认'
+  return match ? `${Number(match[2])}月${Number(match[3])}日` : '日期待选'
 })
 const favorite = ref(false)
 const guides = ref<Array<Record<string, any>>>([])
@@ -62,7 +64,7 @@ if (route.query.room) {
   if (Number.isFinite(roomFromQuery) && roomFromQuery > 0) selectedRoomId.value = roomFromQuery
 }
 const roomSwitching = ref(false)
-const soldOut = computed(() => Number(product.value?.sale_quantity || 0) <= 0)
+const soldOut = computed(() => !previewMode.value && Number(product.value?.sale_quantity || 0) <= 0)
 const roomFeatures = computed(() => {
   const room = product.value?.resources.find((item) => item.resource_type === 'ROOM')
   return String(room?.description || '')
@@ -135,6 +137,7 @@ const anchorSections = [
   { id: 'fees', label: '费用' },
   { id: 'notice', label: '须知' },
   { id: 'guides', label: '参考路线' },
+  { id: 'reviews', label: '评价' },
 ]
 const activeSection = ref('highlights')
 function updateAnchorFromScroll() {
@@ -199,7 +202,7 @@ const addressList = computed(() => {
   const values = product.value?.resources.map((item) => item.address).filter(Boolean) || []
   return [...new Set(values.map((item) => String(item)))]
 })
-const addressSummary = computed(() => addressList.value.join('、') || '酒店前台集合，体验点以购买确认信息为准')
+const addressSummary = computed(() => addressList.value.join('、') || String(stay.value?.hotel_address || '酒店地址待补充'))
 const packageItems = computed(() => product.value?.resources.map((item) => item.resource_name).filter(Boolean).join('、') || '住宿与在地体验')
 // The stay is listed separately with its night count, so the fee list shows
 // only the experience and hotel-service lines to avoid duplicating the room.
@@ -214,7 +217,7 @@ const transportHint = computed(() => {
   if (/运河|拱宸桥/.test(address)) return `建议导航至“${address}”，可从拱宸桥东站换乘步行或打车抵达。`
   if (/良渚/.test(address)) return `建议导航至“${address}”，地铁 2 号线良渚站方向更方便。`
   if (/湘湖/.test(address)) return `建议导航至“${address}”，地铁 1 号线湘湖站方向更方便。`
-  return `直接导航至“${address}”；抵达后先到酒店前台，按购买确认中的顺序前往体验点。`
+  return `直接导航至“${address}”，按页面行程顺序抵达各体验点。`
 })
 const guideQuery = computed(() => {
   if (!product.value) return '杭州旅行'
@@ -245,8 +248,8 @@ const ratingAverage = computed(() => {
 })
 const ratingCount = computed(() => Number(product.value?.rating_count || 0))
 const recommendationNote = computed(() => {
-  const time = earliestExperience.value ? `首个体验建议 ${earliestExperience.value} 前抵达` : '建议按购买确认时间抵达'
-  return `${time}；地址为${addressSummary.value}。${crowdLabel.value}可优先选择，到店时间有变化可以在购买时备注。`
+  const time = earliestExperience.value ? `首个体验安排在 ${earliestExperience.value}` : '体验时间按行程卡片安排'
+  return `${time}；集合地点为${addressSummary.value}。${crowdLabel.value}可按页面路线前往。`
 })
 const reviewEntries = computed(() => {
   const first = experienceResources.value[0]?.resource_name || '核心体验'
@@ -263,39 +266,49 @@ function resourceSummary(item: TravelProduct['resources'][number]) {
   if (description) return description
   const place = item.address || (item.resource_type === 'ROOM' || item.resource_type === 'HOTEL_SERVICE' ? '酒店内' : '杭州')
   const time = item.start_time && item.end_time ? `，${item.start_time.slice(0, 5)}–${item.end_time.slice(0, 5)}` : ''
-  if (item.resource_type === 'ROOM') return `${item.resource_name}含一晚住宿，${item.quantity_per_package}间；到店后先办理入住，再按购买确认安排体验。`
-  if (item.resource_type === 'HOTEL_SERVICE') return `${item.resource_name}在酒店内使用${time || '，时间以购买确认信息为准'}，到店后向前台报商品名称即可。`
+  if (item.resource_type === 'ROOM') return `${item.resource_name}含一晚住宿，${item.quantity_per_package}间；早到时先在前台寄存行李，再按行程参加体验。`
+  if (item.resource_type === 'HOTEL_SERVICE') return `${item.resource_name}在酒店内使用${time || '，按当天行程安排'}，到店后向前台报商品名称即可。`
   return `${item.resource_name}位于${place}${time}，现场由工作人员引导完成，建议提前 10 分钟抵达。`
 }
 
 function resourceMeta(item: TravelProduct['resources'][number]) {
   const place = item.address || (item.resource_type === 'ROOM' || item.resource_type === 'HOTEL_SERVICE' ? '酒店内' : '杭州')
-  const time = item.start_time && item.end_time ? item.start_time.slice(0, 5) + ' – ' + item.end_time.slice(0, 5) : '时间以购买确认信息为准'
+  const time = item.start_time && item.end_time ? item.start_time.slice(0, 5) + ' – ' + item.end_time.slice(0, 5) : '按当日行程安排'
   return place + ' · ' + time
 }
 
 function itineraryTime(item: TravelProduct['resources'][number], index: number) {
   if (item.start_time && item.end_time) return `${item.start_time.slice(0, 5)} – ${item.end_time.slice(0, 5)}`
   if (item.resource_type === 'ROOM') return index === 0 ? '15:00 后办理入住' : '次日 12:00 前退房'
-  if (item.resource_type === 'HOTEL_SERVICE') return '入住后按购买确认时间体验'
-  return '具体时间以购买确认信息为准'
+  if (item.resource_type === 'HOTEL_SERVICE') return '按当天行程在酒店内使用'
+  return '按行程顺序参加体验'
 }
 
 function itineraryAction(item: TravelProduct['resources'][number]) {
   if (item.resource_type === 'ROOM') return `办理入住 · ${item.resource_name}含一晚住宿`
   if (item.resource_type === 'HOTEL_SERVICE') return `酒店内使用 · 向前台报${item.resource_name}`
-  return item.address ? `抵达 ${item.address} · 提前 10 分钟签到` : '按购买确认信息抵达体验点'
+  return item.address ? `抵达 ${item.address} · 提前 10 分钟签到` : '按行程卡片中的地址抵达体验点'
 }
 
 async function load() {
   loading.value = true
-  try { product.value = (await visitorApi.product(Number(route.params.id), nights.value, selectedRoomId.value)).data
+  try { product.value = (previewMode.value
+      ? await hotelApi.product(Number(route.params.id))
+      : await visitorApi.product(Number(route.params.id), nights.value, selectedRoomId.value)).data
     guides.value = (await visitorApi.guides(guideQuery.value, addressList.value.join(' '))).data
-    alternatives.value = (await visitorApi.productAlternatives(Number(route.params.id))).data
-    const sameDay = await visitorApi.products({ target_date: product.value?.target_date, compact: true })
-    related.value = sameDay.data.filter((item) => item.id !== product.value?.id).slice(0, 4)
-    roomOptions.value = (await visitorApi.productRooms(Number(route.params.id))).data.rooms
-    try { dateOptions.value = (await visitorApi.productDates(Number(route.params.id))).data.dates } catch { dateOptions.value = [] } }
+    if (!previewMode.value) {
+      alternatives.value = (await visitorApi.productAlternatives(Number(route.params.id))).data
+      const sameDay = await visitorApi.products({ target_date: product.value?.target_date, compact: true })
+      related.value = sameDay.data.filter((item) => item.id !== product.value?.id).slice(0, 4)
+      roomOptions.value = (await visitorApi.productRooms(Number(route.params.id))).data.rooms
+      try { dateOptions.value = (await visitorApi.productDates(Number(route.params.id))).data.dates } catch { dateOptions.value = [] }
+    } else {
+      alternatives.value = { room_types: [], same_room_packages: [] }
+      related.value = []
+      roomOptions.value = []
+      dateOptions.value = []
+    }
+  }
   catch (e) { showToast(errorMessage(e)) }
   finally { loading.value = false }
 }
@@ -450,12 +463,13 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 
 <template>
   <div v-if="loading" class="detail-loading"><span /> 正在打开这段杭州体验…</div>
-  <div v-else-if="product" class="visitor-product-detail">
+  <div v-else-if="product" class="visitor-product-detail" :class="{ 'is-embedded-preview': embeddedMode }">
+    <div v-if="previewMode && !embeddedMode" class="preview-mode-banner"><b>游客端效果预览</b><router-link to="/hotel/products/generate">返回产品方案</router-link></div>
     <section class="product-detail-hero" @touchstart.passive="onSwipeStart" @touchend.passive="onSwipeEnd">
       <MediaImage :media="hero" aspect="hero" eager />
       <div class="product-detail-hero__veil" />
-      <router-link to="/visitor/products" class="back-to-list">← 返回体验列表</router-link>
-      <div class="hero-actions" aria-label="商品操作">
+      <router-link v-if="!embeddedMode" :to="previewMode ? '/hotel/products/generate' : '/visitor/products'" class="back-to-list">{{ previewMode ? '← 返回方案' : '← 返回体验列表' }}</router-link>
+      <div v-if="!previewMode" class="hero-actions" aria-label="商品操作">
         <button type="button" :aria-label="favorite ? '取消收藏' : '收藏商品'" @click.stop="favorite = !favorite">{{ favorite ? '♥' : '♡' }}</button>
         <button type="button" aria-label="分享商品" @click.stop="posterDialog = true">分享</button>
       </div>
@@ -563,7 +577,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
             <p class="day-plan__summary">{{ day.summary }}</p>
             <ol class="day-plan__items">
               <li v-for="(entry, index) in day.items" :key="index">
-                <span class="day-plan__time"><b>{{ entry.slot_label || '时间待定' }}</b>{{ entry.time || '以购买确认为准' }}</span>
+                <span class="day-plan__time"><b>{{ entry.slot_label || '行程安排' }}</b>{{ entry.time || '按行程顺序体验' }}</span>
                 <div>
                   <b>{{ entry.title }}</b>
                   <p>{{ entry.description }}</p>
@@ -592,13 +606,13 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
         </div>
       </section>
 
-      <section id="fees" class="fee-section"><div class="section-heading"><div><span class="section-kicker">费用</span><h2>费用说明</h2></div></div><div class="fee-columns"><div><h3>费用包含</h3><p>✓ {{ stay?.room_name || '酒店住宿' }} × {{ stay?.nights || 1 }} 晚<small>{{ stayRange }}</small></p><p v-for="item in feeResources" :key="'in'+item.id">✓ {{ item.resource_name }} ×{{ item.quantity_per_package }}<small>{{ resourceMeta(item) }}</small></p><p>✓ 酒店服务与现场引导</p></div><div><h3>费用不含</h3><p>× 往返交通与停车费用</p><p>× 套餐外的餐饮和个人消费</p><p>× 超出套餐数量的加购项目</p></div></div></section><section id="notice" class="notice-section"><div class="section-heading"><div><span class="section-kicker">须知</span><h2>购买须知</h2></div></div><div class="notice-list"><p>适合人群：{{ crowdLabel }}；套餐包含 {{ packageItems }}。</p><p>入住与退房：{{ stayRange }}；{{ stay?.check_in_time || '15:00' }} 后可办理入住，{{ stay?.check_out_time || '12:00' }} 前退房。</p><p>行程天数：{{ stayLabel }}，含 {{ stay?.nights || 1 }} 晚酒店住宿，不提供当天往返的一日游。</p><p>出行日期：{{ product.target_date }}；{{ earliestExperience ? '首项体验 ' + earliestExperience + ' 前抵达' : '时间以购买确认信息为准' }}。</p><p>集合地址：{{ addressSummary }}。</p><p>如何前往：{{ transportHint }}</p><p>天气与改期：户外项目遇雨会调整安排，出发前会再次确认。</p><p>取消规则：出发前 48 小时可申请取消，临近出发以商家确认信息为准。</p></div></section><section class="detail-facts-section"><div class="section-heading"><div><span class="section-kicker">出行信息</span><h2>地址、交通与细节</h2></div><span class="section-count">03</span></div><div class="detail-facts-grid"><div><b>费用包含</b><p>{{ packageItems }}；价格已含页面列出的住宿、体验和现场引导。</p></div><div><b>详细地址</b><p>{{ addressSummary }}。</p></div><div><b>如何前往</b><p>{{ transportHint }}</p></div><div><b>注意事项</b><p>{{ crowdLabel }}出行建议提前确认集合入口，并按购买确认时间提前 10 分钟抵达。</p></div></div></section>
+      <section id="fees" class="fee-section"><div class="section-heading"><div><span class="section-kicker">费用</span><h2>费用说明</h2></div></div><div class="fee-columns"><div><h3>费用包含</h3><p>✓ {{ stay?.room_name || '酒店住宿' }} × {{ stay?.nights || 1 }} 晚<small>{{ stayRange }}</small></p><p v-for="item in feeResources" :key="'in'+item.id">✓ {{ item.resource_name }} ×{{ item.quantity_per_package }}<small>{{ resourceMeta(item) }}</small></p><p>✓ 酒店服务与现场引导</p></div><div><h3>费用不含</h3><p>× 往返交通与停车费用</p><p>× 套餐外的餐饮和个人消费</p><p>× 超出套餐数量的加购项目</p></div></div></section><section id="notice" class="notice-section"><div class="section-heading"><div><span class="section-kicker">须知</span><h2>购买须知</h2></div></div><div class="notice-list"><p>适合人群：{{ crowdLabel }}；套餐包含 {{ packageItems }}。</p><p>入住与退房：{{ stayRange }}；{{ stay?.check_in_time || '15:00' }} 后可办理入住，{{ stay?.check_out_time || '12:00' }} 前退房。</p><p>行程天数：{{ stayLabel }}，含 {{ stay?.nights || 1 }} 晚酒店住宿，不提供当天往返的一日游。</p><p>出行日期：{{ product.target_date }}；{{ earliestExperience ? '首项体验 ' + earliestExperience + ' 前抵达' : '按行程卡片安排' }}。</p><p>集合地址：{{ addressSummary }}。</p><p>如何前往：{{ transportHint }}</p><p>天气与改期：户外项目遇雨会调整安排，出发前会再次确认。</p><p>取消规则：出发前 48 小时可申请取消，临近出发的取消申请按平台规则处理。</p></div></section><section class="detail-facts-section"><div class="section-heading"><div><span class="section-kicker">出行信息</span><h2>地址、交通与细节</h2></div><span class="section-count">03</span></div><div class="detail-facts-grid"><div><b>费用包含</b><p>{{ packageItems }}；价格已含页面列出的住宿、体验和现场引导。</p></div><div><b>详细地址</b><p>{{ addressSummary }}。</p></div><div><b>如何前往</b><p>{{ transportHint }}</p></div><div><b>注意事项</b><p>{{ crowdLabel }}出行建议提前确认集合入口，并提前 10 分钟抵达。</p></div></div></section>
       <section class="hotel-detail-section">
         <div class="section-heading"><div><span class="section-kicker">住宿</span><h2>酒店与房型</h2></div></div>
         <div class="hotel-detail-grid">
           <div><span>房型</span><strong>{{ roomResource?.resource_name || '酒店客房' }}</strong></div>
           <div><span>可住人数</span><strong>最多 {{ roomMaxGuests }} 人</strong></div>
-          <div class="full"><span>房型细节</span><strong>{{ roomFeatures || '以酒店确认信息为准' }}</strong></div>
+          <div class="full"><span>房型细节</span><strong>{{ roomFeatures || '入住标准客房，具体设施见房型介绍' }}</strong></div>
           <div v-if="roomFeatureNames" class="full"><span>房型特色</span><strong>{{ roomFeatureNames }}</strong></div>
           <div><span>入住 / 退房</span><strong>{{ stayRange }}</strong></div>
           <div><span>入住时间</span><strong>{{ stay?.check_in_time || '15:00' }} 后入住 · {{ stay?.check_out_time || '12:00' }} 前退房</strong></div>
@@ -610,7 +624,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
         <p class="photo-detail-lead">{{ photoResource.description }}</p>
         <ul class="photo-detail-list">
           <li v-for="line in String(photoResource.booking_notice || '').split('；').filter(Boolean)" :key="line">{{ line }}</li>
-          <li v-if="!photoResource.booking_notice">拍摄时长、精修张数与机位以商家确认为准。</li>
+          <li v-if="!photoResource.booking_notice">拍摄时长、精修张数与机位可在出发前联系商家预约。</li>
         </ul>
       </section>
 
@@ -637,6 +651,18 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
         </div>
       </section>
 
+      <section id="reviews" class="review-section">
+        <div class="section-heading"><div><span class="section-kicker">游客评价</span><h2>真实出行反馈</h2></div><span v-if="ratingCount" class="review-rating">{{ ratingAverage }} 分 · {{ ratingCount }} 条</span></div>
+        <div v-if="reviews.length" class="review-list">
+          <article v-for="(review, index) in reviews" :key="review.id || index" class="review-card">
+            <header><strong>{{ review.author_name || '游客评价' }}</strong><span>{{ review.rating }} 分<template v-if="review.stayed_on"> · 出行日期 {{ review.stayed_on }}</template></span></header>
+            <p>{{ review.content || '暂无评价内容' }}</p>
+            <div v-if="review.highlights?.length" class="review-highlights"><span v-for="item in review.highlights" :key="item">{{ item }}</span></div>
+          </article>
+        </div>
+        <p v-else class="review-empty">这款产品还没有游客评价。</p>
+      </section>
+
       <section v-if="gallery.length" class="moments-section">
         <div class="section-heading">
           <div><span class="section-kicker">照片</span><h2>现场照片</h2></div>
@@ -657,7 +683,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 
     </main>
 
-    <section class="booking-bar">
+    <section v-if="!previewMode" class="booking-bar">
       <div><span class="section-kicker">购买</span><p>提交后等待酒店确认。</p></div>
       <div class="booking-bar__right"><button class="assistant-action" @click="router.push({ path: '/visitor/assistant', query: { product: String(product.id) } })">旅居助手</button><strong>¥{{ stayPrice }}</strong><span>/ 套 · {{ stayLabel }}</span><el-button type="primary" :disabled="product.sale_quantity <= 0" @click="openIntent">立即购买</el-button></div>
     </section>
@@ -1741,7 +1767,21 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 
 /* 让 sticky 生效（祖先不能是 overflow:hidden）；具体偏移见上方章节导航规则。 */
 .visitor-product-detail { overflow: visible !important; }
+.visitor-product-detail.is-embedded-preview { padding-bottom: 0; }
+.preview-mode-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 10px; padding:10px 14px; border:1px solid #d8e9e0; border-radius:10px; background:#f0f8f4; color:#315f52; font-size:12px; }
+.preview-mode-banner a { color:#236e5e; font-weight:650; text-decoration:none; }
+.review-section { margin:0 0 24px; }
+.review-rating { color:#88703a; font-size:12px; }
+.review-list { display:grid; gap:8px; }
+.review-card { padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+.review-card header { display:flex; justify-content:space-between; gap:12px; color:var(--ink); font-size:12px; }
+.review-card header span { color:var(--muted); font-size:10px; }
+.review-card p,.review-empty { margin:7px 0 0; color:#53645d; font-size:12px; line-height:1.7; }
+.review-highlights { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+.review-highlights span { padding:3px 7px; border-radius:999px; background:#edf7f2; color:#36796b; font-size:10px; }
 @media (max-width: 700px) {
+  .preview-mode-banner { margin:0 0 8px; padding:9px 11px; }
+  .review-card header { align-items:flex-start; flex-direction:column; gap:3px; }
   .guide-source-section .guide-facts { grid-template-columns: 1fr; }
 }
 </style>

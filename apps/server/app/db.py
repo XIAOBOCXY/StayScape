@@ -31,6 +31,11 @@ def get_db() -> Generator[Session, None, None]:
         configure_database()
     db = SessionLocal()
     try:
+        # Product dates are inventory deadlines: once a date has passed, never
+        # leave its offer marked as active in hotel or visitor-facing reads.
+        from .services.inventory_service import expire_past_products
+
+        expire_past_products(db)
         yield db
     finally:
         db.close()

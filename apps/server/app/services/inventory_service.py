@@ -9,10 +9,10 @@ the demo database honest after repeated runs.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import settings
@@ -32,6 +32,23 @@ from ..rules.availability_rule import resource_is_usable
 
 
 ACTIVE_PRODUCT_STATUSES = {"ON_SALE", "LOW_STOCK"}
+
+
+def expire_past_products(db: Session) -> int:
+    """Move products whose stay date has passed out of active sales status."""
+
+    result = db.execute(
+        update(TravelProduct)
+        .where(
+            TravelProduct.target_date < date.today(),
+            TravelProduct.status.in_(ACTIVE_PRODUCT_STATUSES),
+        )
+        .values(status="OFF_SHELF")
+    )
+    expired = int(result.rowcount or 0)
+    if expired:
+        db.commit()
+    return expired
 
 
 def _created_sort_key(value: datetime | None) -> float:

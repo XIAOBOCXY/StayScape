@@ -478,7 +478,7 @@ def build_detail_sections(db: Session, product: TravelProduct, data: dict[str, A
     for item in experiences:
         start = str(item.get("start_time") or "")[:5]
         end = str(item.get("end_time") or "")[:5]
-        duration_text = "时长以现场安排为准"
+        duration_text = "按当天行程安排"
         if start and end:
             try:
                 start_minutes = int(start[:2]) * 60 + int(start[3:5])
@@ -489,10 +489,9 @@ def build_detail_sections(db: Session, product: TravelProduct, data: dict[str, A
                 hours, minutes = divmod(span, 60)
                 duration_text = f"约 {hours} 小时" + (f" {minutes} 分钟" if minutes else "")
             except ValueError:
-                duration_text = "时长以现场安排为准"
-        address = str(item.get("address") or "杭州")
-        category = str(item.get("category") or "")
-        extra = "现场可加购摄影、手作等增值项目，按商家当日公示价另付" if category in {"PHOTO", "CRAFT", "CULTURE", "WORKSHOP"} else "套餐内已含，无额外收费项目"
+                duration_text = "按当天行程安排"
+        address = str(item.get("address") or stay.get("hotel_address") or "")
+        extra = "已包含在套餐价格内，无需为该体验另付费用。"
         source_note = ""
         match = knowledge.search(str(item.get("resource_name") or ""), limit=1)
         if match:
@@ -500,7 +499,7 @@ def build_detail_sections(db: Session, product: TravelProduct, data: dict[str, A
         experience_details.append(
             {
                 "name": str(item.get("resource_name") or ""),
-                "time": f"{start}–{end}" if start and end else "时间以购买确认信息为准",
+                "time": f"{start}–{end}" if start and end else "按当天行程安排",
                 "duration": duration_text,
                 "address": address,
                 "included": "已含在套餐价格内",
@@ -514,17 +513,49 @@ def build_detail_sections(db: Session, product: TravelProduct, data: dict[str, A
     spend_notes = [
         f"套餐价 ¥{data.get('suggested_price')} 起，含 {nights} 晚{room_name}住宿、上述 {len(experiences)} 项体验、酒店服务与现场引导。",
         "不含往返大交通、套餐外餐饮与个人消费；酒店内早餐以外的加餐、洗衣、迷你吧等按酒店标准另计。",
-        f"体验点周边消费以现场为准：{ '、'.join(dict.fromkeys(item['address'] for item in experience_details)) or '杭州' }一带餐饮与纪念品属于自费项目。",
+        "体验点周边餐饮、纪念品与个人消费不包含在套餐价内。",
     ]
 
     areas = {word for word in ("西湖", "湖滨", "运河", "拱宸桥", "南山", "良渚", "西溪", "湘湖", "龙井", "钱江", "河坊街") if word in " ".join(item["address"] + item["feature"] for item in experience_details)}
+    route_segments: list[str] = []
+    for day_route in data.get("route_plan") or []:
+        stops = day_route.get("stops") or []
+        for index, leg in enumerate(day_route.get("legs") or []):
+            if index + 1 >= len(stops):
+                continue
+            source, target = stops[index], stops[index + 1]
+            minutes = int(leg.get("minutes") or 0)
+            if minutes:
+                route_segments.append(
+                    f"{source.get('title')}（{source.get('address')}）→{target.get('title')}（{target.get('address')}），预留约 {minutes} 分钟"
+                )
+    cancellation_rules = list(dict.fromkeys(
+        str(item.get("cancellation_rule") or "").strip()
+        for item in resources
+        if str(item.get("cancellation_rule") or "").strip()
+    ))
     tips = [
-        f"到达方式：{('体验点集中在' + '、'.join(sorted(areas)) + '一带，从酒店出发打车约 15–25 分钟；同一片区之间可以步行。') if areas else '从酒店前台可协助叫车，体验点之间建议打车衔接。'}",
-        "时间安排：按购买确认的场次提前 10 分钟到达；如当天有雨，可与前台确认室内备选顺序。",
-        "退改说明：出发前 48 小时可申请取消；临近出发以商家确认信息为准。",
+        ("路线衔接：" + "；".join(route_segments)) if route_segments else f"路线安排：住宿与体验点位于{'、'.join(sorted(areas)) + '一带' if areas else '杭州'}，按行程顺序衔接。",
+        "场次安排：按页面列出的时段出发，提前 10 分钟到达集合点。",
+        ("退改说明：" + "；".join(cancellation_rules)) if cancellation_rules else "退改说明：下单时会展示本产品的退改规则。",
         f"随身建议：{ '户外项目请穿方便行走的鞋，夏天带防晒与驱蚊；' if any(word in ' '.join(item['feature'] for item in experience_details) for word in ('户外', '散步', '骑行', '湿地')) else '室内项目为主，带一件薄外套应对空调温差；' }儿童同行请携带常用药品与饮用水。",
     ]
-    return {"intro": intro, "experience_details": experience_details, "spend_notes": spend_notes, "tips": tips}
+    result = {"intro": intro, "experience_details": experience_details, "spend_notes": spend_notes, "tips": tips}
+    copy_overrides = (data.get("visitor_copy") or {}).get("detail_sections") or {}
+    for key in ("intro", "spend_notes", "tips"):
+        values = copy_overrides.get(key)
+        if isinstance(values, list):
+            result[key] = [public_travel_copy(value, "") for value in values if isinstance(value, str) and value.strip()]
+    experience_overrides = copy_overrides.get("experience_details") or []
+    if isinstance(experience_overrides, list):
+        for index, override in enumerate(experience_overrides):
+            if index >= len(experience_details) or not isinstance(override, dict):
+                continue
+            for field in ("feature", "tips"):
+                value = override.get(field)
+                if isinstance(value, str) and value.strip():
+                    experience_details[index][field] = public_travel_copy(value, str(experience_details[index].get(field) or ""))
+    return result
 
 
 def safe_product_context(db: Session, product: TravelProduct) -> dict[str, Any]:

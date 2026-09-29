@@ -156,6 +156,15 @@ class DayItem(BaseModel):
     duration_text: str = ""
     notes: str = ""
     address: str = ""
+    included: bool = True
+    route_only: bool = False
+    area: str = ""
+    source_name: str = ""
+    source_url: str = ""
+    verification_status: str = ""
+    opening_hours: str = ""
+    reservation_notice: str = ""
+    route_role: str = ""
 
 
 class DayPlan(BaseModel):
@@ -187,6 +196,11 @@ class RouteStop(BaseModel):
     address: str = ""
     kind: str = ""
     slot: str = ""
+    included: bool = True
+    route_only: bool = False
+    source_name: str = ""
+    source_url: str = ""
+    verification_status: str = ""
 
 
 class RouteLeg(BaseModel):
@@ -195,6 +209,7 @@ class RouteLeg(BaseModel):
     mode: str = ""
     minutes: int = 0
     note: str = ""
+    distance_label: str = ""
 
 
 class DayRoute(BaseModel):
@@ -271,6 +286,7 @@ class ProductRead(BaseModel):
     reviews: list[ReviewRead] = Field(default_factory=list)
     rating_average: Decimal | None = None
     rating_count: int = 0
+    visitor_copy: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProductStatusRequest(BaseModel):
@@ -330,7 +346,28 @@ class ProductUpdateRequest(BaseModel):
     # 宣传素材逐条可编辑：按 asset_type 合并到现有素材上，只改文案字段，
     # 不动海报底版以外的真实资源与价格。
     marketing_assets: list[dict[str, Any]] | None = None
+    visitor_copy: dict[str, Any] | None = None
     regenerate_marketing: bool = False
+
+
+class BatchApplyTarget(BaseModel):
+    target_date: date
+    room_inventory_id: int = Field(gt=0)
+
+
+class ProductBatchApplyRequest(BaseModel):
+    targets: list[BatchApplyTarget] = Field(min_length=1, max_length=20)
+
+
+class CopyRewriteRequest(BaseModel):
+    field: Literal[
+        "product_name", "marketing_title", "marketing_content", "recommendation_reason",
+        "risk_message", "resource_title", "resource_description", "itinerary_title", "itinerary_description",
+        "itinerary_summary", "marketing_asset_title", "marketing_asset_content",
+        "detail_text",
+    ]
+    current_text: str = Field(min_length=1, max_length=3000)
+    context: str = Field(default="", max_length=1200)
 
 
 class DynamicAdjustmentRead(BaseModel):

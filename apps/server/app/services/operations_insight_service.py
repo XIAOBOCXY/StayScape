@@ -23,7 +23,7 @@ class OperationsInsightService:
         self.db = db
         self.hotel_id = hotel_id
 
-    def room_night_pressure(self, *, window_days: int = 10) -> dict[str, Any]:
+    def room_night_pressure(self, *, window_days: int = 17) -> dict[str, Any]:
         """未售房量汇总：未来若干天按「房型 × 日期」统计，供经营看板顶部指标使用。
 
         这里只做聚合，不解释、不预测；真正的容量与价格仍由产品生成链路计算。
@@ -95,7 +95,9 @@ class OperationsInsightService:
             self.db.scalars(
                 select(VisitorIntent)
                 .join(TravelProduct)
-                .where(TravelProduct.hotel_id == self.hotel_id, VisitorIntent.created_at >= start)
+                # 经营窗口按产品出行日期统计。演示和运营数据可能在下单日
+                # 批量导入，但页面订单表展示的是实际出行日期；两者必须使用同一口径。
+                .where(TravelProduct.hotel_id == self.hotel_id, TravelProduct.target_date >= start, TravelProduct.target_date <= today)
                 .options(selectinload(VisitorIntent.product))
             ).all()
         )
@@ -168,12 +170,12 @@ class OperationsInsightService:
         ]
         recommendations: list[dict[str, str]] = []
         if top_crowds:
-            label = {"FAMILY": "亲子家庭", "COUPLE": "情侣", "FRIENDS": "朋友同行", "SOLO": "独自出行", "LOCAL_WEEKEND": "本地周末客"}.get(top_crowds[0]["target_crowd"], top_crowds[0]["target_crowd"])
+            label = {"FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友同行", "SOLO": "独自出行", "LOCAL_WEEKEND": "本地周末客", "ALL": "不限客群"}.get(top_crowds[0]["target_crowd"], top_crowds[0]["target_crowd"])
             recommendations.append({"signal": "recent_demand", "message": f"近 {window_days} 天已确认订单中，{label}相关产品表现相对更好。"})
         if opportunity_rooms:
             recommendations.append({"signal": "inventory", "message": f"{target_date.isoformat()} 仍有可组合客房，优先从余量较高的房型中选择。"})
         if opportunity_resources:
-            recommendations.append({"signal": "resource", "message": "合作资源中仍有可用名额，可组合为差异化体验，但以实时复核为准。"})
+            recommendations.append({"signal": "resource", "message": f"合作资源池有 {len(opportunity_resources)} 项可组合资源，推荐结果会同时校验日期、场次和剩余名额。"})
         if not recommendations:
             recommendations.append({"signal": "data_limited", "message": "当前经营样本有限，建议优先基于实时库存和已核验资源生成多套候选。"})
 

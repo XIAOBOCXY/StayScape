@@ -7,6 +7,7 @@ and the category words are a closed vocabulary, so the result is auditable.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -69,6 +70,7 @@ def apply_sales_command(db: Session, hotel_id: int, natural_language: str) -> di
         .all()
     )
     affected: list[dict[str, Any]] = []
+    expired_skipped = 0
     for product in products:
         haystack = _searchable(db, product)
         if scope_words and not any(word in haystack for word in scope_words):
@@ -80,6 +82,9 @@ def apply_sales_command(db: Session, hotel_id: int, natural_language: str) -> di
                 field="natural_language",
             )
         if product.status == target_status:
+            continue
+        if resume and product.target_date < date.today():
+            expired_skipped += 1
             continue
         previous = product.status
         product.status = target_status
@@ -99,5 +104,13 @@ def apply_sales_command(db: Session, hotel_id: int, natural_language: str) -> di
         "action": action_label,
         "scope": scope_label,
         "affected": affected,
-        "message": f"已{action_label} {len(affected)} 个产品（范围：{scope_label}）。" if affected else f"{scope_label}没有需要变更的产品。",
+        "message": (
+            f"已{action_label} {len(affected)} 个产品（范围：{scope_label}）。"
+            + (f"另有 {expired_skipped} 个产品已过出行日期，保持下架。" if expired_skipped else "")
+            if affected
+            else (
+                f"{scope_label}没有需要变更的产品。"
+                + (f"其中 {expired_skipped} 个已过出行日期，不能重新上架。" if expired_skipped else "")
+            )
+        ),
     }

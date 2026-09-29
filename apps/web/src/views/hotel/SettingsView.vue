@@ -19,6 +19,7 @@ const form = reactive({
   image_model: '',
   image_api_key: '',
   image_workspace_id: '',
+  hotel_address: '杭州市西湖区',
 })
 
 const PRESET = {
@@ -39,6 +40,7 @@ async function load() {
     form.vision_provider = String(response.data.vision_provider || '')
     form.image_model = String(response.data.image_model || '')
     form.image_workspace_id = String(response.data.image_workspace_id || '')
+    form.hotel_address = String(response.data.hotel_address || '杭州市西湖区')
   } catch (error) { ElMessage.error(errorMessage(error)) }
   finally { loading.value = false }
 }
@@ -111,6 +113,7 @@ onMounted(load)
     <section class="panel">
       <div class="section-title"><h2>修改配置</h2><span>密钥只写入服务器本地配置文件，不会回显明文</span></div>
       <el-form label-position="top" class="settings-form">
+        <el-form-item label="酒店地址" class="settings-form__wide"><el-input v-model="form.hotel_address" maxlength="255" placeholder="杭州市西湖区" /></el-form-item>
         <el-form-item label="网关地址"><el-input v-model="form.openclaw_base_url" placeholder="http://openclaw:18789" /></el-form-item>
         <el-form-item label="语言模型"><el-input v-model="form.primary_model" placeholder="deepseek/deepseek-v4-flash" /></el-form-item>
         <el-form-item label="DeepSeek API Key"><el-input v-model="form.deepseek_api_key" type="password" show-password placeholder="留空表示不修改" /></el-form-item>
@@ -143,6 +146,7 @@ onMounted(load)
 .current-grid b { display: block; margin-top: 5px; font-size: 13px; word-break: break-all; }
 .current-grid em { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; font-style: normal; }
 .settings-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; margin-top: 12px; }
+.settings-form__wide { grid-column: 1 / -1; }
 .settings-notes { display: grid; gap: 7px; margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
 @media (max-width: 900px) { .current-grid, .settings-form { grid-template-columns: 1fr; } }
 </style>
