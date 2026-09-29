@@ -35,7 +35,9 @@ def calculate_pricing(
         raise AppError("BUDGET_INSUFFICIENT", "游客预算必须大于0", field="visitor_budget", retryable=True)
 
     margin_price = unit_cost / (Decimal("1") - minimum_gross_margin) if unit_cost else Decimal("0")
-    minimum_allowed = money(max(room_minimum_price, margin_price))
+    # A price floor must round upward. Half-up rounding can produce a price one
+    # cent below the requested margin and then fail the validation below.
+    minimum_allowed = max(room_minimum_price, margin_price).quantize(MONEY, rounding=ROUND_CEILING)
     # A budget is only a constraint when the operator (or the traveller)
     # actually stated one; otherwise the room's own price floor decides.
     if visitor_budget is not None and minimum_allowed > visitor_budget:

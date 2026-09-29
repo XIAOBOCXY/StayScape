@@ -3,15 +3,13 @@ import { computed, onMounted, ref } from 'vue'
 import { showToast } from 'vant'
 import { hotelApi } from '../../api'
 import { errorMessage } from '../../api/client'
-// @ts-ignore - shared pure state helper is exercised directly by Node's built-in test runner.
-import { promoteCandidate } from './productGenerationState.mjs'
+import { validationChangeNote } from './productGenerationState.mjs'
 
 type AnyRecord = Record<string, any>
 
 // 与后端 product_advisor_service.ADVISOR_CONTRACT_VERSION 保持一致；
 // 版本不一致时不复用历史快照，改为重新生成当前经营判断。
-const ADVISOR_CONTRACT_VERSION = 6
-const ACTIVE_CONVERSATION_KEY = 'stayscape_generation_active_conversation'
+const ADVISOR_CONTRACT_VERSION = 11
 
 const overview = ref<AnyRecord>({})
 const conversations = ref<AnyRecord[]>([])
@@ -22,12 +20,15 @@ const activeConversationId = ref<number | null>(null)
 const brief = ref('')
 const loading = ref(false)
 const submitting = ref(false)
+const processingMessage = ref('正在读取经营数据…')
 const loadedAt = ref('')
+const selectedStage = ref<number | null>(null)
 // 只允许一个「经营证据」分类展开，避免页面被多块原始数据同时撑长。
 const panel = ref<'' | 'inventory' | 'resources' | 'orders' | 'weather' | 'knowledge' | 'trace'>('')
+const evidenceFold = ref<HTMLDetailsElement | null>(null)
 // 本次会话真正生成出来的候选（用于「候选确认」阶段，不再展示历史待确认队列）。
 const sessionProposalIds = ref<number[]>([])
-const draftedCount = ref(0)
+const resolvedCandidateCount = ref(0)
 // 主方案下方「调整这个方案」的展开状态：替代资源默认不展示。
 const activeAdjust = ref<'' | 'resources' | 'price' | 'crowd' | 'route' | 'service'>('')
 // 价格调整的目标值，以及重算完成后的卡片高亮，避免「点了没反应」的错觉。
@@ -38,13 +39,18 @@ const editingProduct = ref<AnyRecord | null>(null)
 const refinements = ref<AnyRecord[]>([])
 const previousPrimary = ref<AnyRecord | null>(null)
 const changeNote = ref('')
+const changeDetails = ref<AnyRecord[]>([])
 const historyOpen = ref(false)
+const inventoryRooms = ref<AnyRecord[]>([])
+const targetInventoryKey = ref('')
+const batchRoomIds = ref<number[]>([])
+const batchApplying = ref(false)
+const batchResult = ref<AnyRecord | null>(null)
+const copyDraft = ref<AnyRecord | null>(null)
+const copySaving = ref(false)
+const copyRewriting = ref(false)
 // 每次指令带来的变化，比聊天记录更接近运营真正关心的信息。
 const operationLog = ref<AnyRecord[]>([])
-const candidateDetailOpen = ref(false)
-const selectedCandidate = ref<AnyRecord | null>(null)
-const manualCandidates = ref<AnyRecord[]>([])
-const promotedCandidateKeys = ref<string[]>([])
 const operationGroups = computed<AnyRecord[]>(() => {
   const groups: AnyRecord[] = []
   for (const item of operationLog.value) {
@@ -71,8 +77,16 @@ const availableServices = computed<AnyRecord[]>(() => {
 })
 const availableAddResources = computed<AnyRecord[]>(() => [
   ...((primarySpec.value?.add_resource_options || []) as AnyRecord[]).map((item) => ({ ...item, kind: '体验' })),
-  ...availableServices.value.map((item) => ({ ...item, kind: '酒店权益', name: item.name || item.service_name })),
-])
+  ...availableServices.value.map((item) => ({
+    ...item,
+    kind: '酒店权益',
+    name: item.name || item.service_name,
+    recommendation_score: Number(item.recommendation_score ?? 55),
+    recommendation_level: item.recommendation_level || 'caution',
+    recommendation_label: item.recommendation_label || '可选权益',
+  })),
+].sort((a: AnyRecord, b: AnyRecord) => Number(b.recommendation_score || 0) - Number(a.recommendation_score || 0)
+  || Number(b.sets ?? b.available_quantity ?? 0) - Number(a.sets ?? a.available_quantity ?? 0)))
 const weatherLabel = computed(() => {
   const scenario = String(overview.value.weather?.scenario || '')
   const base = { RAIN: '有降雨', SUNNY: '晴天', CLOUDY: '多云' }[scenario] || '天气读取中'
@@ -96,42 +110,157 @@ const selectedPlanKey = computed(() => {
   const primary = primarySpec.value
   return primary ? planKey({ target_date: primary.target_date, room_type: primary.room_type, resource_name: primary.experiences?.[0]?.name }) : ''
 })
-const plans = computed<AnyRecord[]>(() => rawPlans.value.map((item, index) => ({
-  ...item,
-  is_current: selectedPlanKey.value ? planKey(item) === selectedPlanKey.value : Boolean(item.is_current && index === 0),
-  is_ai_primary: Boolean(item.is_ai_primary) || index === 0,
-})))
-const executionSummary = computed<AnyRecord[]>(() => ((judgement.value.execution_summary as AnyRecord[]) || []))
+function currentPlanCard() {
+  const primary = primarySpec.value
+  if (!primary) return null
+  const experienceNames = ((primary.experiences || []) as AnyRecord[]).map((item) => String(item.name || '')).filter(Boolean)
+  return {
+    label: '当前选择',
+    name: String(primary.room_type || '') + ' × ' + (experienceNames.join('、') || '待选体验'),
+    target_date: primary.target_date,
+    weekday: primary.weekday,
+    crowd_label: primary.crowd_label,
+    party_size: primary.party_size,
+    room_type: primary.room_type,
+    resource_name: experienceNames[0] || '',
+    address: primary.experiences?.[0]?.address || '',
+    window: primary.experiences?.map((item: AnyRecord) => item.window).filter(Boolean).join('、'),
+    estimated_price: primary.price,
+    remaining: primary.room_quantity,
+    max_sellable: primary.max_sellable,
+    fit_label: primary.selection_notice ? '需留意' : '当前方案',
+    fit_reason: [primary.conclusion, primary.route_reason, primary.selection_notice].filter(Boolean).join('；'),
+    is_current: true,
+    is_ai_primary: false,
+    message: '',
+  } as AnyRecord
+}
+const plans = computed<AnyRecord[]>(() => {
+  const selected = currentPlanCard()
+  const list: AnyRecord[] = rawPlans.value.map((item) => ({
+    ...item,
+    is_current: selectedPlanKey.value ? planKey(item) === selectedPlanKey.value : Boolean(item.is_current),
+    is_ai_primary: Boolean(item.is_ai_primary) || item.label === 'AI主推',
+  }))
+  if (!selected) return list
+  const selectedIndex = list.findIndex((item) => item.is_current)
+  if (selectedIndex < 0) return [selected, ...list].slice(0, 4)
+  const original: AnyRecord = list[selectedIndex]
+  list[selectedIndex] = { ...original, ...selected, label: original.label, is_ai_primary: original.is_ai_primary } as AnyRecord
+  return list
+})
+const inventoryRoomOptions = computed<AnyRecord[]>(() => inventoryRooms.value
+  .filter((room) => room.status === 'AVAILABLE' && Number(room.available_count || 0) > 0 && Number(room.max_guests || 0) > 0)
+  .sort((a, b) => String(a.available_date).localeCompare(String(b.available_date)) || String(a.room_type).localeCompare(String(b.room_type))))
+const generationRoomOptions = computed(() => {
+  const grouped = new Map<string, AnyRecord>()
+  for (const room of inventoryRoomOptions.value.filter((item) => Number(item.max_guests || 0) >= Number(primarySpec.value?.party_size || 1))) {
+    const key = `${room.available_date}|${room.room_type}`
+    const previous = grouped.get(key)
+    if (!previous || Number(room.available_count || 0) > Number(previous.available_count || 0)) grouped.set(key, room)
+  }
+  return [...grouped.values()]
+})
+const generationDates = computed(() => [...new Set(generationRoomOptions.value.map((room) => String(room.available_date)))])
+const selectedGenerationRoom = computed(() => generationRoomOptions.value.find((room) => `${room.available_date}|${room.room_type}` === targetInventoryKey.value) || generationRoomOptions.value[0] || null)
+const generationRoomsForDate = computed(() => {
+  const selectedDate = String(selectedGenerationRoom.value?.available_date || '')
+  return generationRoomOptions.value.filter((room) => String(room.available_date) === selectedDate)
+})
+const generationDate = computed({
+  get: () => String(selectedGenerationRoom.value?.available_date || ''),
+  set: (value: string) => {
+    const currentType = String(selectedGenerationRoom.value?.room_type || '')
+    const target = generationRoomOptions.value.find((room) => String(room.available_date) === value && String(room.room_type) === currentType)
+      || generationRoomOptions.value.find((room) => String(room.available_date) === value)
+    if (target) targetInventoryKey.value = `${target.available_date}|${target.room_type}`
+  },
+})
+const generationRoomType = computed({
+  get: () => String(selectedGenerationRoom.value?.room_type || ''),
+  set: (value: string) => {
+    const selectedDate = String(selectedGenerationRoom.value?.available_date || '')
+    const target = generationRoomOptions.value.find((room) => String(room.available_date) === selectedDate && String(room.room_type) === value)
+    if (target) targetInventoryKey.value = `${target.available_date}|${target.room_type}`
+  },
+})
+const batchRoomOptions = computed(() => inventoryRoomOptions.value.filter((room) => Number(room.max_guests || 0) >= Number(primarySpec.value?.party_size || 1)))
+const executionSummary = computed<AnyRecord[]>(() => {
+  const provided = judgement.value.execution_summary
+  if (Array.isArray(provided) && provided.length) return provided as AnyRecord[]
+
+  // Keep the analysis summary visible even when an older or partial advisor
+  // response omits execution_summary. Every fallback value comes from the
+  // loaded operating data, and unavailable checks are stated explicitly.
+  const windowDays = Number(pressure.value.window_days ?? 17)
+  const roomCombinations = generationRoomOptions.value.length
+  const remainingRooms = Number(pressure.value.unsold_room_nights ?? 0)
+  const confirmedCount = recentConfirmedRows.value.length
+  const crowd = crowdLabel(insights.value.top_crowds?.[0]?.target_crowd)
+  const resourceRows = (insights.value.available_partner_resources || []) as AnyRecord[]
+  const resourceCount = Number(pressure.value.available_resource_count ?? resourceRows.length)
+  const primary = primarySpec.value
+
+  return [
+    {
+      label: '\u623f\u6001\u5df2\u8bfb\u53d6',
+      value: `\u672a\u6765 ${windowDays} \u5929\uff0c${roomCombinations} \u4e2a\u6709\u4f59\u91cf\u7684\u300c\u623f\u578b \xd7 \u65e5\u671f\u300d\u7ec4\u5408\uff1b\u5f85\u6d88\u5316 ${remainingRooms} \u95f4`,
+    },
+    {
+      label: '\u8fd1\u671f\u9700\u6c42\u5df2\u5206\u6790',
+      value: confirmedCount
+        ? `\u8fd1 14 \u5929\u5df2\u786e\u8ba4 ${confirmedCount} \u5355\uff0c\u6210\u4ea4 \xa5${recentConfirmedRevenue.value}${crowd ? `\uff1b\u8ba2\u5355\u4e3b\u8981\u5ba2\u7fa4\uff1a${crowd}` : ''}`
+        : '\u8fd1 14 \u5929\u65e0\u5df2\u786e\u8ba4\u6210\u4ea4\uff0c\u6682\u4e0d\u636e\u6b64\u5224\u65ad\u4e3b\u529b\u5ba2\u7fa4',
+    },
+    {
+      label: '\u5408\u4f5c\u8d44\u6e90\u5df2\u5339\u914d',
+      value: `\u53ef\u7528\u5408\u4f5c\u8d44\u6e90 ${resourceCount} \u9879\uff0c\u5176\u4e2d ${resourceRows.length} \u9879\u5df2\u8fdb\u5165\u5f53\u524d\u5206\u6790\u7ed3\u679c`,
+    },
+    {
+      label: primary ? '\u4ef7\u683c\u4e0e\u5bb9\u91cf\u5df2\u6821\u9a8c' : '\u65b9\u6848\u6821\u9a8c\u72b6\u6001',
+      value: primary
+        ? `\u5efa\u8bae\u552e\u4ef7 \xa5${primary.price ?? '\u2014'}\uff1b\u5355\u4f4d\u6210\u672c \xa5${primary.unit_cost ?? '\u2014'}\uff1b\u6700\u4f4e\u5408\u6cd5\u4ef7 \xa5${primary.minimum_allowed_price ?? '\u2014'}\uff1b\u6700\u591a\u53ef\u552e ${primary.max_sellable ?? '\u2014'} \u5957`
+        : '\u5f53\u524d\u5c1a\u65e0\u5b8c\u6574\u63a8\u8350\uff0c\u672c\u8f6e\u672a\u5b8c\u6210\u4ef7\u683c\u4e0e\u5bb9\u91cf\u6821\u9a8c\uff1b\u53ef\u5728\u4ea7\u54c1\u65b9\u6848\u9009\u62e9\u65e5\u671f\u3001\u623f\u578b\u540e\u7ee7\u7eed\u8c03\u6574',
+    },
+  ]
+})
+function routeForDay(dayIndex: number) {
+  return ((primarySpec.value?.route_plan || []) as AnyRecord[]).find((item) => Number(item.day_index) === Number(dayIndex)) || null
+}
 
 const stages = [
-  { id: 1, label: '经营分析', hint: '读房态、订单、资源' },
-  { id: 2, label: '产品方案', hint: '选一个方向再调整' },
-  { id: 3, label: '候选确认', hint: '人工复核后入草稿' },
-  { id: 4, label: '营销发布', hint: '在产品详情页生成' },
+  { id: 1, label: '经营分析', hint: '房态、需求与资源' },
+  { id: 2, label: '产品方案', hint: '调整组合与行程' },
+  { id: 3, label: '预览与发布', hint: '检查游客端展示' },
 ]
-const stageIndex = computed(() => {
-  const step = String(advisor.value?.step || '')
-  if (draftedCount.value > 0) return 4
-  if (sessionProposalIds.value.length > 0) return 3
-  if (primarySpec.value || step === 'PLAN' || advisor.value?.judgement) return 2
-  return 1
+const availableStage = computed(() => {
+  if (resolvedCandidateCount.value > 0 || sessionProposalIds.value.length > 0) return 3
+  // Product planning remains available when analysis has no recommendation.
+  // The stepper reports progress; it must not block operators from changing
+  // the date, room type, audience, or resource filters.
+  return 2
 })
+const stageIndex = computed(() => Math.min(selectedStage.value || availableStage.value, availableStage.value))
+function selectStage(id: number) {
+  if (id <= availableStage.value) selectedStage.value = id
+}
 
 async function load() {
   loading.value = true
   try {
-    const [facts, tasks, pending, orderData] = await Promise.all([
+    const [facts, tasks, pending, orderData, rooms] = await Promise.all([
       hotelApi.aiOverview(),
       hotelApi.aiConversations(),
       hotelApi.aiProposals('PENDING_CONFIRMATION'),
       hotelApi.ordersOverview(),
+      hotelApi.rooms(),
     ])
     overview.value = facts.data
     conversations.value = tasks.data
     proposals.value = pending.data
     orders.value = orderData.data
-    const savedConversationId = Number(localStorage.getItem(ACTIVE_CONVERSATION_KEY) || 0)
-    const latest = conversations.value.find((item) => Number(item.id) === savedConversationId) as AnyRecord | undefined
+    inventoryRooms.value = rooms.data as AnyRecord[]
+    const latest = conversations.value[0] as AnyRecord | undefined
     if (latest && !activeConversationId.value) {
       activeConversationId.value = Number(latest.id)
       const key = operationStorageKey(activeConversationId.value)
@@ -151,6 +280,7 @@ async function load() {
         const normalized = normalizePrimaryParty(restoredPrimary)
         advisor.value = { ...(advisor.value || {}), primary: normalized }
         previousPrimary.value = normalized
+        targetInventoryKey.value = `${normalized.target_date}|${normalized.room_type}`
       }
       if (String(latest.last_execution?.step || '') === 'GENERATED') {
         sessionProposalIds.value = proposals.value
@@ -179,6 +309,9 @@ const recentOrderRows = computed<AnyRecord[]>(() => {
 })
 const recentConfirmedRows = computed<AnyRecord[]>(() => recentOrderRows.value.filter((row) => row.status === '已成交' || row.status === 'CONFIRMED'))
 const recentConfirmedRevenue = computed(() => recentConfirmedRows.value.reduce((total, row) => total + Number(row.amount || 0), 0).toFixed(2))
+function batchCreatedText(result: AnyRecord) {
+  return ((result.created || []) as AnyRecord[]).map((item) => `${item.target_date} ${item.room_type}`).join('、')
+}
 const historyMessages = computed<AnyRecord[]>(() => {
   const messages = activeConversation.value?.messages
   return Array.isArray(messages) ? messages : []
@@ -196,7 +329,6 @@ async function ensureConversation() {
   const item = response.data
   conversations.value.unshift(item)
   activeConversationId.value = Number(item.id)
-  localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
   return activeConversationId.value
 }
 
@@ -221,6 +353,11 @@ function primaryDiffs(previous: AnyRecord | null, next: AnyRecord | null) {
   add('可售', previous.max_sellable !== undefined ? `${previous.max_sellable}套` : '', next.max_sellable !== undefined ? `${next.max_sellable}套` : '')
   add('单位成本', previous.cost ? `¥${previous.cost}` : '', next.cost ? `¥${next.cost}` : '')
   add('毛利率', previous.margin !== undefined ? `${previous.margin}%` : '', next.margin !== undefined ? `${next.margin}%` : '')
+  add('路线调整', String(previous.route_note || '默认路线'), String(next.route_note || '默认路线'))
+  const routeSummary = (value: AnyRecord) => ((value.itinerary_days || []) as AnyRecord[])
+    .map((day) => String(day.label || '') + '：' + ((day.items || []) as AnyRecord[]).map((item) => String(item.title || '')).join('、'))
+    .join('；')
+  add('行程顺序', routeSummary(previous), routeSummary(next))
   return diffs
 }
 
@@ -276,11 +413,19 @@ function applyAdvisor(nextAdvisor: AnyRecord, instruction: string) {
       primary: nextPrimary,
       judgement: hasNewDirections ? nextJudgement : oldJudgement,
     }
-    changeNote.value = `${String(nextJudgement.text || '本轮没有找到满足新条件的组合')}；已保留上一版方案，你可以调整条件或重试。`
+    changeNote.value = validationChangeNote(
+      nextAdvisor.validation_error,
+      `${String(nextJudgement.text || '本轮没有找到满足新条件的组合')}；已保留上一版方案，你可以调整条件或重试。`,
+    )
+    changeDetails.value = []
   } else {
     changes = primaryDiffs(previousPrimary.value, nextPrimary)
+    changeDetails.value = changes
     changeNote.value = describeChange(previousPrimary.value, nextPrimary)
-    if (nextPrimary) previousPrimary.value = nextPrimary
+    if (nextPrimary) {
+      previousPrimary.value = nextPrimary
+      targetInventoryKey.value = `${nextPrimary.target_date}|${nextPrimary.room_type}`
+    }
   }
   advisor.value = effectiveAdvisor
   activeAdjust.value = ''
@@ -303,6 +448,7 @@ function applyRefinedProduct(refinedProduct: AnyRecord | undefined, instruction:
     max_sellable: refinedProduct.sale_quantity ?? current.max_sellable,
   }
   const changes = primaryDiffs(previousPrimary.value, nextPrimary)
+  changeDetails.value = changes
   changeNote.value = describeChange(previousPrimary.value, nextPrimary)
   previousPrimary.value = nextPrimary
   advisor.value = { ...(advisor.value || {}), primary: nextPrimary }
@@ -315,6 +461,7 @@ async function submit() {
   const text = brief.value.trim()
   if (!text) { showToast('请用一句话说明想怎么调整方案'); return }
   submitting.value = true
+  processingMessage.value = '正在根据你的要求重新计算方案…'
   try {
     if (editingProduct.value) {
       const response = await hotelApi.refineProduct(Number(editingProduct.value.id), text)
@@ -338,6 +485,7 @@ async function submit() {
       proposals.value = [...created, ...proposals.value]
     }
     applyAdvisor(data.advisor as AnyRecord, text)
+    selectedStage.value = (data.advisor as AnyRecord)?.step === 'GENERATED' ? 3 : 2
     brief.value = ''
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
@@ -360,47 +508,6 @@ function stopEditing() {
   editingProduct.value = null
 }
 
-function showCandidateDetail(card: AnyRecord) {
-  selectedCandidate.value = card
-  candidateDetailOpen.value = true
-}
-
-function setPrimaryCandidate(card: AnyRecord) {
-  const current = primarySpec.value
-  if (!current) return
-  const result = promoteCandidate(current, allCandidates.value, card.key)
-  const room = ((card.raw?.product?.resources || []) as AnyRecord[]).find((item) => item.resource_type === 'ROOM')
-  const promoted = {
-    ...result.primary,
-    room_type: room?.resource_name || result.primary.room_type,
-    experiences: (card.experiences || []).map((name: string) => ({ name })),
-    services: (card.services || []).map((name: string) => ({ name })),
-    cost: card.cost ?? result.primary.cost,
-    floor_price: card.floor_price ?? result.primary.floor_price,
-    max_sellable: card.quantity ?? result.primary.max_sellable,
-  }
-  if (card.source !== 'primary-snapshot') promotedCandidateKeys.value.push(card.key)
-  manualCandidates.value = result.candidates
-    .filter((item: AnyRecord) => item.source === 'primary-snapshot')
-    .map((item: AnyRecord) => ({
-      ...item,
-      services: item.services || [],
-      relation: '原主推荐',
-      reason: '切换前的主推荐方案，可随时查看并重新设为主推荐。',
-      image: '',
-      cost: item.raw?.product?.cost ?? '',
-      floor_price: item.raw?.product?.floor_price ?? '',
-      margin_label: '',
-    }))
-  advisor.value = { ...(advisor.value || {}), primary: promoted }
-  editingProduct.value = card.product_id ? { id: card.product_id, name: card.name } : null
-  previousPrimary.value = promoted
-  changeNote.value = `已将「${card.name}」设为主推荐，原主推荐已保留到候选方案。`
-  logOperation(`设为主推荐：${card.name}`, changeNote.value)
-  candidateDetailOpen.value = false
-  showToast('已设为主推荐，可以继续用自然语言调整')
-}
-
 // 「生成候选产品」把当前方案变成真正待确认的产品。
 async function generateFromPlan(primary: AnyRecord) {
   if (!primary) return
@@ -408,9 +515,12 @@ async function generateFromPlan(primary: AnyRecord) {
     startEditing({ product_id: primary.product_id, name: primary.product_name })
     return
   }
+  const experience = (primary.experiences || [])[0]?.name || ''
   submitting.value = true
+  processingMessage.value = '正在生成游客端产品预览…'
   try {
     const conversationId = await ensureConversation()
+    await hotelApi.advisor(Number(conversationId), `${primary.target_date} ${primary.room_type} + ${experience} 的方案`)
     const response = await hotelApi.advisor(Number(conversationId), '就这个，生成候选')
     const data = response.data
     mergeConversation(data.conversation as AnyRecord)
@@ -420,10 +530,191 @@ async function generateFromPlan(primary: AnyRecord) {
       proposals.value = [...created, ...proposals.value]
     }
     applyAdvisor(data.advisor as AnyRecord, '生成候选产品')
-    const first = created[0]
-    if (first) startEditing({ product_id: first.product_id, name: first.product?.product_name || primary.product_name })
+    selectedStage.value = created.length ? 3 : 2
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
+}
+
+async function changeGenerationInventory() {
+  const [targetDate, roomType] = targetInventoryKey.value.split('|')
+  if (!targetDate || !roomType) return
+  await ask(`改为 ${targetDate} 的 ${roomType}`)
+}
+
+function toggleEvidence(section: typeof panel.value) {
+  panel.value = panel.value === section ? '' : section
+  if (panel.value && evidenceFold.value) evidenceFold.value.open = true
+}
+
+function selectEvidence(section: typeof panel.value) {
+  panel.value = section
+  if (evidenceFold.value) evidenceFold.value.open = true
+}
+
+function resizeVisitorPreview(event: Event) {
+  const frame = event.target as HTMLIFrameElement | null
+  const doc = frame?.contentDocument
+  if (!frame || !doc) return
+  const resize = () => {
+    const height = Math.max(doc.body?.scrollHeight || 0, doc.documentElement?.scrollHeight || 0, 600)
+    frame.style.height = `${height}px`
+    doc.documentElement.style.overflow = 'hidden'
+    if (doc.body) doc.body.style.overflow = 'hidden'
+  }
+  resize()
+  window.setTimeout(resize, 250)
+  window.setTimeout(resize, 900)
+  doc.fonts?.ready.then(resize).catch(() => undefined)
+  const observer = new MutationObserver(resize)
+  observer.observe(doc.documentElement, { childList: true, subtree: true })
+  for (const image of Array.from(doc.images)) {
+    if (!image.complete) image.addEventListener('load', resize, { once: true })
+  }
+}
+
+async function applyBatch(card: AnyRecord) {
+  const targets = batchRoomIds.value
+    .map((id) => inventoryRoomOptions.value.find((room) => Number(room.id) === Number(id)))
+    .filter((room): room is AnyRecord => Boolean(room))
+    .map((room) => ({ target_date: room.available_date, room_inventory_id: Number(room.id) }))
+  if (!targets.length) { showToast('先选择一个或多个可售日期与房型'); return }
+  batchApplying.value = true
+  try {
+    const response = await hotelApi.batchApplyProduct(card.product_id, targets)
+    batchResult.value = response.data
+    if (response.data.created_count) showToast(`已生成 ${response.data.created_count} 个草稿产品`)
+    else showToast('所选日期暂时无法复制，查看下方原因')
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { batchApplying.value = false }
+}
+
+async function editVisitorCopy(card: AnyRecord) {
+  if (Number(copyDraft.value?.id) === Number(card.product_id)) { copyDraft.value = null; return }
+  try {
+    const response = await hotelApi.product(Number(card.product_id))
+    const product = response.data as AnyRecord
+    copyDraft.value = {
+      id: Number(card.product_id),
+      product: { ...product },
+      resources: (product.resources || []).map((item: AnyRecord) => ({ ...item })),
+      assets: (product.marketing_assets || []).map((item: AnyRecord) => ({ ...item })),
+      days: (product.day_plan || []).map((day: AnyRecord) => ({ ...day, items: (day.items || []).map((item: AnyRecord) => ({ ...item })) })),
+      details: JSON.parse(JSON.stringify(product.detail_sections || { intro: [], experience_details: [], spend_notes: [], tips: [] })),
+    }
+  } catch (error) { showToast(errorMessage(error)) }
+}
+
+async function rewriteMainCopy(field: string) {
+  if (!copyDraft.value) return
+  copyRewriting.value = true
+  try {
+    const current = String(copyDraft.value.product[field] || '')
+    const response = await hotelApi.rewriteProductCopy(copyDraft.value.id, { field, current_text: current, context: copyDraft.value.product.product_name })
+    copyDraft.value.product[field] = response.data.replacement_text
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copyRewriting.value = false }
+}
+
+async function rewriteResourceCopy(resource: AnyRecord) {
+  if (!copyDraft.value) return
+  copyRewriting.value = true
+  try {
+    const response = await hotelApi.rewriteProductCopy(copyDraft.value.id, { field: 'resource_description', current_text: String(resource.description || resource.resource_name), context: `${copyDraft.value.product.product_name}；体验：${resource.resource_name}；地址：${resource.address || ''}` })
+    resource.description = response.data.replacement_text
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copyRewriting.value = false }
+}
+
+async function rewriteResourceName(resource: AnyRecord) {
+  if (!copyDraft.value) return
+  copyRewriting.value = true
+  try {
+    const response = await hotelApi.rewriteProductCopy(copyDraft.value.id, { field: 'resource_title', current_text: String(resource.resource_name || ''), context: `${copyDraft.value.product.product_name}；资源地址：${resource.address || ''}` })
+    resource.resource_name = response.data.replacement_text
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copyRewriting.value = false }
+}
+
+async function rewriteItineraryCopy(item: AnyRecord, field: 'itinerary_title' | 'itinerary_description') {
+  if (!copyDraft.value) return
+  copyRewriting.value = true
+  try {
+    const current = String(item[field === 'itinerary_title' ? 'title' : 'description'] || '')
+    const response = await hotelApi.rewriteProductCopy(copyDraft.value.id, { field, current_text: current, context: `${copyDraft.value.product.product_name}；${item.time || ''}；${item.address || ''}` })
+    item[field === 'itinerary_title' ? 'title' : 'description'] = response.data.replacement_text
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copyRewriting.value = false }
+}
+
+async function rewriteDayCopy(day: AnyRecord, field: 'itinerary_title' | 'itinerary_summary') {
+  if (!copyDraft.value) return
+  copyRewriting.value = true
+  try {
+    const current = String(day[field === 'itinerary_title' ? 'title' : 'summary'] || '')
+    const response = await hotelApi.rewriteProductCopy(copyDraft.value.id, { field, current_text: current, context: `${copyDraft.value.product.product_name}；${day.label || ''} ${day.date || ''}` })
+    day[field === 'itinerary_title' ? 'title' : 'summary'] = response.data.replacement_text
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copyRewriting.value = false }
+}
+
+async function rewriteAssetCopy(asset: AnyRecord, field: 'marketing_asset_title' | 'marketing_asset_content') {
+  if (!copyDraft.value) return
+  copyRewriting.value = true
+  try {
+    const key = field === 'marketing_asset_title' ? 'title' : 'content'
+    const response = await hotelApi.rewriteProductCopy(copyDraft.value.id, { field, current_text: String(asset[key] || ''), context: `${copyDraft.value.product.product_name}；素材类型：${asset.asset_type || ''}` })
+    asset[key] = response.data.replacement_text
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copyRewriting.value = false }
+}
+
+async function rewriteDetailCopy(target: any, field: string, label: string) {
+  if (!copyDraft.value) return
+  copyRewriting.value = true
+  try {
+    const response = await hotelApi.rewriteProductCopy(copyDraft.value.id, { field: 'detail_text', current_text: String(target[field] || ''), context: `${copyDraft.value.product.product_name}；详情模块：${label}` })
+    target[field] = response.data.replacement_text
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copyRewriting.value = false }
+}
+
+async function saveVisitorCopy() {
+  if (!copyDraft.value) return
+  copySaving.value = true
+  try {
+    const { product, resources, assets, days, details, id } = copyDraft.value
+    const visitor_copy = {
+      resource_names: Object.fromEntries(resources.map((resource: AnyRecord) => [`${resource.resource_type}:${resource.resource_id}`, resource.resource_name || ''])),
+      resource_descriptions: Object.fromEntries(resources.map((resource: AnyRecord) => [`${resource.resource_type}:${resource.resource_id}`, resource.description || ''])),
+      itinerary: days.map((day: AnyRecord) => ({
+        day_index: day.day_index,
+        title: day.title,
+        summary: day.summary,
+        items: (day.items || []).map((item: AnyRecord) => ({ title: item.title, description: item.description })),
+      })),
+      detail_sections: {
+        intro: details.intro,
+        experience_details: (details.experience_details || []).map((item: AnyRecord) => ({ feature: item.feature, tips: item.tips })),
+        spend_notes: details.spend_notes,
+        tips: details.tips,
+      },
+    }
+    const response = await hotelApi.updateProduct(Number(id), {
+      product_name: product.product_name,
+      marketing_title: product.marketing_title,
+      marketing_content: product.marketing_content,
+      recommendation_reason: product.recommendation_reason,
+      risk_message: product.risk_message,
+      visitor_copy,
+      marketing_assets: assets.map((asset: AnyRecord) => ({ asset_type: asset.asset_type, platform: asset.platform, title: asset.title, content: asset.content })),
+    })
+    proposals.value = proposals.value.map((proposal) => Number(proposal.product_id) === Number(id)
+      ? { ...proposal, product: { ...(proposal.product as AnyRecord), ...(response.data as AnyRecord) } }
+      : proposal)
+    copyDraft.value = null
+    showToast('游客端文案已保存')
+  } catch (error) { showToast(errorMessage(error)) }
+  finally { copySaving.value = false }
 }
 
 async function confirm(proposal: AnyRecord, action: 'DRAFT' | 'PUBLISH') {
@@ -431,7 +722,8 @@ async function confirm(proposal: AnyRecord, action: 'DRAFT' | 'PUBLISH') {
     await hotelApi.confirmAiProposal(Number(proposal.id), action)
     proposals.value = proposals.value.filter((item) => Number(item.id) !== Number(proposal.id))
     sessionProposalIds.value = sessionProposalIds.value.filter((id) => id !== Number(proposal.id))
-    if (action === 'DRAFT') draftedCount.value += 1
+    resolvedCandidateCount.value += 1
+    selectedStage.value = 3
     showToast(action === 'PUBLISH' ? '产品已发布并完成库存复核' : '已加入产品草稿，可以继续生成营销素材')
   } catch (error) { showToast(errorMessage(error)) }
 }
@@ -447,12 +739,11 @@ async function clearConversation() {
     previousPrimary.value = null
     changeNote.value = ''
     sessionProposalIds.value = []
-    draftedCount.value = 0
+    resolvedCandidateCount.value = 0
     refinements.value = []
     operationLog.value = []
     const key = operationStorageKey(activeConversationId.value)
     if (key) localStorage.removeItem(key)
-    localStorage.removeItem(ACTIVE_CONVERSATION_KEY)
     activeAdjust.value = ''
     showToast('已清空本轮方案与操作历史，可以重新描述需求')
   } catch (error) { showToast(errorMessage(error)) }
@@ -506,6 +797,20 @@ function crowdLabel(code: unknown) {
 
 function crowdListLabel(value: unknown) {
   return String(value || '').split(',').map((item) => crowdLabel(item.trim())).filter(Boolean).join('、')
+}
+
+function recommendationClass(item: AnyRecord) {
+  const level = String(item.recommendation_level || '')
+  if (level === 'recommended') return 'resource-card--recommended'
+  if (level === 'not_recommended') return 'resource-card--not-recommended'
+  return 'resource-card--caution'
+}
+
+function recommendationLabel(item: AnyRecord) {
+  const label = String(item.recommendation_label || '')
+  if (label) return label
+  return item.recommendation_level === 'not_recommended' ? '不建议优先'
+    : item.recommendation_level === 'recommended' ? '优先推荐' : '可选，需核对'
 }
 
 function categoryLabel(value: unknown) {
@@ -602,7 +907,7 @@ function candidateRelation(proposal: AnyRecord) {
 // 候选确认阶段只展示本轮生成的产品，不再把历史待确认队列铺到页面上。
 const candidateCards = computed<AnyRecord[]>(() => proposals.value
   .filter((proposal) => sessionProposalIds.value.includes(Number(proposal.id)))
-  .slice(0, 4)
+  .slice(0, 1)
   .map((proposal) => ({
     key: `candidate-${proposal.id}`,
     proposal,
@@ -621,13 +926,19 @@ const candidateCards = computed<AnyRecord[]>(() => proposals.value
     relation: candidateRelation(proposal),
     reason: candidateReason(proposal),
     image: proposalImage(proposal),
+    itinerary: proposal.product?.day_plan || proposal.product?.route_plan || [],
     raw: proposal,
   })))
-
-const allCandidates = computed<AnyRecord[]>(() => [
-  ...candidateCards.value.filter((item) => !promotedCandidateKeys.value.includes(item.key)),
-  ...manualCandidates.value,
-])
+const copyFields = [
+  { key: 'product_name', label: '产品名称' },
+  { key: 'marketing_title', label: '游客端标题' },
+  { key: 'marketing_content', label: '产品介绍', multiline: true },
+  { key: 'recommendation_reason', label: '推荐理由', multiline: true },
+  { key: 'risk_message', label: '出行提示', multiline: true },
+]
+function visitorPreviewUrl(card: AnyRecord) {
+  return `/visitor/products/${card.product_id}?preview=1&embedded=1&v=${card.raw?.product?.updated_at || card.raw?.created_at || card.product_id}`
+}
 
 // 「换资源」只列同日期、同房型、同客群下的其它合作资源，不改变产品框架。
 const resourceSwaps = computed<AnyRecord[]>(() => {
@@ -672,11 +983,11 @@ const currentObjectLabel = computed(() => {
   return `当前方案 · ${primary.target_date} · ${primary.room_type}${composition ? ` × ${composition}` : ''}`
 })
 
-const AUTO_BRIEF = '帮我看看这两天有什么好卖的，先给我一份推荐吧'
+const AUTO_BRIEF = '重新读取未来17天房态、近14天订单和合作资源，按当前已选方向重新计算；如果没有可用组合，请说明具体原因和需要补充的数据'
 
 async function autoStart() {
-  if (advisor.value) return
   submitting.value = true
+  processingMessage.value = '正在读取经营数据并更新推荐…'
   try {
     const conversationId = await ensureConversation()
     const response = await hotelApi.advisor(Number(conversationId), AUTO_BRIEF, true)
@@ -684,258 +995,78 @@ async function autoStart() {
     mergeConversation(data.conversation as AnyRecord)
     advisor.value = data.advisor as AnyRecord
     const nextPrimary = (advisor.value?.primary as AnyRecord) || null
-    if (nextPrimary) previousPrimary.value = nextPrimary
+    previousPrimary.value = nextPrimary
+    if (nextPrimary && !targetInventoryKey.value) targetInventoryKey.value = `${nextPrimary.target_date}|${nextPrimary.room_type}`
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
 }
 
-onMounted(async () => { await load() })
+onMounted(async () => { await load(); await autoStart() })
 </script>
 
 <template>
   <section class="ai-ops">
     <header class="page-head">
-      <div class="page-head__text">
-        <strong>AI 正在维护当前产品方案</strong>
-        <p>用输入框或按钮调整方案，主推荐会立即按房态、成交和资源容量重算。</p>
-      </div>
       <div class="head-actions">
         <span v-if="loadedAt" class="muted">数据更新 {{ loadedAt }}</span>
+        <el-button size="small" plain :loading="submitting" @click="selectedStage = null; autoStart()">刷新可用资源</el-button>
         <el-button size="small" plain @click="historyOpen = true">操作历史<template v-if="operationLog.length">（{{ operationLog.length }}）</template></el-button>
       </div>
     </header>
+    <div v-if="submitting" class="recompute-popover" role="status"><span class="recompute-spinner" />{{ processingMessage }}</div>
 
     <!-- ① 流程步骤 -->
     <nav class="stage-bar" aria-label="产品生成流程">
       <ol>
-        <li v-for="s in stages" :key="s.id" :class="{ active: stageIndex === s.id, done: stageIndex > s.id }">
-          <i>{{ stageIndex > s.id ? '✓' : s.id }}</i>
-          <div><b>{{ s.label }}</b><small>{{ s.hint }}</small></div>
+        <li v-for="s in stages" :key="s.id" :class="{ active: stageIndex === s.id, done: stageIndex > s.id, available: s.id <= availableStage }">
+          <button type="button" :disabled="s.id > availableStage" @click="selectStage(s.id)">
+            <i>{{ stageIndex > s.id ? '✓' : s.id }}</i>
+            <div><b>{{ s.label }}</b><small>{{ s.hint }}</small></div>
+          </button>
         </li>
       </ol>
     </nav>
 
     <!-- ② 经营状态 -->
     <section class="fact-strip">
-      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="panel = panel === 'inventory' ? '' : 'inventory'">
+      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="toggleEvidence('inventory')">
         <span>待消化房量</span>
         <strong>{{ pressure.unsold_room_nights ?? 0 }} 间</strong>
-        <small>未来 {{ pressure.window_days ?? 10 }} 天 · {{ pressure.room_type_count ?? 0 }} 种房型</small>
+        <small>未来 {{ pressure.window_days ?? 17 }} 天 · {{ pressure.room_type_count ?? 0 }} 种房型</small>
       </button>
-      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="panel = panel === 'inventory' ? '' : 'inventory'">
+      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="toggleEvidence('inventory')">
         <span>重点库存</span>
         <strong>{{ focusRoom?.room_type || '—' }} {{ focusRoom?.remaining ?? 0 }} 间</strong>
         <small>{{ focusRoom?.target_date || '暂无数据' }}</small>
       </button>
-      <button type="button" class="fact-card" :class="{ active: panel === 'resources' }" @click="panel = panel === 'resources' ? '' : 'resources'">
+      <button type="button" class="fact-card" :class="{ active: panel === 'resources' }" @click="toggleEvidence('resources')">
         <span>可用合作资源</span>
         <strong>{{ pressure.available_resource_count ?? 0 }} 个</strong>
         <small>重点日期可组包</small>
       </button>
-      <button type="button" class="fact-card" :class="{ active: panel === 'orders' }" @click="panel = panel === 'orders' ? '' : 'orders'">
-        <span>待确认方案</span>
-        <strong>{{ overview.pending_confirmation_count ?? 0 }} 个</strong>
-        <small>其中今日新增 {{ overview.pending_today_count ?? 0 }}</small>
-      </button>
       <div class="fact-actions">
         <span class="weather-chip">杭州 · {{ weatherLabel }}</span>
-        <span v-if="overview.weather && overview.weather.usable === false" class="fact-warn">天气未核验，本轮不参与决策</span>
+        <span v-if="overview.weather && overview.weather.usable === false" class="fact-warn">天气未核验，方案仍可生成并附天气提示</span>
       </div>
     </section>
 
-    <!-- ③ Step 2：推荐方向。进入候选确认后收起，避免两个业务阶段同时出现。 -->
-    <section v-if="advisor && stageIndex < 3" class="panel stage-panel">
-      <div class="stage-panel__head">
-        <h2>推荐方向</h2>
-        <span v-if="submitting" class="recomputing">正在按新的条件重算…</span>
-        <span v-else class="muted">先选一个方向，再让它变成正式候选</span>
-      </div>
-      <div v-if="loading" class="local-loading">正在读取房态、订单与合作资源…</div>
-
-      <p v-if="changeNote && !submitting" class="change-note">{{ changeNote }}</p>
-
-      <div v-if="plans.length" class="plan-grid">
-        <article v-for="item in plans" :key="`${item.label}-${item.name}`" class="plan-card" :class="{ 'is-current': item.is_current, [planBadgeClass(item)]: true }">
-          <header>
-            <div class="plan-badges">
-              <span v-if="item.is_ai_primary" class="plan-badge plan-badge--ai">AI主推</span>
-              <span v-if="item.label !== 'AI主推' || item.is_current" class="plan-badge">{{ item.is_current ? '当前选择' : item.label }}</span>
-            </div>
-            <b>¥{{ item.estimated_price }}</b>
-          </header>
-          <h3>{{ item.name }}</h3>
-          <p class="muted">{{ item.target_date }}（{{ item.weekday }}）<template v-if="item.window"> · {{ item.window }}</template><template v-if="item.indoor"> · 室内</template></p>
-          <ul>
-            <li>房型余量 {{ item.remaining }} 间</li>
-            <li>最多可售 {{ item.max_sellable }} 套</li>
-            <li>{{ planReason(item) }}</li>
-          </ul>
-          <span v-if="item.is_current" class="plan-current">当前选择 · 详情与调整入口已展开</span>
-          <el-button v-else size="small" plain :disabled="submitting" @click="ask(item.message)">切换为当前方案</el-button>
-        </article>
-      </div>
-      <p v-else-if="!submitting" class="muted">{{ judgement.text || '当前没有可推荐的组合，可以调整日期、客群、体验或价格目标后继续。' }}</p>
-
-      <div v-if="!plans.length && !primarySpec" class="empty-candidate">
-        <div>✦</div>
-        <h3>{{ submitting ? '正在读取房态、订单与合作资源…' : '还没有方案' }}</h3>
-        <p>{{ judgement.text || '系统保留当前经营数据；你可以换日期、客群、体验或价格目标后重新计算。' }}</p>
-        <div class="option-row">
-          <button type="button" @click="ask('换一个日期')">换日期</button>
-          <button type="button" @click="ask('换成两人同行')">换客群</button>
-          <button type="button" @click="ask('换一个室内体验')">换体验</button>
-          <button type="button" @click="ask('预算降低到 700 以内')">调整价格目标</button>
-          <button type="button" :disabled="submitting" @click="ask('重新读取房态和合作资源，重新计算当前方案')">刷新资源并重算</button>
-        </div>
-      </div>
-
-      <!-- 当前选择直接展开在推荐方向容器内，避免重复一张“当前方案”大卡。 -->
-      <div v-if="primarySpec" class="selected-plan-detail">
-        <div class="selected-plan-detail__head">
-          <div>
-            <span class="section-kicker">当前选择</span>
-            <h3>{{ primarySpec.product_name }}</h3>
-            <p class="muted">{{ primarySpec.target_date }}（{{ primarySpec.weekday }}） · {{ primarySpec.crowd_label }} · {{ primarySpec.room_type }}</p>
-          </div>
-          <span v-if="submitting" class="recomputing">正在重新计算组合…</span>
-        </div>
-        <article class="decision-card" :class="{ 'is-busy': submitting, 'is-flash': cardFlash }">
-          <div class="decision-card__top">
-            <div class="decision-card__head">
-              <p class="decision-card__include"><b>产品组成：</b>{{ primarySpec.room_type }} 1 晚<template v-for="exp in primarySpec.experiences" :key="exp.name"> · {{ exp.name }}<template v-if="exp.window">（{{ exp.window }}）</template></template><template v-for="service in (primarySpec.services || [])" :key="service.id || service.name"> · {{ service.name }} × {{ service.quantity || primarySpec.party_size }}</template></p>
-              <p v-if="primarySpec.route_note" class="decision-card__route">路线调整：{{ primarySpec.route_note }}</p>
-            </div>
-          </div>
-
-          <div class="figure-row">
-            <span>建议售价 <b>¥{{ primarySpec.price }}</b></span>
-            <span>可售 <b>{{ primarySpec.max_sellable }} 套</b></span>
-            <span>毛利率 {{ primarySpec.margin }}%</span>
-          </div>
-
-          <div v-if="budgetShortfall" class="budget-note">
-            <p>当前条件下没有 ¥{{ budgetShortfall.requested }} 以内、且满足最低利润要求的组合，最低可售价为 ¥{{ budgetShortfall.lowest }}。</p>
-            <div class="option-row"><button v-for="option in budgetShortfall.options" :key="option.label" type="button" @click="ask(option.message)">{{ option.label }}</button></div>
-          </div>
-
-          <div v-if="primarySpec.structure" class="product-structure">
-            <div v-for="section in primarySpec.structure" :key="section.label" class="structure-row">
-              <b>{{ section.label }}</b>
-              <span v-for="item in section.items" :key="item.name">{{ item.name }}<template v-if="item.quantity"> × {{ item.quantity }}</template><template v-if="item.window"> · {{ item.window }}</template></span>
-            </div>
-          </div>
-
-          <div v-if="primarySpec.itinerary?.length" class="itinerary-strip">
-            <div v-for="item in primarySpec.itinerary" :key="item.time + item.title"><b>{{ item.time }}</b><span>{{ item.title }}</span></div>
-          </div>
-
-          <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more">
-            <summary>价格与收益</summary>
-            <div class="key-evidence">
-              <div><span>单位成本</span><b>¥{{ primarySpec.cost }}</b></div>
-              <div><span>最低合法价</span><b>¥{{ primarySpec.floor_price }}</b></div>
-              <div><span>建议售价</span><b>¥{{ primarySpec.price }}</b></div>
-              <div><span>容量瓶颈</span><b>{{ primarySpec.bottleneck || '已通过' }}</b></div>
-            </div>
-            <div v-if="primarySpec.cost_breakdown?.length" class="calculation-list">
-              <div v-for="item in primarySpec.cost_breakdown" :key="item.label"><span>{{ item.label }}</span><b>¥{{ item.value }}</b></div>
-            </div>
-            <p v-if="primarySpec.pricing_basis?.length" class="muted">定价依据：{{ primarySpec.pricing_basis.join('；') }}</p>
-          </details>
-
-          <p v-if="primarySpec.conclusion" class="conclusion"><b>AI建议：</b>{{ primarySpec.conclusion }}</p>
-
-          <div class="decision-card__actions">
-            <el-button type="primary" :disabled="submitting || Boolean(budgetShortfall)" @click="generateFromPlan(primarySpec)">{{ primarySpec.product_id ? '继续优化当前产品' : '生成候选产品' }}</el-button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'resources' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'resources' ? '' : 'resources'">换资源</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'price' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'price' ? '' : 'price'">调价格</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'crowd' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'crowd' ? '' : 'crowd'">换客群</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'route' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'route' ? '' : 'route'">改路线</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'service' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'service' ? '' : 'service'">增加资源</button>
-            <span v-if="submitting" class="busy-chip">正在重算…</span>
-          </div>
-
-          <div v-if="activeAdjust === 'price'" class="adjust-panel">
-            <div class="adjust-panel__head"><b>调整建议售价</b><span class="muted">当前 ¥{{ primarySpec.price }}，最低合法价 ¥{{ primarySpec.floor_price }}；改价会重新跑容量与利润校验</span></div>
-            <div class="option-row"><button type="button" @click="ask(`价格按最低合法价 ${primarySpec.floor_price} 来`)">按最低合法价 ¥{{ primarySpec.floor_price }}</button><button type="button" @click="ask('价格降到 650 以内')">降到 650 以内</button><button type="button" @click="ask('价格降到 600 以内')">降到 600 以内</button></div>
-            <div class="price-input"><input v-model="priceTarget" inputmode="numeric" placeholder="输入目标价，例如 620" /><el-button size="small" type="primary" :disabled="submitting" @click="applyPriceTarget">按这个价格重算</el-button></div>
-          </div>
-
-          <div v-if="activeAdjust === 'crowd'" class="adjust-panel"><div class="adjust-panel__head"><b>切换目标客群</b><span class="muted">保持日期与房型，按新客群重新筛选资源和产品组成</span></div><div class="option-row"><button v-for="item in crowdChoices" :key="item.label" type="button" @click="ask(item.message)">{{ item.label }}</button></div></div>
-
-          <div v-if="activeAdjust === 'resources'" class="adjust-panel"><div class="adjust-panel__head"><b>替换当前合作资源</b><span class="muted">保持日期、房型和客群，只替换核心体验；增加第二项体验请使用“增加资源”。</span></div><div v-if="resourceSwaps.length" class="alt-grid"><article v-for="item in resourceSwaps" :key="`swap-${item.name}`" class="alt-card"><h3>{{ item.name }}</h3><p class="muted">{{ item.window || '按场次' }} · 仍可支撑 {{ item.sets }} 套 · 预估价 ¥{{ item.estimated_price }}</p><p class="alt-card__why">{{ item.indoor ? '室内体验，雨天不受影响。' : '户外体验，出发前会再核对天气。' }}每人结算 ¥{{ item.settlement_price }}。</p><el-button size="small" plain @click="ask(`${primarySpec.target_date} 的 ${primarySpec.room_type} 换成 ${item.name}`)">换成这个体验</el-button></article></div><p v-else class="muted">当前日期与房型下没有其它可用合作资源。</p></div>
-
-          <div v-if="activeAdjust === 'route'" class="adjust-panel"><div class="adjust-panel__head"><b>选择路线调整方式</b><span class="muted">先选安排，再由 AI 按场次和天气重新校验。</span></div><div class="option-row"><button type="button" @click="ask('路线留出更多自由时间，晚上体验结束后直接回酒店')">留出自由时间</button><button type="button" @click="ask('优先室内路线，减少户外移动')">优先室内路线</button><button type="button" @click="ask('保持当前体验，只调整先后顺序')">只调先后顺序</button></div></div>
-
-          <div v-if="activeAdjust === 'service'" class="adjust-panel"><div class="adjust-panel__head"><b>选择要增加的体验或酒店权益</b><span class="muted">选择后会重算正式资源组合、时间冲突、成本、最低合法价和可售量。</span></div><div v-if="availableAddResources.length" class="alt-grid"><article v-for="item in availableAddResources" :key="`${item.kind}-${item.id || item.name}`" class="alt-card"><span class="section-kicker">{{ item.kind }}</span><h3>{{ item.name }}</h3><p class="muted">可售 {{ item.sets ?? item.available_quantity ?? '—' }} 套<template v-if="item.window"> · {{ item.window }}</template> · 单人成本 ¥{{ item.settlement_price ?? item.unit_cost ?? '—' }}</p><el-button size="small" plain @click="ask(item.kind === '体验' ? `增加体验：${item.name}` : `增加酒店服务：${item.name}`)">增加这项{{ item.kind }}</el-button></article></div><p v-else class="muted">当前日期没有可增加的体验或酒店服务，请先刷新资源。</p></div>
-
-          <details class="reason-fold"><summary>展开推荐依据与风险</summary><div class="detail-tabs"><button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">经营价值</button><button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button><button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险与限制</button><button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button></div><div class="detail-body"><template v-if="detailTab === 'basis'"><p v-for="item in (primarySpec.reason_sections || [])" :key="item.label"><b>{{ item.label }}：</b>{{ item.text }}</p><p v-if="!primarySpec.reason_sections?.length">{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p></template><template v-else-if="detailTab === 'value'"><p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p></template><template v-else-if="detailTab === 'risk'"><p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p></template><template v-else><p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p></template></div></details>
-        </article>
-      </div>
-    </section>
-
-    <!-- ⑤ Step 3：候选确认。这里不再显示产品方案编辑控件。 -->
-    <details v-if="allCandidates.length" class="panel evidence-fold">
-      <summary>候选方案<span class="muted"> · {{ allCandidates.length }} 个备选</span></summary>
-      <section class="stage-panel">
-      <div class="stage-panel__head">
-        <h2>候选确认</h2>
-        <span class="muted">先查看详情，再明确设为主推荐</span>
-      </div>
-      <p v-if="primarySpec" class="source-plan">来源方案：{{ primarySpec.product_name }} · {{ primarySpec.room_type }} × {{ primaryExperience?.name || '当前体验' }} · ¥{{ primarySpec.price }}</p>
-      <div class="candidate-grid">
-        <article v-for="card in allCandidates" :key="card.key" class="candidate-card">
-          <img v-if="card.image" :src="card.image" :alt="card.name" loading="lazy" />
-          <div v-else class="candidate-card__ph">✦</div>
-          <div class="candidate-card__body">
-            <header>
-              <h3>{{ card.name }}</h3>
-              <b>¥{{ card.price }}</b>
-            </header>
-            <span class="candidate-relation">{{ card.relation }}</span>
-            <p class="muted">{{ card.date }} · {{ card.crowd_label }} · {{ card.party }} 人<template v-if="card.quantity !== ''"> · 可售 {{ card.quantity }} 套</template></p>
-            <p v-if="card.experiences.length" class="candidate-card__exp">正式体验：{{ card.experiences.join('、') }}</p>
-            <p v-if="card.services.length" class="candidate-card__exp">酒店权益：{{ card.services.join('、') }}</p>
-            <p class="candidate-card__figures">成本 ¥{{ card.cost }} · 最低合法价 ¥{{ card.floor_price }}<template v-if="card.margin_label"> · 毛利率 {{ card.margin_label }}</template></p>
-            <div class="candidate-card__actions">
-              <el-button size="small" plain @click="showCandidateDetail(card)">查看详情</el-button>
-            </div>
-          </div>
-        </article>
-      </div>
-      </section>
-    </details>
-
-    <!-- 微调记录 -->
-    <section v-if="refinements.length" class="panel stage-panel">
-      <div class="stage-panel__head"><h2>微调记录</h2><span class="muted">旧版本保留在版本记录里，可回退</span></div>
-      <div v-for="(item, index) in refinements" :key="`refine-${index}`" class="refine-row">
-        <p><span class="layer-badge">{{ item.layer_label }}</span>{{ item.message }}</p>
-        <table v-if="item.changes?.length" class="reply-table">
-          <thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead>
-          <tbody><tr v-for="row in item.changes" :key="row.field"><td>{{ row.label }}</td><td class="muted">{{ row.before }}</td><td>{{ row.after }}</td></tr></tbody>
-        </table>
-        <div v-if="item.checks?.length" class="chip-row"><span v-for="check in item.checks" :key="check.label">{{ check.label }}：{{ check.value }}</span></div>
-      </div>
-    </section>
-
-    <!-- ⑥ 经营证据：默认折叠 -->
-    <section v-if="advisor" class="panel stage-panel">
-      <details class="evidence-fold">
+    <!-- ③ 经营分析：证据与本轮执行摘要 -->
+    <section class="panel stage-panel">
+      <details ref="evidenceFold" class="evidence-fold">
         <summary>经营证据<span class="muted"> · 房态、合作资源、订单、天气、知识库</span></summary>
         <div class="evidence-tabs">
-          <button type="button" :class="{ active: panel === 'inventory' }" @click="panel = panel === 'inventory' ? '' : 'inventory'">房态</button>
-          <button type="button" :class="{ active: panel === 'resources' }" @click="panel = panel === 'resources' ? '' : 'resources'">合作资源</button>
-          <button type="button" :class="{ active: panel === 'orders' }" @click="panel = panel === 'orders' ? '' : 'orders'">订单</button>
-          <button type="button" :class="{ active: panel === 'weather' }" @click="panel = panel === 'weather' ? '' : 'weather'">天气</button>
-          <button type="button" :class="{ active: panel === 'knowledge' }" @click="panel = panel === 'knowledge' ? '' : 'knowledge'">知识库</button>
+          <button type="button" :class="{ active: panel === 'inventory' }" @click="selectEvidence('inventory')">房态</button>
+          <button type="button" :class="{ active: panel === 'resources' }" @click="selectEvidence('resources')">合作资源</button>
+          <button type="button" :class="{ active: panel === 'orders' }" @click="selectEvidence('orders')">订单</button>
+          <button type="button" :class="{ active: panel === 'weather' }" @click="selectEvidence('weather')">天气</button>
+          <button type="button" :class="{ active: panel === 'knowledge' }" @click="selectEvidence('knowledge')">知识库</button>
         </div>
 
         <p v-if="!panel" class="muted">房态、资源容量、天气与利润校验分别来自客房库存、合作资源、天气服务和财务规则。点上面的分类展开原始数据。</p>
 
         <div v-if="panel === 'inventory'" class="evidence-body">
           <div class="chip-row">
-            <span>未来 {{ pressure.window_days ?? 10 }} 天待消化 {{ pressure.unsold_room_nights ?? 0 }} 间</span>
+            <span>未来 {{ pressure.window_days ?? 17 }} 天待消化 {{ pressure.unsold_room_nights ?? 0 }} 间</span>
             <span>有房日期 {{ pressure.date_count ?? 0 }} 个 · 房型 {{ pressure.room_type_count ?? 0 }} 种</span>
             <span v-if="focusRoom">压力最高 {{ focusRoom.room_type }} {{ focusRoom.remaining }} 间（{{ focusRoom.target_date }}）</span>
           </div>
@@ -987,8 +1118,8 @@ onMounted(async () => { await load() })
       </details>
     </section>
 
-    <!-- ⑦ AI 执行摘要：人话版，技术细节再折叠 -->
-    <section v-if="executionSummary.length" class="panel stage-panel">
+    <!-- AI 执行摘要 -->
+    <section class="panel stage-panel">
       <details class="evidence-fold">
         <summary>AI 执行摘要<span class="muted"> · 这一轮读了什么、校验了什么</span></summary>
         <ul class="summary-list">
@@ -1006,6 +1137,312 @@ onMounted(async () => { await load() })
       </details>
     </section>
 
+    <!-- ③ Step 2：推荐方向。进入候选确认后收起，避免两个业务阶段同时出现。 -->
+    <section v-if="stageIndex === 2" class="panel stage-panel">
+      <div class="stage-panel__head">
+        <h2>推荐方向</h2>
+        <span v-if="!primarySpec" class="muted">先选一个方向，再让它变成正式候选</span>
+      </div>
+      <div v-if="generationRoomOptions.length" class="date-room-picker">
+        <div class="date-room-picker__label"><b>生成目标</b><span>先选日期，再选当日可售房型</span></div>
+        <el-select id="generation-date" v-model="generationDate" filterable placeholder="选择日期" @change="changeGenerationInventory">
+          <el-option v-for="date in generationDates" :key="date" :value="date" :label="date" />
+        </el-select>
+        <el-select id="generation-room-type" v-model="generationRoomType" filterable placeholder="选择房型" @change="changeGenerationInventory">
+          <el-option v-for="room in generationRoomsForDate" :key="room.id" :value="room.room_type" :label="`${room.room_type} · 余 ${room.available_count} 间`" />
+        </el-select>
+      </div>
+      <div v-if="loading" class="local-loading">正在读取房态、订单与合作资源…</div>
+
+      <section v-if="changeNote && !submitting" class="change-note">
+        <b>本轮调整</b>
+        <ul v-if="changeDetails.length">
+          <li v-for="item in changeDetails" :key="item.label">
+            <strong>{{ item.label }}</strong>
+            <div><del>{{ item.before }}</del><span>→</span><b>{{ item.after }}</b></div>
+          </li>
+        </ul>
+        <p v-else>{{ changeNote }}</p>
+      </section>
+
+      <div v-if="plans.length" class="plan-grid">
+        <article v-for="item in plans" :key="`${item.label}-${item.name}`" class="plan-card" :class="{ 'is-current': item.is_current, [planBadgeClass(item)]: true }">
+          <header>
+            <div class="plan-badges">
+              <span v-if="item.is_ai_primary" class="plan-badge plan-badge--ai">AI主推</span>
+              <span v-if="item.label !== 'AI主推' || item.is_current" class="plan-badge">{{ item.is_current ? '当前选择' : item.label }}</span>
+            </div>
+            <b>¥{{ item.estimated_price }}</b>
+          </header>
+          <h3>{{ item.name }}</h3>
+          <p class="muted">{{ item.target_date }}（{{ item.weekday }}）<template v-if="item.window"> · {{ item.window }}</template><template v-if="item.indoor"> · 室内</template></p>
+          <ul>
+            <li class="plan-capacity-line">房型余量 <b>{{ item.remaining }} 间</b><span>·</span>最多可售 <b>{{ item.max_sellable }} 套</b></li>
+          </ul>
+          <p class="plan-fit-note" :class="{ caution: String(item.fit_label || '').startsWith('需核对'), negative: item.fit_label === '不建议优先' }"><b>{{ item.fit_label || (item.is_current ? '当前方案' : '推荐依据') }}</b>{{ item.fit_reason || planReason(item) }}</p>
+          <span v-if="item.is_current" class="plan-current">当前选择 · 详情与调整入口已展开</span>
+          <el-button v-else size="small" plain :disabled="submitting" @click="ask(item.message)">切换为当前方案</el-button>
+        </article>
+      </div>
+      <p v-else-if="!submitting" class="muted">{{ judgement.text || '当前没有可推荐的组合，可以调整日期、客群、体验或价格目标后继续。' }}</p>
+
+      <div v-if="!plans.length && !primarySpec" class="empty-candidate">
+        <div>✦</div>
+        <h3>{{ submitting ? '正在读取房态、订单与合作资源…' : '还没有方案' }}</h3>
+        <p>{{ judgement.text || '系统保留当前经营数据；你可以换日期、客群、体验或价格目标后重新计算。' }}</p>
+        <div class="option-row">
+          <button type="button" @click="ask('换一个日期')">换日期</button>
+          <button type="button" @click="ask('换成两人同行')">换客群</button>
+          <button type="button" @click="ask('换一个室内体验')">换体验</button>
+          <button type="button" @click="ask('预算降低到 700 以内')">调整价格目标</button>
+          <button type="button" :disabled="submitting" @click="ask('重新读取房态和合作资源，重新计算当前方案')">刷新资源并重算</button>
+          <router-link class="ghost-link" to="/hotel/rooms">维护客房库存</router-link>
+          <router-link class="ghost-link" to="/hotel/resources">维护合作资源</router-link>
+        </div>
+      </div>
+
+      <!-- 当前选择直接展开在推荐方向容器内，避免重复一张“当前方案”大卡。 -->
+      <div v-if="primarySpec" class="selected-plan-detail">
+        <div class="selected-plan-detail__head">
+          <div>
+            <span class="section-kicker">当前选择</span>
+            <h3>{{ primarySpec.product_name }}</h3>
+            <p class="muted">{{ primarySpec.target_date }}（{{ primarySpec.weekday }}） · {{ primarySpec.crowd_label }} · {{ primarySpec.room_type }}</p>
+          </div>
+        </div>
+        <article class="decision-card" :class="{ 'is-busy': submitting, 'is-flash': cardFlash }">
+          <div class="decision-card__top">
+            <div class="decision-card__head">
+              <p class="decision-card__include"><b>产品组成：</b>{{ primarySpec.room_type }} 1 晚<template v-for="exp in primarySpec.experiences" :key="exp.name"> · {{ exp.name }}<template v-if="exp.window">（{{ exp.window }}）</template></template><template v-for="service in (primarySpec.services || [])" :key="service.id || service.name"> · {{ service.name }} × {{ service.quantity || primarySpec.party_size }}</template></p>
+              <p v-if="primarySpec.route_note" class="decision-card__route">路线调整：{{ primarySpec.route_note }}</p>
+            </div>
+          </div>
+
+          <div class="figure-row">
+            <span>建议售价 <b>¥{{ primarySpec.price }}</b></span>
+            <span>可售 <b>{{ primarySpec.max_sellable }} 套</b></span>
+            <span>毛利率 {{ primarySpec.margin }}%</span>
+          </div>
+
+          <div v-if="budgetShortfall" class="budget-note">
+            <p>当前条件下没有 ¥{{ budgetShortfall.requested }} 以内、且满足最低利润要求的组合，最低可售价为 ¥{{ budgetShortfall.lowest }}。</p>
+            <div class="option-row"><button v-for="option in budgetShortfall.options" :key="option.label" type="button" @click="ask(option.message)">{{ option.label }}</button></div>
+          </div>
+
+          <div v-if="primarySpec.structure" class="product-structure">
+            <div v-for="section in primarySpec.structure" :key="section.label" class="structure-row">
+              <b>{{ section.label }}</b>
+              <span v-for="item in section.items" :key="item.name">{{ item.name }}<template v-if="item.quantity"> × {{ item.quantity }}</template><template v-if="item.window"> · {{ item.window }}</template></span>
+            </div>
+          </div>
+
+          <div v-if="primarySpec.itinerary_days?.length" class="itinerary-days">
+            <article v-for="day in primarySpec.itinerary_days" :key="day.day_index" class="itinerary-day">
+              <header><b>{{ day.label }} · {{ day.title }}</b><span>{{ day.date }}</span></header>
+              <p class="itinerary-day__summary">{{ day.summary }}</p>
+              <div v-for="(item, index) in day.items" :key="String(day.day_index) + '-' + String(index)" class="itinerary-entry">
+                <time>{{ item.time || '时间待确认' }}</time>
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <span v-if="item.route_only" class="route-only-badge">路线建议 · 非套餐权益</span>
+                  <p>{{ item.description }}</p>
+                  <small>{{ [item.address, item.duration_text, item.area].filter(Boolean).join(' · ') }}</small>
+                  <small v-if="item.notes" class="itinerary-entry__note">出行前核验：{{ item.notes }}</small>
+                </div>
+              </div>
+              <div v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-list">
+                <p v-for="leg in (routeForDay(day.day_index)?.legs || [])" :key="leg.from_stop + leg.to_stop">
+                  {{ leg.from_stop }} → {{ leg.to_stop }} · {{ leg.distance_label || '交通机动' }}<template v-if="leg.minutes"> · 预留约 {{ leg.minutes }} 分钟</template><template v-else> · 具体地点待定，暂不估算耗时</template>
+                  <small>{{ leg.note }}</small>
+                </p>
+              </div>
+            </article>
+          </div>
+
+          <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more">
+            <summary>价格与收益</summary>
+            <div class="key-evidence">
+              <div><span>单位成本</span><b>¥{{ primarySpec.cost }}</b></div>
+              <div><span>最低合法价</span><b>¥{{ primarySpec.floor_price }}</b></div>
+              <div><span>建议售价</span><b>¥{{ primarySpec.price }}</b></div>
+              <div><span>容量瓶颈</span><b>{{ primarySpec.bottleneck || '已通过' }}</b></div>
+            </div>
+            <div v-if="primarySpec.cost_breakdown?.length" class="calculation-list">
+              <div v-for="item in primarySpec.cost_breakdown" :key="item.label"><span>{{ item.label }}</span><b>¥{{ item.value }}</b></div>
+            </div>
+            <p v-if="primarySpec.pricing_basis?.length" class="muted">定价依据：{{ primarySpec.pricing_basis.join('；') }}</p>
+          </details>
+
+          <p v-if="primarySpec.conclusion" class="conclusion"><b>AI建议：</b>{{ primarySpec.conclusion }}</p>
+
+          <div class="decision-card__actions">
+            <el-button type="primary" :disabled="submitting || Boolean(budgetShortfall)" @click="generateFromPlan(primarySpec)">{{ primarySpec.product_id ? '继续优化当前产品' : '生成候选产品' }}</el-button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'resources' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'resources' ? '' : 'resources'">换资源</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'price' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'price' ? '' : 'price'">调价格</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'crowd' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'crowd' ? '' : 'crowd'">换客群</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'route' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'route' ? '' : 'route'">改路线</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'service' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'service' ? '' : 'service'">增加资源</button>
+          </div>
+
+          <div v-if="activeAdjust === 'price'" class="adjust-panel">
+            <div class="adjust-panel__head"><b>调整建议售价</b><span class="muted">当前 ¥{{ primarySpec.price }}，最低合法价 ¥{{ primarySpec.floor_price }}；改价会重新跑容量与利润校验</span></div>
+            <div class="option-row"><button type="button" @click="ask(`价格按最低合法价 ${primarySpec.floor_price} 来`)">按最低合法价 ¥{{ primarySpec.floor_price }}</button><button type="button" @click="ask('价格降到 650 以内')">降到 650 以内</button><button type="button" @click="ask('价格降到 600 以内')">降到 600 以内</button></div>
+            <div class="price-input"><input v-model="priceTarget" inputmode="numeric" placeholder="输入目标价，例如 620" /><el-button size="small" type="primary" :disabled="submitting" @click="applyPriceTarget">按这个价格重算</el-button></div>
+          </div>
+
+          <div v-if="activeAdjust === 'crowd'" class="adjust-panel"><div class="adjust-panel__head"><b>切换目标客群</b><span class="muted">仅修改目标客群，房型、体验与酒店权益保持不变；若原资源的客群标签不匹配，会明确提示核对</span></div><div class="option-row"><button v-for="item in crowdChoices" :key="item.label" type="button" @click="ask(item.message)">{{ item.label }}</button></div></div>
+
+          <div v-if="activeAdjust === 'resources'" class="adjust-panel"><div class="adjust-panel__head"><b>替换当前合作资源</b><span class="muted">保持日期、房型和客群，只替换核心体验；增加第二项体验请使用“增加资源”。</span></div><div v-if="resourceSwaps.length" class="alt-grid"><article v-for="item in resourceSwaps" :key="`swap-${item.name}`" class="alt-card"><h3>{{ item.name }}</h3><p class="muted">{{ item.window || '按场次' }} · 仍可支撑 {{ item.sets }} 套 · 预估价 ¥{{ item.estimated_price }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p class="alt-card__why">{{ item.indoor ? '室内体验，雨天不受影响。' : '户外体验，出发前会再核对天气。' }}每人结算 ¥{{ item.settlement_price }}。</p><el-button size="small" plain @click="ask(`${primarySpec.target_date} 的 ${primarySpec.room_type} 换成 ${item.name}`)">换成这个体验</el-button></article></div><p v-else class="muted">当前日期与房型下没有其它可用合作资源。</p></div>
+
+          <div v-if="activeAdjust === 'route'" class="adjust-panel"><div class="adjust-panel__head"><b>选择路线调整方式</b><span class="muted">先选安排，再由 AI 按场次和天气重新校验。</span></div><div class="option-row"><button type="button" @click="ask('路线留出更多自由时间，晚上体验结束后直接回酒店')">留出自由时间</button><button type="button" @click="ask('优先室内路线，减少户外移动')">优先室内路线</button><button type="button" @click="ask('保持当前体验，只调整先后顺序')">只调先后顺序</button></div></div>
+
+          <div v-if="activeAdjust === 'service'" class="adjust-panel"><div class="adjust-panel__head"><b>选择要增加的体验或酒店权益</b><span class="muted">按客群、场次、天气、余量和路线匹配度排序；绿色优先推荐，红色表示不建议优先。</span></div><div v-if="availableAddResources.length" class="alt-grid"><article v-for="item in availableAddResources" :key="`${item.kind}-${item.id || item.name}`" class="alt-card" :class="recommendationClass(item)"><div class="resource-card__head"><span class="section-kicker">{{ item.kind }}<template v-if="item.fit_label"> · {{ item.fit_label }}</template></span><span class="recommendation-badge" :class="recommendationClass(item)">{{ recommendationLabel(item) }}</span></div><h3>{{ item.name }}</h3><p class="muted">可售 {{ item.sets ?? item.available_quantity ?? '—' }} 套<template v-if="item.window"> · {{ item.window }}</template> · 单人成本 ¥{{ item.settlement_price ?? item.unit_cost ?? '—' }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p v-if="item.fit_reason" class="resource-fit-note">{{ item.fit_reason }}</p><el-button size="small" plain :disabled="item.addable === false" @click="ask(item.kind === '体验' ? `增加体验：${item.name}` : `增加酒店服务：${item.name}`)">{{ item.is_selected ? '已加入' : item.addable === false ? '暂不可加入' : `增加这项${item.kind}` }}</el-button></article></div><p v-else class="muted">当前日期没有已启用组包的合作体验或酒店权益。请在合作资源池添加资源并允许组包，再刷新方案。</p></div>
+
+          <details class="reason-fold"><summary>展开推荐依据与风险</summary><div class="detail-tabs"><button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">经营价值</button><button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button><button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险与限制</button><button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button></div><div class="detail-body"><template v-if="detailTab === 'basis'"><p v-for="item in (primarySpec.reason_sections || [])" :key="item.label"><b>{{ item.label }}：</b>{{ item.text }}</p><p v-if="!primarySpec.reason_sections?.length">{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p></template><template v-else-if="detailTab === 'value'"><p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p></template><template v-else-if="detailTab === 'risk'"><p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p></template><template v-else><p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p></template></div></details>
+        </article>
+      </div>
+    </section>
+
+    <!-- ⑤ Step 3：候选确认。这里不再显示产品方案编辑控件。 -->
+    <section v-if="stageIndex === 3" class="panel stage-panel">
+      <div class="stage-panel__head">
+        <h2>游客端预览</h2>
+        <span class="muted">方案已在上一阶段完成调整；这里检查成品展示并发布</span>
+      </div>
+      <p v-if="primarySpec" class="source-plan">来源方案：{{ primarySpec.product_name }} · {{ primarySpec.room_type }} × {{ primaryExperience?.name || '当前体验' }} · ¥{{ primarySpec.price }}</p>
+      <div v-if="!candidateCards.length && resolvedCandidateCount" class="panel empty-state">本轮产品已完成确认，可前往产品库继续制作营销内容。</div>
+      <div class="candidate-grid">
+        <article v-for="card in candidateCards" :key="card.key" class="candidate-card">
+          <div class="candidate-card__body">
+            <header>
+              <h3>{{ card.name }}</h3>
+              <b>¥{{ card.price }}</b>
+            </header>
+            <span class="candidate-relation">{{ card.relation }}</span>
+            <p class="muted">{{ card.date }} · {{ card.crowd_label }} · {{ card.party }} 人<template v-if="card.quantity !== ''"> · 可售 {{ card.quantity }} 套</template></p>
+            <p v-if="card.experiences.length" class="candidate-card__exp">正式体验：{{ card.experiences.join('、') }}</p>
+            <p v-if="card.services.length" class="candidate-card__exp">酒店权益：{{ card.services.join('、') }}</p>
+            <p class="candidate-card__figures">成本 ¥{{ card.cost }} · 最低合法价 ¥{{ card.floor_price }}<template v-if="card.margin_label"> · 毛利率 {{ card.margin_label }}</template></p>
+            <iframe class="visitor-preview-frame" :src="visitorPreviewUrl(card)" title="游客端商品完整预览" loading="lazy" scrolling="no" @load="resizeVisitorPreview" />
+            <div class="badge-row">
+              <span>✓ 库存通过</span>
+              <span>✓ 资源通过</span>
+              <span>✓ 利润通过</span>
+            </div>
+            <div class="candidate-card__actions">
+              <el-button size="small" type="primary" @click="confirm(card.raw, 'PUBLISH')">确认并发布</el-button>
+              <el-button size="small" plain @click="confirm(card.raw, 'DRAFT')">保存为草稿</el-button>
+              <el-button size="small" plain @click="editVisitorCopy(card)">{{ Number(copyDraft?.id) === Number(card.product_id) ? '收起文案编辑' : '微调游客文案' }}</el-button>
+            </div>
+            <details class="batch-apply-fold">
+              <summary>批量应用到其他日期与房型</summary>
+              <p class="muted">只创建房量、人数和同名资源都满足条件的草稿；不满足的目标会列出原因。</p>
+              <el-select v-model="batchRoomIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择日期与房型" class="batch-room-select">
+                <el-option v-for="room in batchRoomOptions" :key="room.id" :value="Number(room.id)" :label="`${room.available_date} · ${room.room_type} · 余 ${room.available_count} 间`" />
+              </el-select>
+              <el-button size="small" type="primary" :loading="batchApplying" @click="applyBatch(card)">生成批量草稿</el-button>
+              <div v-if="batchResult" class="batch-result">
+                <p v-if="batchResult.created_count">已创建 {{ batchResult.created_count }} 个草稿：{{ batchCreatedText(batchResult) }}</p>
+                <p v-for="item in batchResult.skipped" :key="`${item.target_date}-${item.room_inventory_id || item.room_type}`">未生成 {{ item.target_date }} {{ item.room_type || '' }}：{{ item.reason }}</p>
+              </div>
+            </details>
+            <section v-if="copyDraft && Number(copyDraft.id) === Number(card.product_id)" class="copy-editor">
+              <header><b>游客端文案微调</b><span>保存后直接更新上方预览</span></header>
+              <article v-for="field in copyFields" :key="field.key" class="copy-field">
+                <label>{{ field.label }}</label>
+                <el-input v-model="copyDraft.product[field.key]" :type="field.multiline ? 'textarea' : 'text'" :rows="field.multiline ? 3 : 1" />
+                <el-button size="small" plain :loading="copyRewriting" @click="rewriteMainCopy(field.key)">AI生成替换文字</el-button>
+              </article>
+              <details class="copy-subsection"><summary>体验名称与介绍</summary>
+                <article v-for="resource in copyDraft.resources" :key="`${resource.resource_type}:${resource.resource_id}`" class="copy-field">
+                  <label>体验名称 · {{ resource.address || '酒店地址' }}</label>
+                  <el-input v-model="resource.resource_name" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteResourceName(resource)">AI生成替换文字</el-button>
+                  <label>体验介绍</label>
+                  <el-input v-model="resource.description" type="textarea" :rows="2" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteResourceCopy(resource)">AI生成替换文字</el-button>
+                </article>
+              </details>
+              <details v-if="copyDraft.assets?.length" class="copy-subsection"><summary>营销素材</summary>
+                <article v-for="asset in copyDraft.assets" :key="asset.asset_type" class="copy-field">
+                  <label>{{ asset.platform || asset.asset_type }} · 标题</label>
+                  <el-input v-model="asset.title" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteAssetCopy(asset, 'marketing_asset_title')">AI生成替换文字</el-button>
+                  <label>正文</label>
+                  <el-input v-model="asset.content" type="textarea" :rows="3" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteAssetCopy(asset, 'marketing_asset_content')">AI生成替换文字</el-button>
+                </article>
+              </details>
+              <details v-if="copyDraft.details" class="copy-subsection"><summary>商品详情文案</summary>
+                <article v-for="(text, index) in copyDraft.details.intro" :key="`intro-${index}`" class="copy-field">
+                  <label>商品详情介绍</label>
+                  <el-input v-model="copyDraft.details.intro[index]" type="textarea" :rows="2" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteDetailCopy(copyDraft.details.intro, String(index), '商品介绍')">AI生成替换文字</el-button>
+                </article>
+                <article v-for="(item, index) in copyDraft.details.experience_details" :key="`detail-${index}`" class="copy-field">
+                  <label>{{ item.name }} · 体验亮点</label>
+                  <el-input v-model="item.feature" type="textarea" :rows="2" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteDetailCopy(item, 'feature', `${item.name}体验亮点`)">AI生成替换文字</el-button>
+                  <label>到场提示</label>
+                  <el-input v-model="item.tips" type="textarea" :rows="2" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteDetailCopy(item, 'tips', `${item.name}到场提示`)">AI生成替换文字</el-button>
+                </article>
+                <article v-for="(text, index) in copyDraft.details.spend_notes" :key="`spend-${index}`" class="copy-field">
+                  <label>费用说明</label>
+                  <el-input v-model="copyDraft.details.spend_notes[index]" type="textarea" :rows="2" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteDetailCopy(copyDraft.details.spend_notes, String(index), '费用说明')">AI生成替换文字</el-button>
+                </article>
+                <article v-for="(text, index) in copyDraft.details.tips" :key="`tip-${index}`" class="copy-field">
+                  <label>出行提示</label>
+                  <el-input v-model="copyDraft.details.tips[index]" type="textarea" :rows="2" />
+                  <el-button size="small" plain :loading="copyRewriting" @click="rewriteDetailCopy(copyDraft.details.tips, String(index), '出行提示')">AI生成替换文字</el-button>
+                </article>
+              </details>
+              <details class="copy-subsection"><summary>每日行程文案</summary>
+                <article v-for="day in copyDraft.days" :key="day.day_index" class="copy-day">
+                  <b>{{ day.label }} · {{ day.date }}</b>
+                  <div class="copy-field">
+                    <label>当天标题</label>
+                    <el-input v-model="day.title" />
+                    <el-button size="small" plain :loading="copyRewriting" @click="rewriteDayCopy(day, 'itinerary_title')">AI替换标题</el-button>
+                    <label>当日概述</label>
+                    <el-input v-model="day.summary" type="textarea" :rows="2" />
+                    <el-button size="small" plain :loading="copyRewriting" @click="rewriteDayCopy(day, 'itinerary_summary')">AI替换概述</el-button>
+                  </div>
+                  <div v-for="item in day.items" :key="`${item.time}-${item.title}`" class="copy-field">
+                    <label>{{ item.time }} · {{ item.address || '酒店地址' }}</label>
+                    <el-input v-model="item.title" />
+                    <el-button size="small" plain :loading="copyRewriting" @click="rewriteItineraryCopy(item, 'itinerary_title')">AI替换标题</el-button>
+                    <el-input v-model="item.description" type="textarea" :rows="2" />
+                    <el-button size="small" plain :loading="copyRewriting" @click="rewriteItineraryCopy(item, 'itinerary_description')">AI替换说明</el-button>
+                  </div>
+                </article>
+              </details>
+              <p class="muted">文字调整只影响游客端内容，不修改房态、资源、地址、价格或产品包含权益。</p>
+              <div class="copy-editor__actions"><el-button type="primary" :loading="copySaving" @click="saveVisitorCopy">保存并刷新预览</el-button><el-button plain @click="copyDraft = null">取消</el-button></div>
+            </section>
+            <details class="reason-fold">
+              <summary>查看推荐依据</summary>
+              <p>{{ card.reason }}</p>
+            </details>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 微调记录 -->
+    <section v-if="refinements.length" class="panel stage-panel">
+      <div class="stage-panel__head"><h2>微调记录</h2><span class="muted">旧版本保留在版本记录里，可回退</span></div>
+      <div v-for="(item, index) in refinements" :key="`refine-${index}`" class="refine-row">
+        <p><span class="layer-badge">{{ item.layer_label }}</span>{{ item.message }}</p>
+        <table v-if="item.changes?.length" class="reply-table">
+          <thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead>
+          <tbody><tr v-for="row in item.changes" :key="row.field"><td>{{ row.label }}</td><td class="muted">{{ row.before }}</td><td>{{ row.after }}</td></tr></tbody>
+        </table>
+        <div v-if="item.checks?.length" class="chip-row"><span v-for="check in item.checks" :key="check.label">{{ check.label }}：{{ check.value }}</span></div>
+      </div>
+    </section>
+
     <!-- ⑧ 吸底输入区 -->
     <form class="composer" @submit.prevent="submit()">
       <div class="composer__context">
@@ -1018,25 +1455,10 @@ onMounted(async () => { await load() })
       </div>
       <div class="composer__main">
         <textarea v-model="brief" rows="1" :placeholder="editingProduct ? '例如：价格做到 700 以内；或者换个更适合两个人的体验' : '例如：价格低一点 / 换成双人 / 不要亲子 / 改成 9 月 27 日'" @input="growInput" @keydown.enter.exact.prevent="submit()" />
-        <button type="submit" :disabled="!brief.trim() || submitting">{{ submitting ? '重算中…' : '调整方案' }}</button>
+        <button type="submit" :disabled="!brief.trim() || submitting">调整方案</button>
       </div>
     </form>
   </section>
-
-  <el-dialog v-model="candidateDetailOpen" title="候选方案详情" width="560px">
-    <template v-if="selectedCandidate">
-      <h3>{{ selectedCandidate.name }}</h3>
-      <p class="muted">{{ selectedCandidate.date }} · {{ selectedCandidate.crowd_label }} · {{ selectedCandidate.party }} 人 · 建议售价 ¥{{ selectedCandidate.price }}</p>
-      <p v-if="selectedCandidate.experiences?.length"><b>正式体验：</b>{{ selectedCandidate.experiences.join('、') }}</p>
-      <p v-if="selectedCandidate.services?.length"><b>酒店权益：</b>{{ selectedCandidate.services.join('、') }}</p>
-      <p><b>经营信息：</b>成本 ¥{{ selectedCandidate.cost || '—' }} · 最低合法价 ¥{{ selectedCandidate.floor_price || '—' }}<template v-if="selectedCandidate.quantity !== ''"> · 可售 {{ selectedCandidate.quantity }} 套</template></p>
-      <p v-if="selectedCandidate.reason"><b>推荐说明：</b>{{ selectedCandidate.reason }}</p>
-    </template>
-    <template #footer>
-      <el-button @click="candidateDetailOpen = false">返回</el-button>
-      <el-button v-if="selectedCandidate" type="primary" @click="setPrimaryCandidate(selectedCandidate)">设为主推荐</el-button>
-    </template>
-  </el-dialog>
 
   <!-- 操作历史：只记录「指令 → 变化」，不保留聊天式对话 -->
   <el-drawer v-model="historyOpen" title="操作历史" size="380px">
@@ -1065,8 +1487,11 @@ onMounted(async () => { await load() })
 .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* 步骤条 */
-.stage-bar ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.stage-bar li { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.stage-bar ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.stage-bar li { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.stage-bar li button { display: flex; width: 100%; align-items: center; gap: 9px; padding: 9px 12px; border: 0; border-radius: inherit; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.stage-bar li button:disabled { cursor: default; }
+.stage-bar li.available button:hover { background: #f8fbf9; }
 .stage-bar i { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%; background: var(--panel-soft); color: var(--muted); font-size: 11px; font-style: normal; }
 .stage-bar b { display: block; font-size: 12.5px; }
 .stage-bar small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
@@ -1090,8 +1515,18 @@ onMounted(async () => { await load() })
 .stage-panel { display: grid; gap: 12px; }
 .stage-panel__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .stage-panel__head h2 { margin: 0; font-size: 15px; }
-.recomputing { color: var(--teal-dark); font-size: 11.5px; }
-.change-note { margin: 0; padding: 8px 11px; border-radius: 9px; background: #f1f8f4; color: #2f6f60; font-size: 11.5px; line-height: 1.65; }
+.recompute-popover { position: fixed; z-index: 100; top: 18px; left: 50%; display: flex; align-items: center; gap: 10px; max-width: min(92vw, 460px); padding: 12px 18px; border: 1px solid #d9e8e1; border-radius: 999px; background: rgba(255,255,255,.97); box-shadow: 0 12px 35px rgba(26,55,45,.16); color: #245e51; font-size: 12px; transform: translateX(-50%); }
+.recompute-spinner { width: 15px; height: 15px; flex: 0 0 auto; border: 2px solid #d8eae2; border-top-color: #267664; border-radius: 50%; animation: recompute-spin .7s linear infinite; }
+@keyframes recompute-spin { to { transform: rotate(360deg); } }
+.change-note { display: grid; gap: 7px; margin: 0; padding: 10px 12px; border: 1px solid #d4e7dc; border-radius: 9px; background: #f5faf7; color: #2f6f60; font-size: 11.5px; line-height: 1.65; }
+.change-note > b { font-size: 12px; }
+.change-note ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.change-note li { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; align-items: start; padding-top: 6px; border-top: 1px solid #e1eee7; }
+.change-note li > strong { color: #53665d; font-weight: 600; }
+.change-note li > div { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 6px; align-items: start; }
+.change-note del { color: #8a7777; text-decoration-color: #a77f7f; }
+.change-note li > div b { color: #245e51; }
+.change-note p { margin: 0; }
 
 /* 方案方向卡：固定列数，方案数量变化时卡片宽度不变，避免点击后整块布局跳动。 */
 .plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -1103,6 +1538,14 @@ onMounted(async () => { await load() })
 .plan-badge--ai { background: #e9f2ff; color: #3f5f91; }
 .plan-card h3 { margin: 0; font-size: 13.5px; line-height: 1.4; }
 .plan-card ul { display: grid; gap: 2px; margin: 0; padding-left: 16px; color: #45524c; font-size: 11px; line-height: 1.6; }
+.plan-card .plan-capacity-line { display: flex; gap: 5px; padding-left: 0; list-style: none; white-space: nowrap; }
+.plan-capacity-line b { color: #34483f; font-weight: 650; }
+.plan-fit-note,.resource-fit-note { margin: 0; color: #486158; font-size: 11px; line-height: 1.6; }
+.plan-fit-note b { margin-right: 5px; color: var(--teal-dark); }
+.plan-fit-note.caution,.resource-fit-note { color: #8a642c; }
+.plan-fit-note.caution b { color: #8a642c; }
+.plan-fit-note.negative { color: #98524a; }
+.plan-fit-note.negative b { color: #98524a; }
 .plan-card.is-current { border-color: var(--teal); background: #f6fbf8; }
 .plan-card.is-current .plan-badge { background: var(--teal-dark); color: #fff; }
 .plan-card.is-cheaper .plan-badge { background: #eaf4ef; color: #2f6f60; }
@@ -1121,10 +1564,21 @@ onMounted(async () => { await load() })
 .structure-row { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 11px; line-height: 1.6; }
 .structure-row > b { color: var(--muted); font-size: 10px; }
 .structure-row > span { color: #33443c; }
-.itinerary-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 7px; }
-.itinerary-strip > div { display: grid; gap: 3px; padding: 8px 10px; border-left: 2px solid #cfe2d9; background: #f7fbf9; }
-.itinerary-strip b { color: var(--teal-dark); font-size: 10px; }
-.itinerary-strip span { color: #45524c; font-size: 11px; line-height: 1.55; }
+.itinerary-days { display: grid; gap: 9px; }
+.itinerary-day { display: grid; gap: 7px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbf9; }
+.itinerary-day > header { display: flex; justify-content: space-between; gap: 9px; color: var(--teal-dark); font-size: 11px; }
+.itinerary-day > header span { color: var(--muted); font-family: var(--font-mono); }
+.itinerary-day__summary { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.itinerary-entry { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 9px; padding: 7px 0; border-top: 1px solid #e8eeea; }
+.itinerary-entry > time { color: var(--teal-dark); font-family: var(--font-mono); font-size: 10px; }
+.itinerary-entry strong { color: var(--ink); font-size: 11px; }
+.itinerary-entry p { margin: 3px 0; color: #55635d; font-size: 10px; line-height: 1.5; }
+.itinerary-entry small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.itinerary-entry__note { color: #8a642c !important; }
+.route-only-badge { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; background: #eaf2ed; color: #426452; font-size: 9px; }
+.route-transfer-list { display: grid; gap: 5px; padding-top: 5px; border-top: 1px dashed var(--line); }
+.route-transfer-list p { margin: 0; color: #50615a; font-size: 9px; line-height: 1.55; }
+.route-transfer-list small { display: block; color: var(--muted); font-size: 9px; }
 .calculation-list { display: grid; gap: 4px; margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--line); }
 .calculation-list > div { display: flex; justify-content: space-between; gap: 8px; color: #55635d; font-size: 11px; }
 .calculation-list b { color: var(--ink); font-family: var(--font-mono); }
@@ -1137,8 +1591,9 @@ onMounted(async () => { await load() })
 .decision-card__head h3 { margin: 0 0 5px; font-size: 17px; line-height: 1.4; }
 .decision-card__head p { margin: 0 0 2px; font-size: 12px; }
 .decision-card__include { color: #45524c; }
-.figure-row { display: flex; flex-wrap: wrap; gap: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--muted); font-size: 11.5px; }
-.figure-row b { color: var(--teal-dark); font-family: var(--font-mono); font-size: 15px; }
+.figure-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--muted); font-size: 11.5px; }
+.figure-row > span { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.figure-row b { color: var(--teal-dark); font-family: inherit; font-size: 12px; font-weight: 700; }
 .key-evidence { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .key-evidence > div { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
 .key-evidence span { color: var(--muted); font-size: 10px; }
@@ -1157,11 +1612,20 @@ onMounted(async () => { await load() })
 .adjust-panel__head { display: grid; gap: 3px; }
 .adjust-panel__head b { font-size: 12.5px; }
 .adjust-panel__head span { font-size: 11px; }
-.alt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.alt-card { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.alt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); grid-auto-rows: 1fr; align-items: stretch; gap: 10px; }
+.alt-card { display: flex; flex-direction: column; align-items: stretch; gap: 7px; height: 100%; min-height: 216px; box-sizing: border-box; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.alt-card.resource-card--recommended { border-color: #83b9a0; background: #f3faf6; }
+.alt-card.resource-card--caution { border-color: #dfc38c; background: #fffaf0; }
+.alt-card.resource-card--not-recommended { border-color: #dca39d; background: #fff6f5; }
+.resource-card__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.recommendation-badge { flex: 0 0 auto; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 650; }
+.recommendation-badge.resource-card--recommended { background: #dcefe4; color: #276347; }
+.recommendation-badge.resource-card--caution { background: #f7ebcf; color: #805d1f; }
+.recommendation-badge.resource-card--not-recommended { background: #f5dedb; color: #9a4239; }
 .alt-card h3 { margin: 0; font-size: 13px; }
 .alt-card p { margin: 0; font-size: 11px; }
-.alt-card__why { color: #55635d; font-size: 11px; line-height: 1.6; }
+.alt-card__why { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; color: #55635d; font-size: 11px; line-height: 1.6; }
+.alt-card :deep(.el-button) { margin-top: auto; align-self: flex-start; }
 
 /* 详情 Tab */
 .detail-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -1175,11 +1639,9 @@ onMounted(async () => { await load() })
 .constraint-row b { color: var(--ink); font-weight: 600; }
 
 /* 候选产品卡 */
-.candidate-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
-.candidate-card { display: grid; grid-template-columns: 118px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
-.candidate-card > img { width: 100%; height: 100%; min-height: 168px; object-fit: cover; }
-.candidate-card__ph { display: grid; place-items: center; min-height: 168px; background: var(--panel-soft); color: var(--teal); font-size: 20px; }
-.candidate-card__body { min-width: 0; display: grid; gap: 6px; padding: 11px 12px; align-content: start; }
+.candidate-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.candidate-card { display: grid; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.candidate-card__body { min-width: 0; display: grid; gap: 8px; padding: 12px; align-content: start; }
 .candidate-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .candidate-card h3 { margin: 0; font-size: 13px; line-height: 1.4; }
 .candidate-card header b { color: var(--teal-dark); font-family: var(--font-mono); font-size: 14px; white-space: nowrap; }
@@ -1187,6 +1649,27 @@ onMounted(async () => { await load() })
 .candidate-relation { justify-self: start; padding: 3px 8px; border-radius: 999px; background: #f1f8f4; color: #2f6f60; font-size: 10px; }
 .candidate-card__exp { color: #45524c; font-size: 11px; line-height: 1.6; }
 .candidate-card__figures { color: var(--muted); font-size: 10.5px; }
+.visitor-preview-frame { display: block; width: 100%; height: 720px; min-height: 600px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.batch-apply-fold,.copy-subsection { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfc; }
+.batch-apply-fold summary,.copy-subsection summary { cursor: pointer; color: var(--teal-dark); font-size: 11.5px; font-weight: 650; }
+.batch-apply-fold p { margin: 0; font-size: 11px; }
+.batch-room-select { width: min(100%, 680px); margin-right: 8px; }
+.batch-result { display: grid; gap: 4px; color: #52645a; font-size: 11px; }
+.batch-result p { margin: 0; }
+.copy-editor { display: grid; gap: 10px; padding: 12px; border: 1px solid #bed7ca; border-radius: 10px; background: #f7fbf9; }
+.copy-editor > header { display: flex; justify-content: space-between; gap: 8px; color: var(--teal-dark); font-size: 12px; }
+.copy-editor > header span { color: var(--muted); font-size: 10px; }
+.copy-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: start; padding: 8px 0; border-bottom: 1px solid #e5eeea; }
+.copy-field label { grid-column: 1 / -1; color: #53645d; font-size: 10.5px; font-weight: 650; }
+.copy-field :deep(.el-input) { min-width: 0; }
+.copy-field :deep(.el-button) { white-space: nowrap; }
+.copy-day { display: grid; gap: 6px; margin-top: 9px; }
+.copy-day > b { color: var(--teal-dark); font-size: 11px; }
+.copy-editor__actions { display: flex; gap: 8px; }
+.date-room-picker { display: grid; grid-template-columns: minmax(145px, auto) minmax(170px, 220px) minmax(210px, 290px); gap: 10px; align-items: center; padding: 1px 0 3px; }
+.date-room-picker__label { display: grid; gap: 3px; }
+.date-room-picker__label b { color: var(--ink); font-size: 12px; }
+.date-room-picker__label span { color: var(--muted); font-size: 10.5px; }
 .badge-row { display: flex; flex-wrap: wrap; gap: 5px; }
 .badge-row span { padding: 2px 7px; border-radius: 999px; background: #eaf4ef; color: #2f6f60; font-size: 9.5px; }
 .candidate-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -1269,15 +1752,20 @@ onMounted(async () => { await load() })
 .log-diffs del { color: #9a6d6d; text-decoration: line-through; }
 
 @media (max-width: 1000px) {
-  .stage-bar ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage-bar ol { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .key-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .decision-card__top { grid-template-columns: 1fr; }
   .decision-card__top > img, .decision-card__ph { min-height: 168px; }
 }
 @media (max-width: 700px) {
   .candidate-grid { grid-template-columns: 1fr; }
-  .candidate-card { grid-template-columns: 96px minmax(0, 1fr); }
-  .candidate-card > img, .candidate-card__ph { min-height: 128px; }
+  .visitor-preview-frame { height: 720px; min-height: 580px; }
+  .date-room-picker { grid-template-columns: 1fr; }
+  .plan-grid { grid-template-columns: 1fr; }
+  .figure-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 9px 7px; font-size: 10px; }
+  .figure-row b { font-size: 10.5px; }
+  .copy-editor > header { flex-direction: column; }
+  .copy-field { grid-template-columns: 1fr; }
   .stage-bar ol { grid-template-columns: 1fr; }
   .trace-list li { grid-template-columns: 1fr; }
 }

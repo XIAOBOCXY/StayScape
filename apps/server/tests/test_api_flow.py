@@ -10,8 +10,8 @@ def generate_request(client, token):
     rooms = client.get("/api/v1/hotel/rooms", headers=auth(token)).json()
     services = client.get("/api/v1/hotel/services", headers=auth(token)).json()
     resources = client.get("/api/v1/hotel/resources", headers=auth(token)).json()
-    target_date = rooms[0]["available_date"]
     room = next(item for item in rooms if item["room_type"] == "亲子房")
+    target_date = room["available_date"]
     breakfast = next(item for item in services if item["service_type"] == "BREAKFAST")
     late = next(item for item in services if item["service_type"] == "LATE_CHECKOUT")
     craft = next(item for item in resources if "非遗" in item["resource_name"])
@@ -41,10 +41,10 @@ def test_login_and_core_product_generation(client, hotel_token):
     product = data["product"]
     assert product["product_name"] == "杭州雨天亲子非遗文化宿"
     assert product["sale_quantity"] == 4
-    assert product["unit_cost"] == "455.00"
+    assert product["unit_cost"] == "460.00"
     assert product["suggested_price"] == "599.00"
-    assert product["gross_profit"] == "144.00"
-    assert 0.2403 < float(product["gross_margin"]) < 0.2405
+    assert product["gross_profit"] == "139.00"
+    assert 0.2320 < float(product["gross_margin"]) < 0.2321
     assert data["trace_id"].startswith("trace_")
 
 
@@ -157,6 +157,7 @@ def test_merchant_can_create_and_edit_resource_name_date_and_session(client, hot
         "maximum_age": 60,
         "indoor": True,
         "weather_tags": "RAIN,SUNNY",
+        "address": "杭州市西湖区天目山路518号游客中心",
         "package_enabled": True,
     })
     assert created.status_code == 200, created.text
@@ -399,7 +400,7 @@ def test_recalculation_uses_original_margin_policy(client, hotel_token, merchant
     assert changed.status_code == 200, changed.text
     refreshed = client.get(f"/api/v1/hotel/products/{product['id']}", headers=auth(hotel_token)).json()
     assert refreshed["sale_quantity"] == 1
-    assert refreshed["minimum_allowed_price"] == "650.00"
+    assert refreshed["minimum_allowed_price"] == "657.15"
     assert float(refreshed["gross_margin"]) >= 0.30
 
 

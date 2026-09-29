@@ -1,4 +1,9 @@
+from datetime import date, timedelta
+
+import pytest
+
 from app.services.poster_service import render_poster_svg, wrap_text
+from app.services.product_advisor_service import ProductAdvisor
 
 from .test_api_flow import auth, generate_request
 
@@ -148,3 +153,158 @@ def test_advisor_confirmation_preserves_solo_party_and_route_note(client, hotel_
     assert '自由' in payload['advisor']['primary']['route_note']
     assert payload['proposals']
     assert all(item['product']['party_size'] == 1 for item in payload['proposals'])
+
+
+def test_advisor_rejects_past_date_without_silently_changing_primary(client, hotel_token):
+    created = client.post('/api/v1/hotel/ai/conversations', headers=auth(hotel_token), json={'title': '日期校验回归测试'})
+    conversation_id = created.json()['id']
+    initial = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '改成单人'},
+    ).json()['advisor']['primary']
+    past = date.today() - timedelta(days=1)
+
+    rejected = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': f'改成{past.month}月{past.day}日'},
+    )
+
+    assert rejected.status_code == 200, rejected.text
+    advisor = rejected.json()['advisor']
+    assert advisor['validation_error']['code'] == 'DATE_PASSED'
+    assert str(past.month) in advisor['validation_error']['message']
+    assert 'primary' not in advisor
+    assert advisor['plan']['target_date'] == initial['target_date']
+
+    continued = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '路线安排轻松一点，下午留自由时间'},
+    ).json()['advisor']['primary']
+    assert continued['target_date'] == initial['target_date']
+    assert continued['party_size'] == 1
+
+
+def test_resource_names_do_not_change_explicit_audience():
+    advisor = object.__new__(ProductAdvisor)
+    parsed = advisor._parse('换成沉浸式城市演出，再加一个咖啡体验和博物馆导览', [])
+    assert parsed['crowd'] == ''
+    assert parsed['party_size'] is None
+
+
+@pytest.mark.parametrize(
+    ('instruction', 'crowd', 'party_size'),
+    [
+        ('改成单人套餐', 'SOLO', 1),
+        ('改成情侣双人套餐', 'COUPLE', 2),
+        ('改成亲子家庭套餐', 'FAMILY', 3),
+        ('改成朋友同行套餐', 'FRIENDS', 3),
+    ],
+)
+def test_advisor_parses_only_explicit_audience_phrases(instruction, crowd, party_size):
+    advisor = object.__new__(ProductAdvisor)
+    parsed = advisor._parse(instruction, [])
+    assert parsed['crowd'] == crowd
+    assert parsed['party_size'] == party_size
+
+
+def test_route_word_does_not_accidentally_confirm_plan():
+    advisor = object.__new__(ProductAdvisor)
+    parsed = advisor._parse('行程安排轻松一点，下午留自由时间', [])
+    assert parsed['confirm'] is False
+
+
+def test_advisor_rejects_invalid_and_unavailable_dates(client, hotel_token):
+    created = client.post('/api/v1/hotel/ai/conversations', headers=auth(hotel_token), json={'title': '日期边界回归测试'})
+    conversation_id = created.json()['id']
+    initial = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '改成单人'},
+    ).json()['advisor']['primary']
+
+    invalid = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '改成2月30日'},
+    ).json()['advisor']
+    assert invalid['validation_error']['code'] == 'DATE_INVALID'
+    assert invalid['plan']['target_date'] == initial['target_date']
+
+    unavailable_date = date.today() + timedelta(days=365)
+    unavailable = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': f'改成{unavailable_date.isoformat()}'},
+    ).json()['advisor']
+    assert unavailable['validation_error']['code'] == 'DATE_UNAVAILABLE'
+    assert unavailable['plan']['target_date'] == initial['target_date']
+
+    routed = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '路线安排轻松一点，下午留自由时间'},
+    )
+    assert routed.status_code == 200, routed.text
+    assert '自由' in routed.json()['advisor']['primary']['route_note']
+
+
+def test_advisor_keeps_solo_budget_route_and_date_through_candidate_generation(client, hotel_token):
+    created = client.post('/api/v1/hotel/ai/conversations', headers=auth(hotel_token), json={'title': '完整状态回归测试'})
+    conversation_id = created.json()['id']
+
+    solo = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '改成单人'},
+    ).json()['advisor']['primary']
+    target_date = solo['target_date']
+
+    resource = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '换成沉浸式城市演出'},
+    ).json()['advisor']['primary']
+    assert resource['crowd'] == 'SOLO'
+    assert resource['party_size'] == 1
+    assert resource['target_date'] == target_date
+    assert '沉浸式城市演出' not in [item['name'] for item in resource['experiences']]
+    assert '不适合' in resource['selection_notice']
+
+    budgeted = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '价格控制在800以内'},
+    ).json()['advisor']['primary']
+    assert budgeted['visitor_budget'] == '800.00'
+    assert float(budgeted['price']) <= 800
+
+    routed = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '路线安排轻松一点，下午留自由时间'},
+    ).json()['advisor']['primary']
+    assert routed['crowd'] == 'SOLO'
+    assert routed['party_size'] == 1
+    assert routed['target_date'] == target_date
+    assert routed['visitor_budget'] == '800.00'
+    assert float(routed['price']) <= 800
+    assert '自由' in routed['route_note']
+
+    generated = client.post(
+        f'/api/v1/hotel/ai/conversations/{conversation_id}/advisor',
+        headers=auth(hotel_token),
+        json={'natural_language': '就这个，生成候选'},
+    )
+    assert generated.status_code == 200, generated.text
+    payload = generated.json()
+    assert payload['advisor']['step'] == 'GENERATED'
+    assert payload['proposals']
+    for proposal in payload['proposals']:
+        product = proposal['product']
+        assert product['target_date'] == target_date
+        assert product['target_crowd'] == 'SOLO'
+        assert product['party_size'] == 1
+        assert float(product['suggested_price']) <= 800

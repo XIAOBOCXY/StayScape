@@ -16,3 +16,34 @@ export function promoteCandidate(primary, candidates, key) {
   }
   return { primary: primaryFromCandidate(selected), candidates: [...candidates.filter((item) => item.key !== key), outgoing] }
 }
+
+export function validationChangeNote(validationError, fallback = '') {
+  const message = String(validationError?.message || '').trim()
+  if (!message) return fallback
+  const dates = Array.isArray(validationError?.available_dates)
+    ? validationError.available_dates.map((item) => String(item || '')).filter(Boolean)
+    : []
+  return dates.length ? `${message}；可选日期：${dates.join('、')}` : message
+}
+
+export function prepareAdvisorResponse(currentAdvisor, previousPrimary, nextAdvisor) {
+  const validationNote = validationChangeNote(nextAdvisor?.validation_error)
+  const primary = nextAdvisor?.primary || null
+  if (!validationNote || primary || !previousPrimary) {
+    return { advisor: nextAdvisor, primary, validationNote }
+  }
+
+  const nextJudgement = nextAdvisor?.judgement || {}
+  const oldJudgement = currentAdvisor?.judgement || {}
+  const hasNewDirections = Array.isArray(nextJudgement.plans) && nextJudgement.plans.length > 0
+  return {
+    advisor: {
+      ...(currentAdvisor || {}),
+      ...(nextAdvisor || {}),
+      primary: previousPrimary,
+      judgement: hasNewDirections ? nextJudgement : oldJudgement,
+    },
+    primary: previousPrimary,
+    validationNote,
+  }
+}

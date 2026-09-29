@@ -24,4 +24,4 @@ def test_late_checkout_is_not_scheduled_on_arrival_day():
     days = build_day_plan(resources, stay)
 
     assert all(item["title"] != "延迟退房" for item in days[0]["items"])
-    assert days[-1]["items"][-1]["title"] == "办理退房 · 返程"
+    assert days[-1]["items"][-1]["title"] == "返回酒店取行李"
