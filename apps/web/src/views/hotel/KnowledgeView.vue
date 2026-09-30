@@ -60,14 +60,7 @@ onMounted(load)
 
 <template>
   <div class="knowledge-page">
-    <div class="page-head">
-      <div>
-        
-        <h1>文旅知识库</h1>
-        
-      </div>
-      <div class="header-actions"><span class="live-pill"><i /> {{ items.length }} 条记录</span><el-button plain :loading="loading" @click="load">刷新列表</el-button><el-button type="primary" :loading="refreshing" @click="refreshSources">按来源更新</el-button></div>
-    </div>
+    <div v-toolbar class="header-actions"><span class="live-pill"><i /> {{ items.length }} 条记录</span><el-button plain :loading="loading" @click="load">刷新列表</el-button><el-button type="primary" :loading="refreshing" @click="refreshSources">按来源更新</el-button></div>
 
     <section class="knowledge-filter">
       <el-input v-model="keyword" placeholder="搜索地点、类别、开放时间或来源" clearable @keyup.enter="load" />

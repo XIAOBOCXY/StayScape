@@ -7,8 +7,8 @@ export const authApi = {
 }
 
 export const hotelApi = {
-  dashboard: () => api.get<Dashboard>('/hotel/dashboard'),
-  rooms: () => api.get<Room[]>('/hotel/rooms'),
+  dashboard: () => api.get<Dashboard>('/hotel/dashboard', { timeout: 8000 }),
+  rooms: (params?: { from_date?: string; days?: number }) => api.get<Room[]>('/hotel/rooms', { params }),
   createRoom: (payload: Record<string, unknown>) => api.post<Room>('/hotel/rooms', payload),
   updateRoom: (id: number, payload: Record<string, unknown>) => api.patch<Room>(`/hotel/rooms/${id}`, payload),
   uploadMedia: (file: File) => { const body = new FormData(); body.append('file', file); return api.post<{ image_url: string; image_source: string; image_attribution: string }>('/hotel/media/upload', body) },
@@ -23,7 +23,7 @@ export const hotelApi = {
   updateResourceAddress: (id: number, address: string) => api.patch<PartnerResource>(`/hotel/resources/${id}/address`, { address }),
   toggleResourcePackage: (id: number, package_enabled: boolean) => api.patch<PartnerResource>(`/hotel/resources/${id}/package`, { package_enabled }),
   updateResourceMedia: (id: number, payload: { image_url: string; image_source: string; image_attribution: string }) => api.patch<PartnerResource>(`/hotel/resources/${id}/media`, payload),
-  products: (status?: string) => api.get<{ items: TravelProduct[]; total: number }>('/hotel/products', { params: status ? { status } : undefined }),
+  products: (status?: string, limit?: number, includeMarketingAssets = true, offset?: number, targetDate?: string) => api.get<{ items: TravelProduct[]; total: number; dates: Array<{ target_date: string; sale_quantity: number }> }>('/hotel/products', { params: { ...(status ? { status } : {}), ...(limit ? { limit } : {}), ...(offset !== undefined ? { offset } : {}), ...(targetDate ? { target_date: targetDate } : {}), include_marketing_assets: includeMarketingAssets }, timeout: 30000 }),
   generateProduct: (payload: Record<string, unknown>) => api.post<{ product: TravelProduct; products: TravelProduct[]; trace_id: string; trace_ids: string[]; validation: Record<string, unknown>; fallback_used: boolean; provider: string; transport: string; agent_id: string; skill_name: string; skill_version: string }>('/hotel/products/generate', payload),
   interpretProductDraft: (natural_language: string) => api.post<{ interpreted: Record<string, unknown>; parsed_fields: Array<{ field: string; label: string; value: unknown }>; message: string }>('/hotel/products/interpret', { natural_language }),
   refineProductMarketing: (payload: { product_ids: number[]; natural_language: string; style?: 'ARTISTIC' | 'PROMOTIONAL' | 'EMPATHETIC' | 'SEEDING'; generate_image?: boolean }) => api.post<TravelProduct[]>('/hotel/products/refine-marketing', payload),
@@ -48,16 +48,17 @@ export const hotelApi = {
   updateIntent: (id: number, status: 'CONFIRMED' | 'CANCELLED') => api.patch<Record<string, unknown>>(`/hotel/intents/${id}`, { status }),
   skillLogs: () => api.get<Array<Record<string, unknown>>>('/hotel/skill-logs'),
   agentDiagnostics: () => api.get<Record<string, unknown>>('/hotel/agent-diagnostics'),
-  aiOverview: (target_date?: string) => api.get<Record<string, unknown>>('/hotel/ai/overview', { params: target_date ? { target_date } : undefined }),
-  aiConversations: () => api.get<Array<Record<string, unknown>>>('/hotel/ai/conversations'),
+  aiOverview: (params?: { section?: string; target_date?: string }) => api.get<Record<string, unknown>>('/hotel/ai/overview', { params, timeout: 8000 }),
+  aiConversations: (limit = 1) => api.get<Array<Record<string, unknown>>>('/hotel/ai/conversations', { params: { limit }, timeout: 8000 }),
   createAiConversation: (title = '酒店 AI 运营任务') => api.post<Record<string, unknown>>('/hotel/ai/conversations', { title }),
   sendAiMessage: (conversationId: number, natural_language: string) => api.post<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}/messages`, { natural_language }),
+  analyzeOperationsQuestion: (conversationId: number, query: string) => api.post<Record<string, any>>(`/hotel/ai/conversations/${conversationId}/analysis`, { query }),
   advisor: (conversationId: number, natural_language: string, auto = false) => api.post<{
     conversation: Record<string, any>
     advisor: Record<string, any>
     proposals: Array<Record<string, any>>
   }>(`/hotel/ai/conversations/${conversationId}/advisor`, { natural_language, auto }),
-  aiProposals: (status?: string) => api.get<Array<Record<string, unknown>>>('/hotel/ai/proposals', { params: status ? { status } : undefined }),
+  aiProposals: (status?: string, conversationId?: number) => api.get<Array<Record<string, unknown>>>('/hotel/ai/proposals', { params: { ...(status ? { status } : {}), ...(conversationId ? { conversation_id: conversationId } : {}), limit: 10 } }),
   confirmAiProposal: (proposalId: number, action: 'DRAFT' | 'PUBLISH') => api.post<Record<string, unknown>>(`/hotel/ai/proposals/${proposalId}/confirm`, { action }),
   clearAiConversation: (conversationId: number) => api.post<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}/clear`),
   deleteAiConversation: (conversationId: number) => api.delete<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}`),
@@ -70,8 +71,11 @@ export const hotelApi = {
     held: number
     cancelled: number
     confirmed_revenue: string
+    sold_product_count: number
+    estimated_amount_count: number
     categories: Array<{ label: string; count: number; confirmed: number; revenue: string }>
-    orders: Array<{ id: number; product_name: string; category: string; amount: string; target_date: string; status: string; contact_name: string; contact_phone: string; note: string }>
+    recent: { from_date: string; confirmed_count: number; confirmed_revenue: string; average_order_value: string | null; estimated_amount_count: number; top_crowds: Array<{ target_crowd: string; confirmed_orders: number; share: number }>; top_products: Array<{ product_id: number; product_name: string; confirmed_orders: number; revenue: string }>; orders: Array<Record<string, any>> }
+    orders: Array<{ id: number; product_id: number; product_name: string; category: string; amount: string | null; amount_is_estimate: boolean; target_date: string; created_at: string; confirmed_at: string | null; status: string; product_status: string; contact_name: string; contact_phone: string; note: string }>
   }>('/hotel/orders/overview'),
   integrationSettings: () => api.get<Record<string, any>>('/hotel/settings/integrations'),
   updateIntegrationSettings: (payload: Record<string, unknown>) => api.put<Record<string, any>>('/hotel/settings/integrations', payload),

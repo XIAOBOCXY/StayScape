@@ -9,21 +9,34 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 const items = ref<TravelProduct[]>([])
 const loading = ref(false)
+const loadingMore = ref(false)
+const pageSize = 12
+const hasMore = ref(false)
 const error = ref('')
 const form = reactive({ target_date: '', budget: '', interest: '' })
 const topics = ['博物馆', '亲子', '夜游', '美食', '旅拍', '运动']
-const resultLabel = computed(() => loading.value ? '正在查找' : `${items.value.length} 组商品`)
+const resultLabel = computed(() => loading.value ? '正在查找' : items.value.length + (hasMore.value ? '+' : '') + ' 组商品')
 const hasFilters = computed(() => Boolean(form.target_date || form.budget || form.interest))
 
-async function load() {
-  loading.value = true
-  error.value = ''
+async function load(reset = true) {
+  if (reset) { loading.value = true; error.value = '' }
+  else loadingMore.value = true
   try {
-    const response = await visitorApi.products({ target_date: form.target_date || undefined, budget: form.budget || undefined, interest: form.interest || undefined, compact: true })
-    items.value = response.data
+    const offset = reset ? 0 : items.value.length
+    const response = await visitorApi.products({
+      target_date: form.target_date || undefined,
+      budget: form.budget || undefined,
+      interest: form.interest || undefined,
+      compact: true,
+      limit: pageSize,
+      offset,
+    })
+    items.value = reset ? response.data : [...items.value, ...response.data]
+    hasMore.value = response.data.length === pageSize
   } catch (e) { error.value = errorMessage(e) }
-  finally { loading.value = false }
+  finally { if (reset) loading.value = false; else loadingMore.value = false }
 }
+function loadMore() { void load(false) }
 function clear() { form.target_date = ''; form.budget = ''; form.interest = ''; load() }
 
 onMounted(() => {
@@ -41,6 +54,7 @@ onMounted(() => {
     <el-alert v-if="error" :title="error" type="error" show-icon />
     <div v-if="loading" class="home-loading"><span /> 正在加载商品…</div>
     <div v-else-if="items.length" class="product-grid product-grid--editorial product-grid--wide"><ProductCard v-for="product in items" :key="product.id" :product="product" public-view /></div>
+    <div v-if="hasMore && !loading" class="catalog-load-more"><el-button plain :loading="loadingMore" @click="loadMore">继续加载</el-button></div>
     <div v-else class="list-empty"><h2>暂时没有匹配的商品</h2><p>换一个日期、主题或预算再试。</p><div><el-button plain @click="clear">清除筛选</el-button></div></div>
   </main>
 </template>
@@ -104,7 +118,7 @@ onMounted(() => {
 
 <style scoped>
 /* Storefront catalogue: filters read like a travel-commerce search bar. */
-.storefront-list { width: min(1280px, 100%); max-width: 1280px; margin: 0 auto; padding: 0 0 54px; background: #fff; color: #252525; }
+.catalog-load-more{display:flex;justify-content:center;padding:8px 20px 26px}.storefront-list { width: min(1280px, 100%); max-width: 1280px; margin: 0 auto; padding: 0 0 54px; background: #fff; color: #252525; }
 .storefront-list .product-list__head { align-items: flex-end; margin: 0; padding: 20px 20px 18px; border-bottom: 1px solid #eee9e4; }
 .storefront-list .product-list__head small { color: #ff6a00; font-size: 10px; letter-spacing: .12em; }
 .storefront-list .product-list__head h1 { margin: 8px 0 6px; color: #222; font-size: clamp(23px, 4vw, 32px); font-weight: 750; letter-spacing: -.7px; }

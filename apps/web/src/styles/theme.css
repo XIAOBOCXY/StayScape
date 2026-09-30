@@ -569,3 +569,25 @@ body{background:var(--canvas);font-family:var(--font-sans)}.admin-shell{backgrou
   .visitor-header { height: 56px; }
   .visitor-brand small { display: none; }
 }
+
+/* Workbench headings carry only the current page name and its controls. */
+.admin-shell .page-head { align-items: center; gap: 12px; margin-bottom: 16px; }
+.admin-shell .page-head h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -.35px; }
+.admin-shell .page-head p, .admin-shell .page-head .eyebrow { display: none !important; }
+@media(max-width:700px){.admin-shell .page-head{display:flex;flex-wrap:wrap;align-items:center}.admin-shell .page-head .header-actions{justify-content:flex-end;margin-top:0}}
+
+
+/* Compact shared toolbar for every hotel workbench page. */
+.topbar{gap:18px}
+.topbar-title{flex:0 0 auto;min-width:0;font-size:15px!important;font-weight:650!important;white-space:nowrap}
+.topbar-right{display:flex;align-items:center;justify-content:flex-end;gap:14px;min-width:0;flex:1}
+.topbar-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.topbar-actions::-webkit-scrollbar{display:none}
+.topbar-actions>.header-actions,.topbar-actions>.head-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:nowrap;margin:0;white-space:nowrap}
+.topbar-actions .el-button{margin:0;flex:0 0 auto}
+.topbar-actions .el-radio-group{flex:0 0 auto}
+.topbar-user{flex:0 0 auto;white-space:nowrap}
+.page-container{padding-top:18px}
+.admin-shell .page-head{display:none!important}
+@media(max-width:850px){.topbar{padding:0 16px;gap:10px}.topbar-right{gap:8px}.topbar-user .role-badge{display:none}.topbar-actions .el-button{padding-inline:9px}}
+@media(max-width:620px){.topbar-title{max-width:100px;overflow:hidden;text-overflow:ellipsis}.topbar-user{gap:5px}.topbar-actions{justify-content:flex-start}.topbar-right{flex:1;overflow:hidden}.topbar-actions .el-button{font-size:11px;padding-inline:7px}.page-container{padding-top:14px}}

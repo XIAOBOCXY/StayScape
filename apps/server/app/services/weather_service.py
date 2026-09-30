@@ -33,6 +33,15 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_fresh(snapshot: WeatherSnapshot, now: datetime | None = None) -> bool:
+    expires_at = snapshot.expires_at
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at > (now or _utc_now())
+
+
 def _scenario(code: int | None, precipitation_probability: int | None) -> str:
     if (precipitation_probability or 0) >= 45 or (code is not None and code >= 50):
         return "RAIN"
@@ -63,7 +72,7 @@ class WeatherService:
             "fetched_at": snapshot.fetched_at.isoformat(),
             "expires_at": snapshot.expires_at.isoformat() if snapshot.expires_at else None,
             "verification_status": snapshot.verification_status,
-            "usable": snapshot.verification_status == "ACTIVE",
+            "usable": snapshot.verification_status == "ACTIVE" and _is_fresh(snapshot),
         }
 
     @staticmethod
@@ -94,7 +103,7 @@ class WeatherService:
                 WeatherSnapshot.target_date == target_date,
             )
         )
-        if cached and not force_refresh and cached.expires_at and cached.expires_at > now:
+        if cached and not force_refresh and _is_fresh(cached, now):
             return self._serialize(cached)
 
         # Offline demo/test runs must never create a hidden external dependency.
@@ -184,3 +193,127 @@ class WeatherService:
             cached.raw_payload = {"daily": daily}
         self.db.flush()
         return self._serialize(cached)
+
+    def get_forecast_range(self, city: str, start_date: date, *, days: int = 15, force_refresh: bool = False) -> list[dict[str, Any]]:
+        """Return a date-by-date forecast window using at most one provider call."""
+
+        normalized_city = city.strip() or "杭州"
+        count = max(1, min(16, int(days)))
+        target_dates = [start_date + timedelta(days=offset) for offset in range(count)]
+        now = _utc_now()
+        cached_rows = list(
+            self.db.scalars(
+                select(WeatherSnapshot).where(
+                    WeatherSnapshot.city == normalized_city,
+                    WeatherSnapshot.target_date >= target_dates[0],
+                    WeatherSnapshot.target_date <= target_dates[-1],
+                )
+            ).all()
+        )
+        cached_by_date = {row.target_date: row for row in cached_rows}
+        fresh_dates = {
+            day for day, row in cached_by_date.items()
+            if not force_refresh and _is_fresh(row, now)
+        }
+        needs_provider = any(day not in fresh_dates for day in target_dates)
+        payload: dict[str, Any] = {}
+        coordinates = CITY_COORDINATES.get(normalized_city)
+        horizon = max(1, min(16, int(settings.weather_forecast_days)))
+
+        if needs_provider and coordinates and settings.weather_enabled and settings.weather_provider.lower() == "open_meteo" and not (settings.mode.lower() != "live" and settings.agent_provider.lower() == "mock"):
+            try:
+                response = httpx.get(
+                    OPEN_METEO_URL,
+                    params={
+                        "latitude": coordinates[0],
+                        "longitude": coordinates[1],
+                        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                        "timezone": "Asia/Shanghai",
+                        "forecast_days": horizon,
+                    },
+                    timeout=10,
+                )
+                response.raise_for_status()
+                payload = response.json().get("daily") or {}
+            except (httpx.HTTPError, ValueError, TypeError):
+                payload = {}
+
+        results: list[dict[str, Any]] = []
+        dates = list(payload.get("time") or [])
+        expires_at = now + timedelta(hours=max(1, settings.weather_cache_hours))
+        for target in target_dates:
+            cached = cached_by_date.get(target)
+            if target in fresh_dates:
+                results.append(self._serialize(cached))
+                continue
+            outside_provider = target < date.today() or target > date.today() + timedelta(days=horizon - 1)
+            if not coordinates:
+                note = "当前城市尚未配置可信天气坐标，天气信息需确认。"
+            elif outside_provider:
+                note = f"目标日期超出当前 {horizon} 天预报范围，天气信息需确认。"
+            elif not settings.weather_enabled or settings.weather_provider.lower() != "open_meteo":
+                note = "天气服务未启用，天气信息需确认。"
+            elif not payload:
+                note = "天气服务暂时未返回逐日预报，生成时保留可替换安排。"
+            else:
+                note = "该日期暂无可核验预报，天气信息需确认。"
+
+            try:
+                index = dates.index(target.isoformat())
+                code_value = (payload.get("weather_code") or [])[index]
+                weather_code = int(code_value) if code_value is not None else None
+                max_value = (payload.get("temperature_2m_max") or [])[index]
+                min_value = (payload.get("temperature_2m_min") or [])[index]
+                maximum = Decimal(str(max_value)) if max_value is not None else None
+                minimum = Decimal(str(min_value)) if min_value is not None else None
+                probability_values = payload.get("precipitation_probability_max") or []
+                probability_value = probability_values[index] if index < len(probability_values) else None
+                probability = int(probability_value) if probability_value is not None else None
+                if weather_code is None and minimum is None and maximum is None and probability is None:
+                    raise ValueError("empty daily forecast")
+            except (ValueError, IndexError, TypeError):
+                results.append(self._serialize(cached, note=note) if cached else self._unverified(normalized_city, target, note))
+                continue
+
+            scenario = _scenario(weather_code, probability)
+            scenario_label = {"RAIN": "有降雨", "SUNNY": "晴天", "CLOUDY": "多云"}[scenario]
+            temperature_text = f"{float(minimum):.0f}–{float(maximum):.0f}℃" if minimum is not None and maximum is not None else "气温待核验"
+            rain_text = f"，降雨概率 {probability}%" if probability is not None else ""
+            packing = {"RAIN": "优先安排室内项目。", "SUNNY": "适合户外安排，注意防晒和补水。", "CLOUDY": "可结合路线安排室内外项目。"}[scenario]
+            advisory = f"{scenario_label}，{temperature_text}{rain_text}。{packing}"
+            if cached is None:
+                cached = WeatherSnapshot(
+                    city=normalized_city,
+                    target_date=target,
+                    scenario=scenario,
+                    temperature_min=minimum,
+                    temperature_max=maximum,
+                    precipitation_probability=probability,
+                    weather_code=weather_code,
+                    advisory=advisory,
+                    source_name="Open-Meteo Forecast API",
+                    source_url=OPEN_METEO_URL,
+                    fetched_at=now,
+                    expires_at=expires_at,
+                    verification_status="ACTIVE",
+                    raw_payload={"daily": payload},
+                )
+                self.db.add(cached)
+                cached_by_date[target] = cached
+            else:
+                cached.scenario = scenario
+                cached.temperature_min = minimum
+                cached.temperature_max = maximum
+                cached.precipitation_probability = probability
+                cached.weather_code = weather_code
+                cached.advisory = advisory
+                cached.source_name = "Open-Meteo Forecast API"
+                cached.source_url = OPEN_METEO_URL
+                cached.fetched_at = now
+                cached.expires_at = expires_at
+                cached.verification_status = "ACTIVE"
+                cached.raw_payload = {"daily": payload}
+            results.append(self._serialize(cached))
+
+        self.db.flush()
+        return results

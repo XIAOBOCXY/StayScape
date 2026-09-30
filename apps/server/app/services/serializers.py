@@ -1,13 +1,64 @@
 from typing import Any
 
-from ..models import HotelService, PartnerResource, ProductResource, RoomInventory, TravelProduct
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+
+from ..models import HotelService, Merchant, PartnerResource, ProductResource, RoomInventory, TravelProduct
 
 
 def decimal_text(value) -> str:
     return str(value or 0)
 
 
-def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False) -> dict[str, Any]:
+def populate_product_resource_cache(db, resource_cache: dict, products: list[TravelProduct]) -> dict:
+    """Batch-load only source resources referenced by a response."""
+    hotel_ids = {int(product.hotel_id) for product in products if product.hotel_id is not None}
+    for hotel_id in hotel_ids:
+        resource_cache[("__hotel_resources__", hotel_id)] = True
+
+    ids = {"PARTNER_RESOURCE": set(), "HOTEL_SERVICE": set(), "ROOM": set()}
+    for product in products:
+        for row in product.resources or []:
+            kind = str(row.resource_type)
+            key = (kind, int(row.resource_id))
+            if kind in ids and key not in resource_cache:
+                ids[kind].add(int(row.resource_id))
+        room = getattr(product, "room_inventory", None)
+        if room is not None:
+            resource_cache[("ROOM", int(room.id))] = room
+
+    if ids["PARTNER_RESOURCE"] and hotel_ids:
+        rows = db.scalars(
+            select(PartnerResource)
+            .options(joinedload(PartnerResource.merchant))
+            .join(Merchant, Merchant.id == PartnerResource.merchant_id)
+            .where(Merchant.hotel_id.in_(hotel_ids), PartnerResource.id.in_(ids["PARTNER_RESOURCE"]))
+        ).all()
+        resource_cache.update({("PARTNER_RESOURCE", int(row.id)): row for row in rows})
+
+    if ids["HOTEL_SERVICE"] and hotel_ids:
+        rows = db.scalars(
+            select(HotelService).where(HotelService.hotel_id.in_(hotel_ids), HotelService.id.in_(ids["HOTEL_SERVICE"]))
+        ).all()
+        resource_cache.update({("HOTEL_SERVICE", int(row.id)): row for row in rows})
+
+    if ids["ROOM"] and hotel_ids:
+        rows = db.scalars(
+            select(RoomInventory).where(RoomInventory.hotel_id.in_(hotel_ids), RoomInventory.id.in_(ids["ROOM"]))
+        ).all()
+        resource_cache.update({("ROOM", int(row.id)): row for row in rows})
+    return resource_cache
+
+
+def build_product_resource_cache(db, products: list[TravelProduct]) -> dict:
+    return populate_product_resource_cache(db, {}, products)
+
+
+def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False, resource_cache: dict | None = None, include_marketing_assets: bool = True) -> dict[str, Any]:
+    # A standalone product still resolves each referenced source once. List endpoints
+    # pass a shared, targeted resource cache so multiple products reuse the same index.
+    if resource_cache is None:
+        resource_cache = {}
     data = {
         "id": product.id,
         "hotel_id": product.hotel_id,
@@ -34,7 +85,7 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
         "bottleneck_resource": product.bottleneck_resource,
         "marketing_title": product.marketing_title,
         "marketing_content": product.marketing_content,
-        "marketing_assets": product.marketing_assets or [],
+        "marketing_assets": (product.marketing_assets or []) if include_marketing_assets else [],
         "recommendation_reason": product.recommendation_reason,
         "risk_message": product.risk_message,
         "status": product.status,
@@ -50,16 +101,16 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
                 "unit_cost": item.unit_cost,
                 "replaceable": item.replaceable,
                 "required": item.required,
-                "available_date": _resource_date(item),
-                "start_time": _resource_start(item),
-                "end_time": _resource_end(item),
-                "address": _resource_address(item),
-                "description": _resource_description(item),
-                "booking_notice": str(getattr(_resource_object(item), "booking_notice", "") or ""),
-                "cancellation_rule": str(getattr(_resource_object(item), "cancellation_rule", "") or ""),
-                "image_url": _resource_image_url(item),
-                "image_source": _resource_image_source(item),
-                "image_attribution": _resource_image_attribution(item),
+                "available_date": _resource_date(item, resource_cache),
+                "start_time": _resource_start(item, resource_cache),
+                "end_time": _resource_end(item, resource_cache),
+                "address": _resource_address(item, resource_cache),
+                "description": _resource_description(item, resource_cache),
+                "booking_notice": str(getattr(_resource_object(item, resource_cache), "booking_notice", "") or ""),
+                "cancellation_rule": str(getattr(_resource_object(item, resource_cache), "cancellation_rule", "") or ""),
+                "image_url": _resource_image_url(item, resource_cache),
+                "image_source": _resource_image_source(item, resource_cache),
+                "image_attribution": _resource_image_attribution(item, resource_cache),
             }
             for item in product.resources
         ],
@@ -85,9 +136,30 @@ def product_to_dict(product: TravelProduct, *, include_adjustments: bool = False
     return data
 
 
-def _resource_object(item: ProductResource):
+def _resource_object(item: ProductResource, resource_cache: dict | None = None):
     """Resolve the source object through the product's loaded relationship graph when available."""
     product = item.product
+    key = (str(item.resource_type), int(item.resource_id))
+    if resource_cache is not None:
+        if key in resource_cache:
+            return resource_cache[key]
+        if item.resource_type == "ROOM" and product and product.room_inventory and product.room_inventory.id == item.resource_id:
+            resource_cache[key] = product.room_inventory
+            return product.room_inventory
+        hotel = product.hotel if product else None
+        if hotel:
+            marker = ("__hotel_resources__", int(hotel.id))
+            if marker not in resource_cache:
+                resource_cache[marker] = True
+                for service in getattr(hotel, "services", []) or []:
+                    resource_cache[("HOTEL_SERVICE", int(service.id))] = service
+                for merchant in getattr(hotel, "merchants", []) or []:
+                    for resource in getattr(merchant, "resources", []) or []:
+                        resource_cache[("PARTNER_RESOURCE", int(resource.id))] = resource
+            resource_cache[key] = resource_cache.get(key)
+            return resource_cache[key]
+        resource_cache[key] = None
+        return None
     if item.resource_type == "ROOM" and product and product.room_inventory and product.room_inventory.id == item.resource_id:
         return product.room_inventory
     if product:
@@ -105,23 +177,23 @@ def _resource_object(item: ProductResource):
     return None
 
 
-def _resource_date(item: ProductResource):
-    source = _resource_object(item)
+def _resource_date(item: ProductResource, resource_cache: dict | None = None):
+    source = _resource_object(item, resource_cache)
     return getattr(source, "available_date", None)
 
 
-def _resource_start(item: ProductResource):
-    source = _resource_object(item)
+def _resource_start(item: ProductResource, resource_cache: dict | None = None):
+    source = _resource_object(item, resource_cache)
     return getattr(source, "start_time", None)
 
 
-def _resource_end(item: ProductResource):
-    source = _resource_object(item)
+def _resource_end(item: ProductResource, resource_cache: dict | None = None):
+    source = _resource_object(item, resource_cache)
     return getattr(source, "end_time", None)
 
 
-def _resource_address(item: ProductResource):
-    source = _resource_object(item)
+def _resource_address(item: ProductResource, resource_cache: dict | None = None):
+    source = _resource_object(item, resource_cache)
     address = str(getattr(source, "address", "") or "").strip()
     if address:
         return address
@@ -138,21 +210,21 @@ def _resource_address(item: ProductResource):
     return str(getattr(hotel, "address", "") or "").strip() or None
 
 
-def _resource_description(item: ProductResource):
-    source = _resource_object(item)
+def _resource_description(item: ProductResource, resource_cache: dict | None = None):
+    source = _resource_object(item, resource_cache)
     return getattr(source, "description", None)
 
 
-def _resource_image_url(item: ProductResource) -> str:
-    return str(getattr(_resource_object(item), "image_url", "") or "")
+def _resource_image_url(item: ProductResource, resource_cache: dict | None = None) -> str:
+    return str(getattr(_resource_object(item, resource_cache), "image_url", "") or "")
 
 
-def _resource_image_source(item: ProductResource) -> str:
-    return str(getattr(_resource_object(item), "image_source", "") or "")
+def _resource_image_source(item: ProductResource, resource_cache: dict | None = None) -> str:
+    return str(getattr(_resource_object(item, resource_cache), "image_source", "") or "")
 
 
-def _resource_image_attribution(item: ProductResource) -> str:
-    return str(getattr(_resource_object(item), "image_attribution", "") or "")
+def _resource_image_attribution(item: ProductResource, resource_cache: dict | None = None) -> str:
+    return str(getattr(_resource_object(item, resource_cache), "image_attribution", "") or "")
 
 
 def partner_resource_to_dict(resource: PartnerResource, referenced_product_count: int = 0) -> dict[str, Any]:

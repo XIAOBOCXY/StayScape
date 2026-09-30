@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ...agent import AgentOrchestrator
@@ -14,7 +14,7 @@ from ...config import settings
 from ...core.exceptions import AppError
 from ...db import get_db
 from ...models import HotelService, PartnerResource, ProductAdjustmentRecord, ProductResource, PublicResource, ResourceChangeEvent, RoomInventory, TravelProduct, VisitorIntent
-from ...repositories.product_repository import get_product, list_products
+from ...repositories.product_repository import get_product, list_products, list_public_products_for_serialization
 from ...schemas.products import ProductRead
 from ...schemas.visitor import VisitorIntentCancelRequest, VisitorIntentCreate, VisitorInterpretRequest, VisitorInterpretResponse, VisitorProductQuery, VisitorQuestion, VisitorRecommendRequest
 from ...services.inventory_service import reconcile_published_capacity, release_intent_inventory, reserve_product_inventory, sweep_expired_intents
@@ -22,6 +22,7 @@ from ...services.media_library_service import MediaLibraryService
 from ...services.knowledge_service import KnowledgeService
 from ...services.weather_service import WeatherService
 from ...services.public_copy import public_travel_copy, visitor_product_to_dict
+from ...services.serializers import build_product_resource_cache, populate_product_resource_cache
 from ...rules.availability_rule import tokens
 from ...rules.crowd_rule import crowd_supported
 from ...rules.time_rule import intervals_overlap
@@ -324,12 +325,21 @@ def public_items(
     *,
     limit: int = 30,
     offset: int = 0,
+    compact: bool = False,
 ) -> list[TravelProduct]:
     # The unfiltered landing page is paged in SQL.  Filtered/interest searches
     # still load the bounded public set so ranking is correct, then page the
     # ranked result below instead of applying a limit before matching.
     needs_matching = bool(query and (query.target_date or query.budget or query.target_crowd or query.interest))
-    source = list_products(db, public_only=True) if needs_matching else list_products(db, public_only=True, limit=limit, offset=offset)
+    loader = list_public_products_for_serialization if compact else None
+    if loader is not None:
+        source = loader(db) if needs_matching else loader(db, limit=limit, offset=offset)
+    else:
+        source = (
+            list_products(db, public_only=True)
+            if needs_matching
+            else list_products(db, public_only=True, limit=limit, offset=offset)
+        )
     products = [item for item in source if is_publicly_sellable(item)]
     if query and query.target_date:
         products = [item for item in products if item.target_date == query.target_date]
@@ -385,11 +395,69 @@ def product_partner_rows(db: Session, product: TravelProduct) -> list[tuple[Prod
     return result
 
 
-def _room_pool(db: Session, product: TravelProduct) -> tuple[str, date] | None:
-    room = db.get(RoomInventory, product.room_inventory_id)
-    if room is None:
+def _room_pool(db: Session, product: TravelProduct) -> tuple[int, str, date] | None:
+    room = getattr(product, "room_inventory", None) or db.get(RoomInventory, product.room_inventory_id)
+    if room is None or product.target_date is None:
         return None
-    return str(room.room_type), product.target_date
+    return int(product.hotel_id), str(room.room_type), product.target_date
+
+
+def populate_room_pool_cache(db: Session, cache: dict, products: list[TravelProduct]) -> dict:
+    """Resolve room and held-order availability for a page in two grouped reads."""
+    keys = {key for item in products if (key := _room_pool(db, item)) is not None and key not in cache}
+    if not keys:
+        return cache
+
+    predicates = [
+        and_(
+            RoomInventory.hotel_id == hotel_id,
+            RoomInventory.room_type == room_type,
+            RoomInventory.available_date == target_date,
+        )
+        for hotel_id, room_type, target_date in keys
+    ]
+    pools = {
+        (int(hotel_id), str(room_type), target_date): int(quantity or 0)
+        for hotel_id, room_type, target_date, quantity in db.execute(
+            select(
+                RoomInventory.hotel_id,
+                RoomInventory.room_type,
+                RoomInventory.available_date,
+                func.max(RoomInventory.available_count),
+            )
+            .where(or_(*predicates))
+            .group_by(RoomInventory.hotel_id, RoomInventory.room_type, RoomInventory.available_date)
+        )
+    }
+    committed = {
+        (int(hotel_id), str(room_type), target_date): int(quantity or 0)
+        for hotel_id, room_type, target_date, quantity in db.execute(
+            select(
+                RoomInventory.hotel_id,
+                RoomInventory.room_type,
+                TravelProduct.target_date,
+                func.count(VisitorIntent.id),
+            )
+            .select_from(VisitorIntent)
+            .join(TravelProduct, VisitorIntent.product_id == TravelProduct.id)
+            .join(RoomInventory, RoomInventory.id == TravelProduct.room_inventory_id)
+            .where(
+                VisitorIntent.reservation_status.in_(("CONFIRMED", "HELD")),
+                or_(*[
+                    and_(
+                        RoomInventory.hotel_id == hotel_id,
+                        RoomInventory.room_type == room_type,
+                        TravelProduct.target_date == target_date,
+                    )
+                    for hotel_id, room_type, target_date in keys
+                ]),
+            )
+            .group_by(RoomInventory.hotel_id, RoomInventory.room_type, TravelProduct.target_date)
+        )
+    }
+    for key in keys:
+        cache[key] = max(0, pools.get(key, 0) - committed.get(key, 0))
+    return cache
 
 
 def shared_room_remaining(db: Session, product: TravelProduct, cache: dict | None = None) -> int:
@@ -405,10 +473,10 @@ def shared_room_remaining(db: Session, product: TravelProduct, cache: dict | Non
         return max(0, int(product.sale_quantity or 0))
     if cache is not None and pool_key in cache:
         return cache[pool_key]
-    room_type, target_date = pool_key
+    hotel_id, room_type, target_date = pool_key
     pool = db.scalar(
         select(func.max(RoomInventory.available_count)).where(
-            RoomInventory.hotel_id == product.hotel_id,
+            RoomInventory.hotel_id == hotel_id,
             RoomInventory.room_type == room_type,
             RoomInventory.available_date == target_date,
         )
@@ -419,7 +487,7 @@ def shared_room_remaining(db: Session, product: TravelProduct, cache: dict | Non
         .join(TravelProduct, VisitorIntent.product_id == TravelProduct.id)
         .join(RoomInventory, RoomInventory.id == TravelProduct.room_inventory_id)
         .where(
-            RoomInventory.hotel_id == product.hotel_id,
+            RoomInventory.hotel_id == hotel_id,
             RoomInventory.room_type == room_type,
             TravelProduct.target_date == target_date,
             VisitorIntent.reservation_status.in_(("CONFIRMED", "HELD")),
@@ -431,10 +499,27 @@ def shared_room_remaining(db: Session, product: TravelProduct, cache: dict | Non
     return remaining
 
 
-def visitor_payload(db: Session, product: TravelProduct, *, nights: int = 1, cache: dict | None = None) -> dict[str, Any]:
-    """Serialise a product with the shared room availability applied."""
+def visitor_payload(
+    db: Session,
+    product: TravelProduct,
+    *,
+    nights: int = 1,
+    cache: dict | None = None,
+    include_marketing_assets: bool = True,
+    compact: bool = False,
+) -> dict[str, Any]:
+    """Serialise a product with shared room and source-resource caches."""
 
-    data = visitor_product_to_dict(product, nights=nights)
+    cache = cache if cache is not None else {}
+    populate_product_resource_cache(db, cache, [product])
+    populate_room_pool_cache(db, cache, [product])
+    data = visitor_product_to_dict(
+        product,
+        nights=nights,
+        resource_cache=cache,
+        include_marketing_assets=include_marketing_assets,
+        compact=compact,
+    )
     # Two constraints apply: the product's own listed quota and the room type's
     # shared pool.  The smaller one is what a visitor can actually buy.
     listed = max(0, int(product.listed_quantity or 0))
@@ -816,9 +901,16 @@ def products(
 ):
     if sweep_expired_intents(db):
         db.commit()
-    cache: dict = {}
-    all_items = public_items(db, query, limit=limit, offset=offset)
-    items = [visitor_payload(db, item, nights=nights, cache=cache) for item in all_items]
+    all_items = public_items(db, query, limit=limit, offset=offset, compact=compact)
+    cache: dict = build_product_resource_cache(db, all_items)
+    populate_room_pool_cache(db, cache, all_items)
+    items = [
+        visitor_payload(
+            db, item, nights=nights, cache=cache,
+            include_marketing_assets=not compact, compact=compact,
+        )
+        for item in all_items
+    ]
     return [compact_product_payload(item) for item in items] if compact else items
 
 

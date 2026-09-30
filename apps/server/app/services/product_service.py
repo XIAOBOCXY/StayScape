@@ -266,6 +266,22 @@ class ProductService:
         services = list(self.db.scalars(select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.available_date == request.target_date)).all())
         partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date)).unique().all())
         allowed_ids = {(str(item["resource_type"]), int(item["resource_id"])) for item in selections}
+        # Keep the full multi-day evidence in the operations UI, but only send
+        # evidence usable by this specific product date to the generation skill.
+        # Cross-date resource rows add prompt size without changing this package.
+        raw_insights = self.intelligence_context.get("insights")
+        if isinstance(raw_insights, dict):
+            operations_insights = dict(raw_insights)
+            target_date = request.target_date.isoformat()
+            for key in ("resource_evidence", "service_evidence"):
+                rows = operations_insights.get(key)
+                if isinstance(rows, list):
+                    operations_insights[key] = [
+                        row for row in rows
+                        if isinstance(row, dict) and str(row.get("available_date") or "") == target_date
+                    ]
+        else:
+            operations_insights = raw_insights
         return {
             "hotel_id": self.hotel_id,
             "target_date": request.target_date.isoformat(),
@@ -285,7 +301,7 @@ class ProductService:
             # These facts are advisory context only. IDs, capacities, prices and
             # constraints remain selected and checked below in FastAPI.
             "weather_forecast": self.intelligence_context.get("weather"),
-            "operations_insights": self.intelligence_context.get("insights"),
+            "operations_insights": operations_insights,
             "travel_knowledge": self.intelligence_context.get("knowledge", []),
         }
 

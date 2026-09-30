@@ -78,10 +78,7 @@ onMounted(load)
 
 <template>
   <div class="operations-page">
-    <header class="operations-hero">
-      <div><h1>动态运营</h1></div>
-      <div class="operations-live"><i /> 自动同步<small>资源变动</small></div>
-    </header>
+    <div v-toolbar class="operations-live"><i /> 自动同步<small>资源变动</small></div>
     <div v-if="error" class="operations-error"><strong>暂时无法读取动态</strong><span>{{ error }}</span><el-button plain size="small" @click="load">重试</el-button></div>
     <section class="operations-stats">
       <div><span>最近变化</span><strong>{{ feed.length }}</strong><small>来自房间、服务与体验</small></div>

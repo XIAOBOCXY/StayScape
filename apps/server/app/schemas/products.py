@@ -327,9 +327,15 @@ class ProductGenerateResponse(BaseModel):
     skill_version: str = ""
 
 
+class ProductDateSummary(BaseModel):
+    target_date: date
+    sale_quantity: int
+
+
 class ProductListResponse(BaseModel):
     items: list[ProductRead]
     total: int
+    dates: list[ProductDateSummary] = Field(default_factory=list)
 
 
 class ProductUpdateRequest(BaseModel):

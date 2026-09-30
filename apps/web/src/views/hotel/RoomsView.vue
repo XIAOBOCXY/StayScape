@@ -47,7 +47,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="page-head"><div><div class="eyebrow">客房库存</div><h1>临期客房</h1><p>按日期查看待售房型；点击卡片可调整房量与价格。</p></div><div class="header-actions"><el-radio-group v-model="viewMode" class="view-mode-switch" size="small" aria-label="客房展示方式"><el-radio-button label="cards">卡片</el-radio-button><el-radio-button label="list">列表</el-radio-button></el-radio-group><el-button plain @click="load">刷新</el-button><el-button type="primary" @click="openCreate">新增客房</el-button></div></div>
+  <div v-toolbar class="header-actions"><el-radio-group v-model="viewMode" class="view-mode-switch" size="small" aria-label="客房展示方式"><el-radio-button label="cards">卡片</el-radio-button><el-radio-button label="list">列表</el-radio-button></el-radio-group><el-button plain @click="load">刷新</el-button><el-button type="primary" @click="openCreate">新增客房</el-button></div>
   <div class="inventory-toolbar panel"><DateHeatmap v-model="selectedDate" :items="items" quantity-key="available_count" label="入住日期" /></div>
   <div v-if="viewMode === 'cards'" v-loading="loading" class="inventory-grid">
     <button v-for="row in visibleItems" :key="row.id" class="inventory-card" @click="open(row)"><MediaImage :media="roomMedia(row)" aspect="card" /><div class="inventory-card__body"><div class="row-top"><span>{{ row.available_date }}</span><StatusTag :status="row.status" /></div><h2>{{ row.room_type }}</h2><p>{{ row.features || '可在编辑中补充房型亮点' }}</p><div class="room-facts"><span><b>{{ row.available_count }}</b> 间可售</span><span>最多 {{ row.max_guests }} 人</span></div><div class="price-line"><strong>¥{{ row.minimum_price }}</strong><small>最低可售价 · 常规 ¥{{ row.normal_price }}</small></div></div></button>

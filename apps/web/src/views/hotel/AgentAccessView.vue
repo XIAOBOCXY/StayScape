@@ -53,7 +53,6 @@ onMounted(load)
 
 <template>
   <div class="agent-page" v-loading="loading">
-    <div class="page-head"><div><h1>Agent 接入</h1><p>为 ClawHive 或其他 Agent 生成产品查询与候选生成 Token。</p></div></div>
     <section class="panel intro">
       <strong>受控接入权限</strong>
       <span>Token 可以读取当前酒店已发布产品、生成待人工确认候选；不允许发布产品、修改库存、价格或订单。</span>

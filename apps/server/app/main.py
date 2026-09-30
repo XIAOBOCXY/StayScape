@@ -1,10 +1,14 @@
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+import asyncio
 from pathlib import Path
+from time import perf_counter
+import logging
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 import httpx
@@ -18,6 +22,9 @@ from .db import SessionLocal, engine
 from .models import Base, User
 from .seed import seed_demo
 from .api.deps import resolve_hotel_id
+from .services.inventory_service import expire_past_products, sweep_expired_intents
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -29,7 +36,30 @@ async def lifespan(app: FastAPI):
             seed_demo(db, include_showcase=True)
         finally:
             db.close()
-    yield
+    def expire_products() -> None:
+        db = SessionLocal()
+        try:
+            expire_past_products(db)
+            if sweep_expired_intents(db):
+                db.commit()
+        finally:
+            db.close()
+
+    async def expire_loop() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(expire_products)
+            except Exception:
+                logger.exception("Failed to expire past products")
+            await asyncio.sleep(60)
+
+    expiry_task = asyncio.create_task(expire_loop())
+    try:
+        yield
+    finally:
+        expiry_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await expiry_task
 
 
 def create_app() -> FastAPI:
@@ -37,6 +67,22 @@ def create_app() -> FastAPI:
     Path(settings.generated_media_dir).mkdir(parents=True, exist_ok=True)
     application.mount(settings.generated_media_url_path, StaticFiles(directory=settings.generated_media_dir), name="generated-media")
     application.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+    application.add_middleware(GZipMiddleware, minimum_size=1000)
+
+    @application.middleware("http")
+    async def log_slow_dashboard(request: Request, call_next):
+        if request.url.path != "/api/v1/hotel/dashboard":
+            return await call_next(request)
+        started = perf_counter()
+        status = 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            return response
+        finally:
+            elapsed_ms = (perf_counter() - started) * 1000
+            if elapsed_ms >= 1000:
+                logger.warning("Slow hotel dashboard: %.0f ms, status=%s", elapsed_ms, status)
 
     @application.exception_handler(AppError)
     async def app_error_handler(_: Request, exc: AppError):

@@ -22,6 +22,10 @@ class AssistantMessageCreate(BaseModel):
     natural_language: str = Field(min_length=2, max_length=1200)
 
 
+class OperationsQueryRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=1200)
+
+
 class ProposalConfirmRequest(BaseModel):
     action: Literal["DRAFT", "PUBLISH"]
 
@@ -88,7 +92,10 @@ class OrderOverviewResponse(BaseModel):
     held: int
     cancelled: int
     confirmed_revenue: str
+    sold_product_count: int = 0
+    estimated_amount_count: int = 0
     categories: list[dict[str, Any]] = Field(default_factory=list)
+    recent: dict[str, Any] = Field(default_factory=dict)
     orders: list[dict[str, Any]] = Field(default_factory=list)
 
 

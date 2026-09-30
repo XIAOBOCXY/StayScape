@@ -260,8 +260,15 @@ class ProductProposalService:
             raise AppError("NOT_FOUND", "待确认产品不存在", status_code=404)
         return item
 
-    def list_proposals(self, *, status: str | None = None) -> list[ProductProposal]:
+    def list_proposals(
+        self,
+        *,
+        status: str | None = None,
+        conversation_id: int | None = None,
+    ) -> list[ProductProposal]:
         query = select(ProductProposal).where(ProductProposal.hotel_id == self.hotel_id).order_by(ProductProposal.created_at.desc())
         if status:
             query = query.where(ProductProposal.status == status)
+        if conversation_id is not None:
+            query = query.where(ProductProposal.conversation_id == conversation_id)
         return list(self.db.scalars(query).all())

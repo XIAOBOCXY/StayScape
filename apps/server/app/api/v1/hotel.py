@@ -1,24 +1,24 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import Date, case, cast, func, or_, select
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ...core.exceptions import AppError
 from ...core.security import create_websocket_ticket
 from ...config import settings
 from ...db import get_db
 from ...models import AgentApiToken, AgentConversation, Hotel, HotelService, Merchant, PartnerResource, ProductProposal, ProductResource, ResourceChangeEvent, RoomInventory, SkillCallLog, TravelProduct, User, VisitorIntent
-from ...repositories.product_repository import get_product, list_products
+from ...repositories.product_repository import get_product, get_products_for_serialization, list_products, list_products_for_serialization
 from ...repositories.resource_repository import list_partner_resources, list_rooms, list_services
 from ...schemas.dashboard import DashboardResponse
 from ...schemas.products import AdjustmentRead, BatchMarketingRefinementRequest, CopyRewriteRequest, GenerateProductRequest, MarketingRegenerationRequest, ProductBatchApplyRequest, ProductDetailResponse, ProductDraftInterpretRequest, ProductDraftInterpretResponse, ProductGenerateResponse, ProductListResponse, ProductRead, ProductRefineRequest, ProductRefineResponse, ProductStatusRequest, ProductUpdateRequest, ResourceChangeResponse
 from ...schemas.ai_operations import AssistantConversationCreate, AssistantMessageCreate, AgentConversationRead, AssistantTaskResponse, ProductProposalRead, ProposalConfirmRequest
-from ...schemas.ai_operations import OrderOverviewResponse, SalesCommandRequest, SalesCommandResponse
+from ...schemas.ai_operations import OrderOverviewResponse, SalesCommandRequest, SalesCommandResponse, OperationsQueryRequest
 from ...schemas.visitor import VisitorIntentStatusUpdate
 from ...schemas.resources import MediaImportRequest, MediaSearchRequest, MerchantRead, PackageToggleRequest, PartnerResourceCreate, PartnerResourceRead, PartnerResourceUpdate, ResourceAddressUpdate, ResourceMediaUpdate, RoomCreate, RoomRead, RoomUpdate, ServiceCreate, ServiceRead, ServiceUpdate
 from ...services.product_service import ProductService
@@ -33,7 +33,7 @@ from ...services.operations_insight_service import OperationsInsightService
 from ...services.knowledge_service import KnowledgeService
 from ...services.weather_service import WeatherService
 from ...services.inventory_service import release_intent_inventory, reconcile_published_capacity, sweep_expired_intents
-from ...services.serializers import partner_resource_to_dict, product_to_dict
+from ...services.serializers import build_product_resource_cache, partner_resource_to_dict, product_to_dict
 from ...services.public_copy import visitor_product_to_dict
 from ...services.media_library_service import MAX_MEDIA_BYTES, MediaLibraryService
 from ...services.agent_token_service import create_token, list_tokens, revoke_token
@@ -117,9 +117,17 @@ def hotel_id_for(db: Session, user: User) -> int:
     return resolve_hotel_id(db, user)
 
 
-def proposal_to_dict(db: Session, proposal: ProductProposal) -> dict:
+def proposal_to_dict(
+    db: Session,
+    proposal: ProductProposal,
+    *,
+    product: TravelProduct | None = None,
+    resource_cache: dict | None = None,
+    include_marketing_assets: bool = True,
+) -> dict:
     """Serialize only auditable task state, never an Agent reasoning trace."""
-    product = get_product(db, proposal.product_id)
+    if product is None:
+        product = get_product(db, proposal.product_id)
     return {
         "id": proposal.id,
         "hotel_id": proposal.hotel_id,
@@ -137,8 +145,13 @@ def proposal_to_dict(db: Session, proposal: ProductProposal) -> dict:
         "confirmed_at": proposal.confirmed_at,
         "created_at": proposal.created_at,
         "updated_at": proposal.updated_at,
-        "product": product_to_dict(product) if product else None,
+        "product": product_to_dict(product, resource_cache=resource_cache, include_marketing_assets=include_marketing_assets) if product else None,
     }
+
+
+def _product_resource_cache(db: Session, hotel_id: int, products: list[TravelProduct]) -> dict:
+    # Shared implementation also serves the visitor product serializer.
+    return build_product_resource_cache(db, products)
 
 
 def _hotel_conversation_or_404(db: Session, hotel_id: int, conversation_id: int) -> AgentConversation:
@@ -159,9 +172,18 @@ def create_ai_conversation(request: AssistantConversationCreate, db: Session = D
 
 
 @router.get("/ai/conversations", response_model=list[AgentConversationRead])
-def ai_conversations(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+def ai_conversations(
+    limit: int = Query(default=1, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
     hotel_id = hotel_id_for(db, user)
-    return list(db.scalars(select(AgentConversation).where(AgentConversation.hotel_id == hotel_id).order_by(AgentConversation.updated_at.desc()).limit(30)).all())
+    return list(db.scalars(
+        select(AgentConversation)
+        .where(AgentConversation.hotel_id == hotel_id)
+        .order_by(AgentConversation.updated_at.desc())
+        .limit(limit)
+    ).all())
 
 
 @router.get("/ai/conversations/{conversation_id}", response_model=AgentConversationRead)
@@ -177,14 +199,50 @@ def ai_conversation_message(conversation_id: int, request: AssistantMessageCreat
     proposals = ProductProposalService(db, hotel_id, context).create_from_language(request.natural_language, conversation=conversation)
     db.commit()
     db.refresh(conversation)
-    return {"conversation": conversation, "proposals": [proposal_to_dict(db, item) for item in proposals], "message": "已生成待确认候选；确认后才会进入草稿或对游客发布。"}
+    products = get_products_for_serialization(db, [item.product_id for item in proposals], hotel_id)
+    products_by_id = {item.id: item for item in products}
+    resource_cache = _product_resource_cache(db, hotel_id, products)
+    return {
+        "conversation": conversation,
+        "proposals": [
+            proposal_to_dict(
+                db,
+                item,
+                product=products_by_id.get(item.product_id),
+                resource_cache=resource_cache,
+                include_marketing_assets=True,
+            )
+            for item in proposals
+        ],
+        "message": "已生成待确认候选；确认后才会进入草稿或对游客发布。",
+    }
 
 
 @router.get("/ai/proposals", response_model=list[ProductProposalRead])
-def ai_proposals(status: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+def ai_proposals(
+    status: str | None = None,
+    conversation_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
     hotel_id = hotel_id_for(db, user)
     context = RequestContext(source_channel="WEB_HOTEL", actor_role="HOTEL_OPERATOR", hotel_id=hotel_id, user_id=user.id)
-    return [proposal_to_dict(db, item) for item in ProductProposalService(db, hotel_id, context).list_proposals(status=status)]
+    proposals = ProductProposalService(db, hotel_id, context).list_proposals(
+        status=status, conversation_id=conversation_id
+    )
+    products = get_products_for_serialization(db, [item.product_id for item in proposals], hotel_id)
+    products_by_id = {item.id: item for item in products}
+    resource_cache = _product_resource_cache(db, hotel_id, products)
+    return [
+        proposal_to_dict(
+            db,
+            item,
+            product=products_by_id.get(item.product_id),
+            resource_cache=resource_cache,
+            include_marketing_assets=True,
+        )
+        for item in proposals
+    ]
 
 
 @router.post("/ai/proposals/{proposal_id}/confirm", response_model=ProductProposalRead)
@@ -209,26 +267,168 @@ def confirm_ai_proposal(proposal_id: int, request: ProposalConfirmRequest, db: S
 
 
 @router.get("/ai/overview")
-def ai_overview(target_date: date | None = None, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
-    """One compact, review-friendly view of facts used by hotel AI tasks."""
+def ai_overview(
+    target_date: date | None = None,
+    section: str = Query(default="summary"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+):
+    """Load only the requested operating-data section."""
     hotel_id = hotel_id_for(db, user)
     selected_date = target_date or date.today()
-    proposals = list(db.scalars(select(ProductProposal).where(ProductProposal.hotel_id == hotel_id, ProductProposal.status == "PENDING_CONFIRMATION")).all())
+
+    if section == "summary":
+        day_start = datetime.combine(selected_date, time.min, tzinfo=timezone.utc)
+        day_end = day_start + timedelta(days=1)
+        pending_count, pending_today = db.execute(
+            select(
+                func.count(ProductProposal.id),
+                func.count(ProductProposal.id).filter(
+                    ProductProposal.created_at >= day_start,
+                    ProductProposal.created_at < day_end,
+                ),
+            ).where(
+                ProductProposal.hotel_id == hotel_id,
+                ProductProposal.status == "PENDING_CONFIRMATION",
+            )
+        ).one()
+        return {
+            "inventory_pressure": OperationsInsightService(db, hotel_id).room_night_pressure(window_days=17),
+            "pending_confirmation_count": int(pending_count or 0),
+            "pending_today_count": int(pending_today or 0),
+        }
+
+    if section == "resources":
+        evidence_end = selected_date + timedelta(days=15)
+        start_at = datetime.combine(date.today() - timedelta(days=14), time.min, tzinfo=timezone.utc)
+        resources = list(db.scalars(
+            select(PartnerResource)
+            .join(Merchant)
+            .options(joinedload(PartnerResource.merchant))
+            .where(
+                Merchant.hotel_id == hotel_id,
+                PartnerResource.available_date >= selected_date,
+                PartnerResource.available_date < evidence_end,
+                PartnerResource.package_enabled.is_(True),
+                PartnerResource.remaining_capacity > 0,
+                PartnerResource.status == "AVAILABLE",
+            )
+            .order_by(PartnerResource.available_date, PartnerResource.resource_name)
+        ).all())
+        services = list(db.scalars(
+            select(HotelService).where(
+                HotelService.hotel_id == hotel_id,
+                HotelService.available_date >= selected_date,
+                HotelService.available_date < evidence_end,
+                HotelService.available_quantity > 0,
+                HotelService.status == "AVAILABLE",
+            ).order_by(HotelService.available_date, HotelService.service_name)
+        ).all())
+        ids = [int(row.id) for row in resources]
+        usage = {}
+        sales = {}
+        if ids:
+            usage_rows = db.execute(
+                select(ProductResource.resource_id, func.count(func.distinct(ProductResource.product_id)))
+                .join(TravelProduct, TravelProduct.id == ProductResource.product_id)
+                .where(
+                    TravelProduct.hotel_id == hotel_id,
+                    ProductResource.resource_type == "PARTNER_RESOURCE",
+                    ProductResource.resource_id.in_(ids),
+                )
+                .group_by(ProductResource.resource_id)
+            ).all()
+            usage = {int(resource_id): int(count) for resource_id, count in usage_rows}
+            sales_rows = db.execute(
+                select(ProductResource.resource_id, func.count(func.distinct(VisitorIntent.id)))
+                .join(TravelProduct, TravelProduct.id == ProductResource.product_id)
+                .join(VisitorIntent, VisitorIntent.product_id == TravelProduct.id)
+                .where(
+                    TravelProduct.hotel_id == hotel_id,
+                    ProductResource.resource_type == "PARTNER_RESOURCE",
+                    ProductResource.resource_id.in_(ids),
+                    VisitorIntent.reservation_status == "CONFIRMED",
+                    or_(VisitorIntent.confirmed_at >= start_at, VisitorIntent.created_at >= start_at),
+                )
+                .group_by(ProductResource.resource_id)
+            ).all()
+            sales = {int(resource_id): int(count) for resource_id, count in sales_rows}
+        return {
+            "operations_insights": {
+                "resource_evidence": [{
+                    "id": row.id,
+                    "name": row.resource_name,
+                    "category": row.category,
+                    "merchant_name": row.merchant.merchant_name if row.merchant else "",
+                    "available_date": row.available_date.isoformat(),
+                    "remaining_capacity": int(row.remaining_capacity or 0),
+                    "settlement_price": str(row.settlement_price),
+                    "market_price": str(row.market_price),
+                    "suitable_crowds": row.suitable_crowds,
+                    "indoor": bool(row.indoor),
+                    "address": row.address,
+                    "product_count": usage.get(int(row.id), 0),
+                    "recent_confirmed_orders": sales.get(int(row.id), 0),
+                } for row in resources],
+                "service_evidence": [{
+                    "id": row.id,
+                    "name": row.service_name,
+                    "type": row.service_type,
+                    "available_date": row.available_date.isoformat(),
+                    "available_quantity": int(row.available_quantity or 0),
+                    "unit_cost": str(row.unit_cost),
+                    "reference_price": str(row.reference_price),
+                    "suitable_crowds": row.suitable_crowds,
+                } for row in services],
+            }
+        }
+
+    if section == "weather":
+        forecasts = WeatherService(db).get_forecast_range("杭州", selected_date, days=16)
+        db.commit()
+        selected_weather = next((item for item in forecasts if item.get("target_date") == selected_date.isoformat()), None)
+        return {"weather": selected_weather, "weather_forecasts": forecasts}
+
+    if section == "knowledge":
+        knowledge = KnowledgeService(db)
+        return {"knowledge": knowledge.search(limit=12), "knowledge_total": knowledge.total()}
+
+    if section != "full":
+        raise AppError("VALIDATION_ERROR", "未知经营数据分类", field="section")
+
+    """One compact, review-friendly view of facts used by hotel AI tasks."""
+    day_start = datetime.combine(selected_date, time.min, tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+    proposal_counts = db.execute(
+        select(
+            func.count(ProductProposal.id),
+            func.count(ProductProposal.id).filter(
+                ProductProposal.created_at >= day_start,
+                ProductProposal.created_at < day_end,
+            ),
+        ).where(
+            ProductProposal.hotel_id == hotel_id,
+            ProductProposal.status == "PENDING_CONFIRMATION",
+        )
+    ).one()
+    pending_count, pending_today = (int(proposal_counts[0] or 0), int(proposal_counts[1] or 0))
     insights = OperationsInsightService(db, hotel_id)
-    # 待确认队列里很多是历史候选，单独给出今日新增，避免顶部指标看起来过于沉重。
-    pending_today = sum(
-        1
-        for item in proposals
-        if item.created_at is not None and item.created_at.date() == selected_date
-    )
+    weather_service = WeatherService(db)
+    weather_forecasts = weather_service.get_forecast_range("杭州", selected_date, days=16)
+    # get_forecast_range writes refreshed snapshots. Persist this intentional cache
+    # from the GET endpoint; otherwise Session.close() rolls it back and every visit
+    # calls Open-Meteo again.
+    db.commit()
+    selected_weather = next((item for item in weather_forecasts if item.get("target_date") == selected_date.isoformat()), None)
     return {
-        "operations_insights": insights.snapshot(target_date=selected_date),
+        "operations_insights": insights.snapshot(target_date=selected_date, window_days=15),
         # 顶部指标覆盖演示日期范围（今天至 10 月 15 日，共 17 天）。
         "inventory_pressure": insights.room_night_pressure(window_days=17),
-        "weather": WeatherService(db).get_forecast("杭州", selected_date),
+        "weather": selected_weather or weather_service.get_forecast("杭州", selected_date),
+        "weather_forecasts": weather_forecasts,
         "knowledge": KnowledgeService(db).search(limit=12),
         "knowledge_total": KnowledgeService(db).total(),
-        "pending_confirmation_count": len(proposals),
+        "pending_confirmation_count": pending_count,
         "pending_today_count": pending_today,
         "disclosure": "执行面板只展示可审计步骤与数据来源，不展示模型内部推理。",
     }
@@ -410,10 +610,25 @@ def ai_conversation_advisor(
     state = {}
     if isinstance(conversation.last_execution, dict):
         state = dict(conversation.last_execution.get("advisor") or {})
+        analysis_turns = list(conversation.last_execution.get("operations_analysis") or [])
+        if analysis_turns:
+            focus = [str(item.get("focus") or item.get("question") or "").strip() for item in analysis_turns[-6:]]
+            focus = [item for item in focus if item]
+            if focus:
+                # Put the operator's latest, explicit plan direction first so
+                # the product parser honors it; analysis turns remain attached
+                # as context for demand and resource priorities.
+                request_message = request.natural_language + "\n经营分析关注方向：" + "；".join(focus)[:1200]
+            else:
+                request_message = request.natural_language
+        else:
+            request_message = request.natural_language
+    else:
+        request_message = request.natural_language
     previous_step = str((conversation.last_execution or {}).get("step") or "")
 
     advisor = ProductAdvisor(db, hotel_id)
-    answer = advisor.respond(request.natural_language, state)
+    answer = advisor.respond(request_message, state)
     summary_text = str(answer.get("summary") or "").strip()
     step = str(answer.get("step") or "")
     # OVERVIEW 每轮读的都是同一批经营数据，长总结会和上一轮几乎重复，不再逐轮塞进
@@ -439,10 +654,12 @@ def ai_conversation_advisor(
         plan["price"] = str(primary.get("price") or "")
         plan["visitor_budget"] = primary.get("visitor_budget")
         plan["route_note"] = str(primary.get("route_note") or "")
+    saved_analysis = list((conversation.last_execution or {}).get("operations_analysis") or [])
     conversation.last_execution = {
         "advisor": plan,
         "step": step,
         "at": datetime.now(timezone.utc).isoformat(),
+        "operations_analysis": saved_analysis[-12:],
         # 刷新页面后仍能恢复当前的经营判断与推荐方案，不必重新跑一轮。
         "answer": answer,
     }
@@ -546,10 +763,26 @@ def orders_overview(db: Session = Depends(get_db), user: User = Depends(get_hote
             .order_by(VisitorIntent.created_at.desc())
         ).unique().all()
     )
-    confirmed = [item for item in intents if item.reservation_status == "CONFIRMED"]
+    confirmed = [item for item in intents if item.reservation_status == "CONFIRMED" and item.product]
     held = [item for item in intents if item.reservation_status == "HELD"]
-    cancelled = [item for item in intents if item.reservation_status == "CANCELLED"]
-    revenue = sum((item.product.suggested_price for item in confirmed if item.product), Decimal("0"))
+    cancelled = [item for item in intents if item.reservation_status in {"CANCELLED", "RELEASED"}]
+
+    def amount_for(intent: VisitorIntent) -> tuple[Decimal, bool]:
+        snapshot = intent.recommendation_result if isinstance(intent.recommendation_result, dict) else {}
+        submitted = snapshot.get("submitted_price")
+        if submitted is not None:
+            try:
+                return Decimal(str(submitted)), False
+            except Exception:
+                pass
+        return Decimal(str(intent.product.suggested_price or 0)), True
+
+    revenue = Decimal("0")
+    estimated_amount_count = 0
+    for item in confirmed:
+        amount, estimated = amount_for(item)
+        revenue += amount
+        estimated_amount_count += int(estimated)
 
     crowd_labels = {
         "FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友出行",
@@ -557,6 +790,14 @@ def orders_overview(db: Session = Depends(get_db), user: User = Depends(get_hote
     }
     buckets: dict[str, dict[str, Any]] = {}
     order_rows: list[dict[str, Any]] = []
+    today = date.today()
+    recent_start = today - timedelta(days=14)
+    recent_confirmed: list[VisitorIntent] = []
+    recent_order_rows: list[dict[str, Any]] = []
+    crowd_counts: dict[str, int] = {}
+    product_metrics: dict[int, dict[str, Any]] = {}
+    recent_revenue = Decimal("0")
+    recent_estimated_count = 0
     for intent in intents:
         product = intent.product
         if product is None:
@@ -568,22 +809,56 @@ def orders_overview(db: Session = Depends(get_db), user: User = Depends(get_hote
         )
         bucket = buckets.setdefault(category, {"label": category, "count": 0, "confirmed": 0, "revenue": Decimal("0")})
         bucket["count"] += 1
+        amount, amount_is_estimate = amount_for(intent)
         if intent.reservation_status == "CONFIRMED":
             bucket["confirmed"] += 1
-            bucket["revenue"] += Decimal(str(product.suggested_price or 0))
-        order_rows.append(
-            {
-                "id": intent.id,
-                "product_name": product.product_name,
-                "category": category,
-                "amount": str(product.suggested_price),
-                "target_date": product.target_date.isoformat(),
-                "status": {"CONFIRMED": "已成交", "HELD": "待确认", "CANCELLED": "已取消"}.get(str(intent.reservation_status), "已处理"),
-                "contact_name": intent.contact_name,
-                "contact_phone": intent.contact_phone,
-                "note": intent.other_requirements,
-            }
-        )
+            bucket["revenue"] += amount
+        status = {"CONFIRMED": "已成交", "HELD": "预约中", "CANCELLED": "已取消", "RELEASED": "已取消"}.get(str(intent.reservation_status), "已处理")
+        order_row = {
+            "id": intent.id,
+            "product_id": product.id,
+            "product_name": product.product_name,
+            "category": category,
+            "amount": str(amount) if amount is not None else None,
+            "amount_is_estimate": amount_is_estimate,
+            "target_date": product.target_date.isoformat(),
+            "created_at": intent.created_at,
+            "confirmed_at": intent.confirmed_at,
+            "status": status,
+            "product_status": product.status,
+            "contact_name": intent.contact_name,
+            "contact_phone": intent.contact_phone,
+            "note": intent.other_requirements,
+        }
+        order_rows.append(order_row)
+
+        activity_at = intent.confirmed_at or intent.created_at
+        if activity_at is not None and recent_start <= activity_at.date() <= today:
+            recent_order_rows.append(order_row)
+        if intent.reservation_status == "CONFIRMED" and activity_at is not None and recent_start <= activity_at.date() <= today:
+            recent_confirmed.append(intent)
+            recent_revenue += amount
+            recent_estimated_count += int(amount_is_estimate)
+            crowd = str(product.target_crowd or "ALL")
+            crowd_counts[crowd] = crowd_counts.get(crowd, 0) + 1
+            metric = product_metrics.setdefault(product.id, {"product_id": product.id, "product_name": product.product_name, "confirmed_orders": 0, "revenue": Decimal("0")})
+            metric["confirmed_orders"] += 1
+            metric["revenue"] += amount
+
+    recent_count = len(recent_confirmed)
+    recent_crowds = [
+        {"target_crowd": crowd, "confirmed_orders": count, "share": round(count * 100 / recent_count, 1)}
+        for crowd, count in sorted(crowd_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ]
+    recent_products = [
+        {
+            "product_id": item["product_id"],
+            "product_name": item["product_name"],
+            "confirmed_orders": item["confirmed_orders"],
+            "revenue": str(item["revenue"]),
+        }
+        for item in sorted(product_metrics.values(), key=lambda row: (-row["confirmed_orders"], -row["revenue"]))[:5]
+    ]
 
     return {
         "total": len(intents),
@@ -591,12 +866,67 @@ def orders_overview(db: Session = Depends(get_db), user: User = Depends(get_hote
         "held": len(held),
         "cancelled": len(cancelled),
         "confirmed_revenue": str(revenue),
+        "sold_product_count": len({item.product_id for item in confirmed}),
+        "estimated_amount_count": estimated_amount_count,
         "categories": [
             {"label": bucket["label"], "count": bucket["count"], "confirmed": bucket["confirmed"], "revenue": str(bucket["revenue"])}
             for bucket in sorted(buckets.values(), key=lambda row: row["count"], reverse=True)
         ],
+        "recent": {
+            "from_date": recent_start.isoformat(),
+            "confirmed_count": recent_count,
+            "confirmed_revenue": str(recent_revenue),
+            "average_order_value": str((recent_revenue / recent_count).quantize(Decimal("0.01"))) if recent_count else None,
+            "estimated_amount_count": recent_estimated_count,
+            "top_crowds": recent_crowds,
+            "top_products": recent_products,
+            "orders": sorted(recent_order_rows, key=lambda row: row["created_at"], reverse=True)[:40],
+        },
         "orders": order_rows[:40],
     }
+
+
+@router.post("/ai/conversations/{conversation_id}/analysis")
+def analyze_operating_question(conversation_id: int, request: OperationsQueryRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    """Persist a hotel operator's data question and its factual answer."""
+    hotel_id = hotel_id_for(db, user)
+    conversation = _hotel_conversation_or_404(db, hotel_id, conversation_id)
+    question = request.query.strip()
+    normalized_question = question.lower()
+    if any(word in normalized_question for word in ("天气", "降雨", "下雨", "雨天")):
+        forecasts = WeatherService(db).get_forecast_range("杭州", date.today(), days=15)
+        usable = [item for item in forecasts if item.get("usable")]
+        rainy = [item for item in usable if str(item.get("scenario") or "").upper() == "RAIN"]
+        dates = "、".join(str(item.get("target_date") or "") for item in rainy[:8])
+        if usable:
+            answer = f"未来15天已取得 {len(usable)} 天有效天气预报，其中 {len(rainy)} 天标记为降雨" + (f"（{dates}）。" if dates else "。")
+            answer += "产品组合会据此调整室内外体验排序；天气数据不会单独阻断产品生成。"
+        else:
+            answer = "未来15天没有可用天气预报，暂时无法判断降雨日期；产品生成仍可继续，并在行程中标注天气待核验。"
+        result = {"answer": answer, "focus": answer[:700], "intent": "weather_impact", "facts": {"window_days": 15, "usable_forecast_days": len(usable), "rainy_days": len(rainy)}}
+    elif any(word in normalized_question for word in ("知识库", "地点", "景点", "开放时间", "博物馆")):
+        places = KnowledgeService(db).search(limit=10)
+        names = [str(item.get("name") or "") for item in places if isinstance(item, dict) and item.get("name")]
+        answer = "知识库中已有地点：" + ("、".join(names[:8]) if names else "当前没有登记地点") + "."
+        answer += "地点可用于非售卖路线建议；目前没有地点与成交订单的结构化关联，无法据此排名历史转化效果。"
+        result = {"answer": answer, "focus": answer[:700], "intent": "knowledge_places", "facts": {"place_count": len(places)}}
+    else:
+        result = OperationsInsightService(db, hotel_id).answer_query(question, window_days=15)
+    now = datetime.now(timezone.utc).isoformat()
+    messages = list(conversation.messages or [])
+    messages.extend([
+        {"role": "user", "kind": "OPERATIONS_QUERY", "content": question[:1200], "created_at": now},
+        {"role": "assistant", "kind": "OPERATIONS_QUERY", "content": result["answer"], "created_at": now, "facts": result["facts"]},
+    ])
+    conversation.messages = messages[-50:]
+    execution = dict(conversation.last_execution or {})
+    prior = list(execution.get("operations_analysis") or [])
+    prior.append({"question": question[:1200], "answer": result["answer"], "focus": result["focus"], "intent": result["intent"], "facts": result["facts"]})
+    execution["operations_analysis"] = prior[-12:]
+    conversation.last_execution = execution
+    db.commit()
+    db.refresh(conversation)
+    return {"conversation": conversation, "answer": result["answer"], "focus": result["focus"], "intent": result["intent"], "facts": result["facts"]}
 
 
 @router.post("/media/upload")
@@ -660,106 +990,182 @@ def service_snapshot(service: HotelService) -> dict:
 @router.get("/dashboard", response_model=DashboardResponse)
 def dashboard(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
     hotel_id = hotel_id_for(db, user)
-    sweep_expired_intents(db, hotel_id)
-    db.commit()
+    # The dashboard is a read path. Releasing expired holds can lock product and
+    # resource rows, so leave that reconciliation to order/reservation paths.
     hotel = db.get(Hotel, hotel_id)
     today = date.today()
     target = today + timedelta(days=1)
-    rooms = list_rooms(db, hotel_id)
-    resources = list_partner_resources(db, hotel_id)
-    products = list_products(db, hotel_id)
-    hotel_intents = list(
-        db.scalars(
-            select(VisitorIntent)
-            .join(TravelProduct)
-            .options(selectinload(VisitorIntent.product))
-            .where(TravelProduct.hotel_id == hotel_id)
-        ).all()
-    )
-    intents = len(hotel_intents)
-    active_statuses = {"ON_SALE", "LOW_STOCK"}
-    active_products = [item for item in products if item.status in active_statuses]
-    confirmed = [item for item in hotel_intents if item.reservation_status == "CONFIRMED" and item.product]
-    held = [item for item in hotel_intents if item.reservation_status == "HELD" and item.product]
-    zero = Decimal("0")
-    confirmed_revenue = sum((item.product.suggested_price for item in confirmed if item.product), zero)
-    confirmed_gross_profit = sum((item.product.gross_profit for item in confirmed if item.product), zero)
-    held_revenue = sum((item.product.suggested_price for item in held if item.product), zero)
-    available_package_count = sum(max(0, item.sale_quantity) for item in active_products)
-    listed_value = sum((item.suggested_price * max(0, item.sale_quantity) for item in active_products), zero)
+    room_metrics = db.execute(
+        select(
+            func.count(RoomInventory.id),
+            func.count(RoomInventory.id).filter(RoomInventory.available_date == target),
+            func.coalesce(func.sum(RoomInventory.available_count).filter(RoomInventory.available_date == target), 0),
+        ).where(RoomInventory.hotel_id == hotel_id)
+    ).one()
+    resource_metrics = db.execute(
+        select(
+            func.count(PartnerResource.id),
+            func.count(PartnerResource.id).filter(
+                PartnerResource.package_enabled.is_(True), PartnerResource.status == "AVAILABLE"
+            ),
+        )
+        .join(Merchant, Merchant.id == PartnerResource.merchant_id)
+        .where(Merchant.hotel_id == hotel_id)
+    ).one()
 
-    # Keep the revenue series factual: confirmed bookings are income, while
-    # held reservations remain visible separately and never inflate sales.
-    timeline_dates = {today - timedelta(days=offset) for offset in range(6, -1, -1)}
-    timeline_dates.update(item.target_date for item in active_products if item.target_date >= today)
-    timeline_dates.update(
-        item.confirmed_at.date()
-        for item in confirmed
-        if item.confirmed_at is not None
+    active_statuses = ("ON_SALE", "LOW_STOCK")
+    positive_quantity = case((TravelProduct.sale_quantity > 0, TravelProduct.sale_quantity), else_=0)
+    product_totals = db.execute(
+        select(
+            func.count(TravelProduct.id),
+            func.count(TravelProduct.id).filter(TravelProduct.status.in_(active_statuses)),
+            func.count(TravelProduct.id).filter(TravelProduct.status == "LOW_STOCK"),
+            func.coalesce(func.sum(TravelProduct.gross_profit * TravelProduct.sale_quantity).filter(TravelProduct.status.in_(active_statuses)), 0),
+            func.coalesce(func.sum(positive_quantity).filter(TravelProduct.status.in_(active_statuses)), 0),
+            func.coalesce(func.sum(TravelProduct.suggested_price * positive_quantity).filter(TravelProduct.status.in_(active_statuses)), 0),
+        ).where(TravelProduct.hotel_id == hotel_id, TravelProduct.status != "DELETED")
+    ).one()
+
+    active_held = (
+        (VisitorIntent.reservation_status == "HELD")
+        & or_(VisitorIntent.reserved_until.is_(None), VisitorIntent.reserved_until > datetime.now(timezone.utc))
     )
-    timeline: dict[date, dict] = {
-        value: {
-            "date": value.isoformat(),
+    intent_totals = db.execute(
+        select(
+            func.count(VisitorIntent.id),
+            func.count(VisitorIntent.id).filter(VisitorIntent.reservation_status == "CONFIRMED"),
+            func.count(VisitorIntent.id).filter(active_held),
+            func.coalesce(func.sum(TravelProduct.suggested_price).filter(VisitorIntent.reservation_status == "CONFIRMED"), 0),
+            func.coalesce(func.sum(TravelProduct.gross_profit).filter(VisitorIntent.reservation_status == "CONFIRMED"), 0),
+            func.coalesce(func.sum(TravelProduct.suggested_price).filter(active_held), 0),
+        )
+        .join(TravelProduct, TravelProduct.id == VisitorIntent.product_id)
+        .where(TravelProduct.hotel_id == hotel_id)
+    ).one()
+
+    # Aggregate facts in SQL so the dashboard and full product list do not each
+    # hydrate every TravelProduct and order object into Python.
+    product_days = db.execute(
+        select(
+            TravelProduct.target_date,
+            func.count(TravelProduct.id),
+            func.coalesce(func.sum(positive_quantity), 0),
+            func.coalesce(func.sum(TravelProduct.suggested_price * positive_quantity), 0),
+        )
+        .where(
+            TravelProduct.hotel_id == hotel_id,
+            TravelProduct.status.in_(active_statuses),
+            TravelProduct.status != "DELETED",
+            TravelProduct.target_date.is_not(None),
+        )
+        .group_by(TravelProduct.target_date)
+    ).all()
+    confirmed_days = db.execute(
+        select(
+            cast(VisitorIntent.confirmed_at, Date),
+            func.count(VisitorIntent.id),
+            func.coalesce(func.sum(TravelProduct.suggested_price), 0),
+            func.coalesce(func.sum(TravelProduct.gross_profit), 0),
+        )
+        .join(TravelProduct, TravelProduct.id == VisitorIntent.product_id)
+        .where(
+            TravelProduct.hotel_id == hotel_id,
+            VisitorIntent.reservation_status == "CONFIRMED",
+            VisitorIntent.confirmed_at.is_not(None),
+        )
+        .group_by(cast(VisitorIntent.confirmed_at, Date))
+    ).all()
+
+    zero = Decimal("0")
+    timeline: dict[date, dict] = {}
+
+    def timeline_point(day: date) -> dict:
+        return timeline.setdefault(day, {
+            "date": day.isoformat(),
             "confirmed_orders": 0,
             "confirmed_revenue": zero,
             "confirmed_gross_profit": zero,
             "on_sale_products": 0,
             "available_packages": 0,
             "listed_value": zero,
-        }
-        for value in sorted(timeline_dates)
-    }
-    for product in active_products:
-        point = timeline.setdefault(product.target_date, {
-            "date": product.target_date.isoformat(), "confirmed_orders": 0,
-            "confirmed_revenue": zero, "confirmed_gross_profit": zero,
-            "on_sale_products": 0, "available_packages": 0, "listed_value": zero,
         })
-        point["on_sale_products"] += 1
-        point["available_packages"] += max(0, product.sale_quantity)
-        point["listed_value"] += product.suggested_price * max(0, product.sale_quantity)
-    for intent in confirmed:
-        if not intent.product or not intent.confirmed_at:
+
+    for offset in range(6, -1, -1):
+        timeline_point(today - timedelta(days=offset))
+    for product_day, count, packages, value in product_days:
+        if isinstance(product_day, str):
+            product_day = date.fromisoformat(product_day)
+        point = timeline_point(product_day)
+        point["on_sale_products"] = int(count or 0)
+        point["available_packages"] = int(packages or 0)
+        point["listed_value"] = value or zero
+    for confirmed_day, count, revenue, gross_profit in confirmed_days:
+        if confirmed_day is None:
             continue
-        value = intent.confirmed_at.date()
-        point = timeline.setdefault(value, {
-            "date": value.isoformat(), "confirmed_orders": 0,
-            "confirmed_revenue": zero, "confirmed_gross_profit": zero,
-            "on_sale_products": 0, "available_packages": 0, "listed_value": zero,
-        })
-        point["confirmed_orders"] += 1
-        point["confirmed_revenue"] += intent.product.suggested_price
-        point["confirmed_gross_profit"] += intent.product.gross_profit
-    changes = list(db.scalars(select(ResourceChangeEvent).where(ResourceChangeEvent.hotel_id == hotel_id).order_by(ResourceChangeEvent.created_at.desc()).limit(6)).all())
+        if isinstance(confirmed_day, str):
+            confirmed_day = date.fromisoformat(confirmed_day)
+        point = timeline_point(confirmed_day)
+        point["confirmed_orders"] = int(count or 0)
+        point["confirmed_revenue"] = revenue or zero
+        point["confirmed_gross_profit"] = gross_profit or zero
+
+    changes = list(db.scalars(
+        select(ResourceChangeEvent)
+        .where(ResourceChangeEvent.hotel_id == hotel_id)
+        .order_by(ResourceChangeEvent.created_at.desc())
+        .limit(6)
+    ).all())
     return {
         "hotel_id": hotel_id,
         "hotel_name": hotel.name if hotel else "StayScape",
         "target_date": target.isoformat(),
-        "room_count": len(rooms),
-        "expiring_room_count": sum(1 for item in rooms if item.available_date == target),
-        "available_room_units": sum(max(0, item.available_count) for item in rooms if item.available_date == target),
-        "partner_resource_count": len(resources),
-        "package_enabled_resource_count": sum(1 for item in resources if item.package_enabled and item.status == "AVAILABLE"),
-        "product_count": len(products),
-        "on_sale_product_count": len(active_products),
-        "low_stock_product_count": sum(1 for item in products if item.status == "LOW_STOCK"),
-        "visitor_intent_count": int(intents),
-        "gross_profit_on_sale": sum((item.gross_profit * item.sale_quantity for item in active_products), zero),
-        "confirmed_order_count": len(confirmed),
-        "confirmed_revenue": confirmed_revenue,
-        "confirmed_gross_profit": confirmed_gross_profit,
-        "held_order_count": len(held),
-        "held_revenue": held_revenue,
-        "available_package_count": available_package_count,
-        "listed_value": listed_value,
-        "sales_timeline": [timeline[value] for value in sorted(timeline)],
-        "recent_changes": [{"id": item.id, "event_type": item.event_type, "resource_type": item.resource_type, "resource_id": item.resource_id, "reason": item.reason, "processed": item.processed, "created_at": item.created_at} for item in changes],
+        "room_count": int(room_metrics[0] or 0),
+        "expiring_room_count": int(room_metrics[1] or 0),
+        "available_room_units": int(room_metrics[2] or 0),
+        "partner_resource_count": int(resource_metrics[0] or 0),
+        "package_enabled_resource_count": int(resource_metrics[1] or 0),
+        "product_count": int(product_totals[0] or 0),
+        "on_sale_product_count": int(product_totals[1] or 0),
+        "low_stock_product_count": int(product_totals[2] or 0),
+        "visitor_intent_count": int(intent_totals[0] or 0),
+        "gross_profit_on_sale": product_totals[3] or zero,
+        "confirmed_order_count": int(intent_totals[1] or 0),
+        "confirmed_revenue": intent_totals[3] or zero,
+        "confirmed_gross_profit": intent_totals[4] or zero,
+        "held_order_count": int(intent_totals[2] or 0),
+        "held_revenue": intent_totals[5] or zero,
+        "available_package_count": int(product_totals[4] or 0),
+        "listed_value": product_totals[5] or zero,
+        "sales_timeline": [timeline[day] for day in sorted(timeline)],
+        "recent_changes": [
+            {"id": item.id, "event_type": item.event_type, "resource_type": item.resource_type,
+             "resource_id": item.resource_id, "reason": item.reason, "processed": item.processed,
+             "created_at": item.created_at}
+            for item in changes
+        ],
     }
 
 
 @router.get("/rooms", response_model=list[RoomRead])
-def rooms(db: Session = Depends(get_db), user: User = Depends(get_hotel_user), target_date: date | None = Query(default=None)):
+def rooms(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+    target_date: date | None = Query(default=None),
+    from_date: date | None = Query(default=None),
+    days: int = Query(default=17, ge=1, le=90),
+):
     hotel_id = hotel_id_for(db, user)
+    if from_date is not None:
+        end_date = from_date + timedelta(days=days)
+        return list(db.scalars(
+            select(RoomInventory)
+            .where(
+                RoomInventory.hotel_id == hotel_id,
+                RoomInventory.available_date >= from_date,
+                RoomInventory.available_date < end_date,
+            )
+            .order_by(RoomInventory.available_date, RoomInventory.room_type, RoomInventory.id)
+        ).all())
     items = list_rooms(db, hotel_id)
     return [item for item in items if target_date is None or item.available_date == target_date]
 
@@ -1002,15 +1408,79 @@ async def update_resource_address(resource_id: int, request: ResourceAddressUpda
 
 
 @router.get("/products", response_model=ProductListResponse)
-def products(db: Session = Depends(get_db), user: User = Depends(get_hotel_user), status: str | None = None):
-    items = list_products(db, hotel_id_for(db, user))
-    if status:
-        items = [item for item in items if item.status == status]
+def products(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_hotel_user),
+    status: str | None = None,
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    target_date: date | None = None,
+    include_marketing_assets: bool = True,
+):
+    hotel_id = hotel_id_for(db, user)
+    excluded_status = None if status else "PENDING_CONFIRMATION"
+    if include_marketing_assets:
+        items = list_products(
+            db,
+            hotel_id,
+            limit=limit,
+            offset=offset,
+            status=status,
+            exclude_status=excluded_status,
+            target_date=target_date,
+        )
     else:
-        # A generated candidate is not a hotel product yet. It becomes visible
-        # in this list only after the operator confirms draft or publish.
-        items = [item for item in items if item.status != "PENDING_CONFIRMATION"]
-    return {"items": [product_to_dict(item) for item in items], "total": len(items)}
+        items = list_products_for_serialization(
+            db,
+            hotel_id,
+            limit=limit,
+            offset=offset,
+            status=status,
+            exclude_status=excluded_status,
+            target_date=target_date,
+        )
+
+    count_query = select(func.count(TravelProduct.id)).where(
+        TravelProduct.hotel_id == hotel_id,
+        TravelProduct.status != "DELETED",
+    )
+    dates_query = select(
+        TravelProduct.target_date,
+        func.coalesce(func.sum(TravelProduct.sale_quantity), 0),
+    ).where(
+        TravelProduct.hotel_id == hotel_id,
+        TravelProduct.status != "DELETED",
+    )
+    if status:
+        count_query = count_query.where(TravelProduct.status == status)
+        dates_query = dates_query.where(TravelProduct.status == status)
+    else:
+        count_query = count_query.where(TravelProduct.status != "PENDING_CONFIRMATION")
+        dates_query = dates_query.where(TravelProduct.status != "PENDING_CONFIRMATION")
+    if target_date is not None:
+        count_query = count_query.where(TravelProduct.target_date == target_date)
+    total = int(db.scalar(count_query) or 0)
+    dates = []
+    if offset == 0:
+        dates = [
+            {"target_date": day, "sale_quantity": int(quantity or 0)}
+            for day, quantity in db.execute(
+                dates_query.group_by(TravelProduct.target_date).order_by(TravelProduct.target_date)
+            )
+        ]
+    resource_cache = _product_resource_cache(db, hotel_id, items)
+    return {
+        "items": [
+            product_to_dict(
+                item,
+                resource_cache=resource_cache,
+                include_marketing_assets=include_marketing_assets,
+            )
+            for item in items
+        ],
+        "total": total,
+        "dates": dates,
+    }
 
 
 @router.post("/products/generate", response_model=ProductGenerateResponse)

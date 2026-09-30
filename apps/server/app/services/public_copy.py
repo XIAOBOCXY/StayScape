@@ -97,6 +97,43 @@ def _consecutive_rooms(product: Any, start: date | None, nights: int) -> bool:
     return True
 
 
+def build_compact_stay_plan(product: Any) -> dict[str, Any]:
+    """Return only stay facts used on a product card, without scanning all room dates."""
+    nights = max(DEFAULT_STAY_NIGHTS, min(int(getattr(product, "nights", None) or DEFAULT_STAY_NIGHTS), MAX_STAY_NIGHTS))
+    room = getattr(product, "room_inventory", None)
+    check_in = getattr(room, "available_date", None) or getattr(product, "target_date", None)
+    check_out = check_in + timedelta(days=nights) if check_in else None
+    hotel = getattr(product, "hotel", None)
+    room_name = next(
+        (
+            str(getattr(item, "resource_name", "") or "")
+            for item in getattr(product, "resources", []) or []
+            if str(getattr(item, "resource_type", "")) == "ROOM"
+        ),
+        "",
+    )
+    return {
+        "nights": nights,
+        "days": nights + 1,
+        "label": f"{nights + 1}天{nights}晚",
+        "check_in": check_in.isoformat() if check_in else None,
+        "check_out": check_out.isoformat() if check_out else None,
+        "price": str(getattr(product, "suggested_price", 0) or 0),
+        "available": int(getattr(product, "sale_quantity", 0) or 0) > 0,
+        "room_type": str(getattr(room, "room_type", "") or ""),
+        "room_name": room_name or "舒适客房",
+        "hotel_name": str(getattr(hotel, "name", "") or ""),
+        "hotel_city": str(getattr(hotel, "city", "") or ""),
+        "hotel_address": str(getattr(hotel, "address", "") or ""),
+        "requested_nights": nights,
+        "adjusted": False,
+        "max_nights": MAX_STAY_NIGHTS,
+        "check_in_time": _CHECK_IN_TIME,
+        "check_out_time": _CHECK_OUT_TIME,
+        "options": [],
+    }
+
+
 def build_stay_plan(product: Any, nights: int = DEFAULT_STAY_NIGHTS) -> dict[str, Any]:
     """Describe the hotel stay behind a package: nights, dates and price."""
 
@@ -797,10 +834,19 @@ def _reviews_for(product: Any) -> list[dict[str, Any]]:
     return reviews[:8]
 
 
-def visitor_product_to_dict(product: Any, nights: int = DEFAULT_STAY_NIGHTS) -> dict[str, Any]:
+def visitor_product_to_dict(
+    product: Any,
+    nights: int = DEFAULT_STAY_NIGHTS,
+    *,
+    resource_cache: dict | None = None,
+    include_marketing_assets: bool = True,
+    compact: bool = False,
+) -> dict[str, Any]:
     """Serialize a product for the public site without operator-only language."""
 
-    data = product_to_dict(product)
+    data = product_to_dict(
+        product, resource_cache=resource_cache, include_marketing_assets=include_marketing_assets
+    )
     theme = str(data.get("theme") or "杭州周末")
     crowd = {"FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友出行", "SOLO": "独自旅行", "LOCAL_WEEKEND": "本地周末客"}.get(str(data.get("target_crowd") or ""), "旅人")
     resources = data.get("resources") or []
@@ -812,7 +858,7 @@ def visitor_product_to_dict(product: Any, nights: int = DEFAULT_STAY_NIGHTS) -> 
         override = resource_names.get(key)
         if isinstance(override, str) and override.strip():
             resource["resource_name"] = public_travel_copy(override, str(resource.get("resource_name") or ""))
-    stay = build_stay_plan(product, nights)
+    stay = build_compact_stay_plan(product) if compact else build_stay_plan(product, nights)
     data["stay"] = stay
     experience_names = [
         str(item.get("resource_name") or "")
@@ -835,6 +881,18 @@ def visitor_product_to_dict(product: Any, nights: int = DEFAULT_STAY_NIGHTS) -> 
         data.get("risk_message"),
         "请按页面列出的集合地址和场次时间出发；需要无障碍、餐饮或同行安排时，可在下单备注。",
     )
+
+    if compact:
+        # List cards never render itinerary, route, review or asset detail. Avoid
+        # building those fields only to strip them again in compact_product_payload.
+        data["day_plan"] = []
+        data["route_plan"] = []
+        data["detail_sections"] = None
+        data["reviews"] = []
+        data["rating_average"] = None
+        data["rating_count"] = 0
+        data["marketing_assets"] = []
+        return data
 
     for resource in resources:
         name = str(resource.get("resource_name") or "体验项目")

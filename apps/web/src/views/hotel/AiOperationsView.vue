@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { showToast } from 'vant'
 import { hotelApi } from '../../api'
 import { errorMessage } from '../../api/client'
@@ -19,13 +19,21 @@ const advisor = ref<AnyRecord | null>(null)
 const activeConversationId = ref<number | null>(null)
 const brief = ref('')
 const loading = ref(false)
+const loadError = ref('')
+const dataReady = ref(false)
 const submitting = ref(false)
-const processingMessage = ref('正在读取经营数据…')
+const processingMessage = ref('正在读取未来房态、近期成交、合作资源、天气与地点信息…')
+const advisorAnalysisSignature = ref('')
+const advisorLoadedThisVisit = ref(false)
 const loadedAt = ref('')
-const selectedStage = ref<number | null>(null)
+const selectedStage = ref<number | null>(1)
 // 只允许一个「经营证据」分类展开，避免页面被多块原始数据同时撑长。
-const panel = ref<'' | 'inventory' | 'resources' | 'orders' | 'weather' | 'knowledge' | 'trace'>('')
+const panel = ref<'' | 'inventory' | 'resources' | 'orders' | 'weather' | 'knowledge'>('')
 const evidenceFold = ref<HTMLDetailsElement | null>(null)
+const evidenceLoaded = ref<string[]>([])
+const evidenceLoading = ref('')
+const evidenceError = ref('')
+const evidenceRequests = new Map<string, Promise<void>>()
 // 本次会话真正生成出来的候选（用于「候选确认」阶段，不再展示历史待确认队列）。
 const sessionProposalIds = ref<number[]>([])
 const resolvedCandidateCount = ref(0)
@@ -67,7 +75,6 @@ const operationGroups = computed<AnyRecord[]>(() => {
 })
 
 const activeConversation = computed(() => conversations.value.find((item) => Number(item.id) === activeConversationId.value) || null)
-const signals = computed(() => Array.isArray(overview.value.operations_insights?.recommendation_signals) ? overview.value.operations_insights.recommendation_signals : [])
 const pressure = computed<AnyRecord>(() => (overview.value.inventory_pressure as AnyRecord) || {})
 const focusRoom = computed<AnyRecord | null>(() => (pressure.value.focus_room as AnyRecord) || null)
 const insights = computed<AnyRecord>(() => (overview.value.operations_insights as AnyRecord) || {})
@@ -88,6 +95,8 @@ const availableAddResources = computed<AnyRecord[]>(() => [
 ].sort((a: AnyRecord, b: AnyRecord) => Number(b.recommendation_score || 0) - Number(a.recommendation_score || 0)
   || Number(b.sets ?? b.available_quantity ?? 0) - Number(a.sets ?? a.available_quantity ?? 0)))
 const weatherLabel = computed(() => {
+  if (overview.value.weather?.usable === false) return '天气待核验'
+  if (!overview.value.weather) return '按需查看'
   const scenario = String(overview.value.weather?.scenario || '')
   const base = { RAIN: '有降雨', SUNNY: '晴天', CLOUDY: '多云' }[scenario] || '天气读取中'
   const low = overview.value.weather?.temperature_min
@@ -97,6 +106,23 @@ const weatherLabel = computed(() => {
     : base
 })
 const knowledgeTotal = computed(() => Number(overview.value.knowledge_total ?? (overview.value.knowledge || []).length ?? 0))
+const roomEvidenceRows = computed<AnyRecord[]>(() => {
+  const today = new Date()
+  const end = new Date(today)
+  end.setDate(end.getDate() + Number(pressure.value.window_days ?? 17))
+  const startKey = localDateKey(today)
+  const endKey = localDateKey(end)
+  return inventoryRooms.value
+    .filter((room) => room.status !== 'DISABLED' && String(room.available_date || '') >= startKey && String(room.available_date || '') < endKey)
+    .sort((a, b) => String(a.available_date).localeCompare(String(b.available_date)) || String(a.room_type).localeCompare(String(b.room_type)))
+})
+const roomEvidenceTotal = computed(() => roomEvidenceRows.value.reduce((sum, room) => sum + Number(room.available_count || 0), 0))
+const roomEvidenceDateCount = computed(() => new Set(roomEvidenceRows.value.map((room) => room.available_date)).size)
+const roomEvidenceTypeCount = computed(() => new Set(roomEvidenceRows.value.map((room) => room.room_type)).size)
+const resourceEvidenceRows = computed<AnyRecord[]>(() => (insights.value.resource_evidence || []) as AnyRecord[])
+const serviceEvidenceRows = computed<AnyRecord[]>(() => (insights.value.service_evidence || []) as AnyRecord[])
+const weatherEvidenceRows = computed<AnyRecord[]>(() => (overview.value.weather_forecasts || []) as AnyRecord[])
+const recentOrderSummary = computed<AnyRecord>(() => (orders.value.recent || {}) as AnyRecord)
 const primarySpec = computed<AnyRecord | null>(() => (advisor.value?.primary as AnyRecord) || null)
 const judgement = computed<AnyRecord>(() => (advisor.value?.judgement as AnyRecord) || {})
 const primaryExperience = computed<AnyRecord | null>(() => ((primarySpec.value?.experiences as AnyRecord[]) || [])[0] || null)
@@ -159,92 +185,45 @@ const generationRoomType = computed({
   },
 })
 const batchRoomOptions = computed(() => inventoryRoomOptions.value.filter((room) => Number(room.max_guests || 0) >= Number(primarySpec.value?.party_size || 1)))
-const executionSummary = computed<AnyRecord[]>(() => {
-  const provided = judgement.value.execution_summary
-  if (Array.isArray(provided) && provided.length) return provided as AnyRecord[]
-
-  // Keep the analysis summary visible even when an older or partial advisor
-  // response omits execution_summary. Every fallback value comes from the
-  // loaded operating data, and unavailable checks are stated explicitly.
-  const windowDays = Number(pressure.value.window_days ?? 17)
-  const roomCombinations = generationRoomOptions.value.length
-  const remainingRooms = Number(pressure.value.unsold_room_nights ?? 0)
-  const confirmedCount = recentConfirmedRows.value.length
-  const crowd = crowdLabel(insights.value.top_crowds?.[0]?.target_crowd)
-  const resourceRows = (insights.value.available_partner_resources || []) as AnyRecord[]
-  const resourceCount = Number(pressure.value.available_resource_count ?? resourceRows.length)
-  const primary = primarySpec.value
-
-  return [
-    {
-      label: '\u623f\u6001\u5df2\u8bfb\u53d6',
-      value: `\u672a\u6765 ${windowDays} \u5929\uff0c${roomCombinations} \u4e2a\u6709\u4f59\u91cf\u7684\u300c\u623f\u578b \xd7 \u65e5\u671f\u300d\u7ec4\u5408\uff1b\u5f85\u6d88\u5316 ${remainingRooms} \u95f4`,
-    },
-    {
-      label: '\u8fd1\u671f\u9700\u6c42\u5df2\u5206\u6790',
-      value: confirmedCount
-        ? `\u8fd1 14 \u5929\u5df2\u786e\u8ba4 ${confirmedCount} \u5355\uff0c\u6210\u4ea4 \xa5${recentConfirmedRevenue.value}${crowd ? `\uff1b\u8ba2\u5355\u4e3b\u8981\u5ba2\u7fa4\uff1a${crowd}` : ''}`
-        : '\u8fd1 14 \u5929\u65e0\u5df2\u786e\u8ba4\u6210\u4ea4\uff0c\u6682\u4e0d\u636e\u6b64\u5224\u65ad\u4e3b\u529b\u5ba2\u7fa4',
-    },
-    {
-      label: '\u5408\u4f5c\u8d44\u6e90\u5df2\u5339\u914d',
-      value: `\u53ef\u7528\u5408\u4f5c\u8d44\u6e90 ${resourceCount} \u9879\uff0c\u5176\u4e2d ${resourceRows.length} \u9879\u5df2\u8fdb\u5165\u5f53\u524d\u5206\u6790\u7ed3\u679c`,
-    },
-    {
-      label: primary ? '\u4ef7\u683c\u4e0e\u5bb9\u91cf\u5df2\u6821\u9a8c' : '\u65b9\u6848\u6821\u9a8c\u72b6\u6001',
-      value: primary
-        ? `\u5efa\u8bae\u552e\u4ef7 \xa5${primary.price ?? '\u2014'}\uff1b\u5355\u4f4d\u6210\u672c \xa5${primary.unit_cost ?? '\u2014'}\uff1b\u6700\u4f4e\u5408\u6cd5\u4ef7 \xa5${primary.minimum_allowed_price ?? '\u2014'}\uff1b\u6700\u591a\u53ef\u552e ${primary.max_sellable ?? '\u2014'} \u5957`
-        : '\u5f53\u524d\u5c1a\u65e0\u5b8c\u6574\u63a8\u8350\uff0c\u672c\u8f6e\u672a\u5b8c\u6210\u4ef7\u683c\u4e0e\u5bb9\u91cf\u6821\u9a8c\uff1b\u53ef\u5728\u4ea7\u54c1\u65b9\u6848\u9009\u62e9\u65e5\u671f\u3001\u623f\u578b\u540e\u7ee7\u7eed\u8c03\u6574',
-    },
-  ]
-})
 function routeForDay(dayIndex: number) {
   return ((primarySpec.value?.route_plan || []) as AnyRecord[]).find((item) => Number(item.day_index) === Number(dayIndex)) || null
 }
 
 const stages = [
-  { id: 1, label: '经营分析', hint: '房态、需求与资源' },
-  { id: 2, label: '产品方案', hint: '调整组合与行程' },
-  { id: 3, label: '预览与发布', hint: '检查游客端展示' },
+  { id: 1, label: '经营分析', hint: '查看并询问经营数据' },
+  { id: 2, label: '产品方案', hint: '比较生成方向' },
+  { id: 3, label: '产品微调', hint: '调整已选产品' },
+  { id: 4, label: '预览与发布', hint: '检查游客端成品' },
 ]
 const availableStage = computed(() => {
-  if (resolvedCandidateCount.value > 0 || sessionProposalIds.value.length > 0) return 3
-  // Product planning remains available when analysis has no recommendation.
-  // The stepper reports progress; it must not block operators from changing
-  // the date, room type, audience, or resource filters.
-  return 2
+  if (resolvedCandidateCount.value > 0 || sessionProposalIds.value.length > 0) return 4
+  // Analysis is complete when its data has loaded, even if no recommendation
+  // exists yet. The stepper reports progress; it never blocks the next task.
+  return dataReady.value ? 2 : 1
 })
-const stageIndex = computed(() => Math.min(selectedStage.value || availableStage.value, availableStage.value))
-function selectStage(id: number) {
-  if (id <= availableStage.value) selectedStage.value = id
+const stageIndex = computed(() => Math.min(selectedStage.value || 1, availableStage.value))
+async function selectStage(id: number) {
+  if (id > availableStage.value) return
+  selectedStage.value = id
+  if (id === 2) {
+    await ensureEvidence('inventory')
+    if (!submitting.value && (!advisorLoadedThisVisit.value || advisorAnalysisSignature.value !== analysisSignature())) await autoStart()
+  }
 }
 
-async function load() {
-  loading.value = true
+async function loadConversationHistory() {
   try {
-    const [facts, tasks, pending, orderData, rooms] = await Promise.all([
-      hotelApi.aiOverview(),
-      hotelApi.aiConversations(),
-      hotelApi.aiProposals('PENDING_CONFIRMATION'),
-      hotelApi.ordersOverview(),
-      hotelApi.rooms(),
-    ])
-    overview.value = facts.data
-    conversations.value = tasks.data
-    proposals.value = pending.data
-    orders.value = orderData.data
-    inventoryRooms.value = rooms.data as AnyRecord[]
+    const tasks = await hotelApi.aiConversations(1)
+    conversations.value = Array.isArray(tasks.data) ? tasks.data : []
     const latest = conversations.value[0] as AnyRecord | undefined
-    if (latest && !activeConversationId.value) {
+    if (!latest) return
+    if (!activeConversationId.value) {
       activeConversationId.value = Number(latest.id)
       const key = operationStorageKey(activeConversationId.value)
       if (key) { try { operationLog.value = JSON.parse(localStorage.getItem(key) || '[]') } catch { operationLog.value = [] } }
       const stored = (latest.last_execution as AnyRecord | undefined)?.answer
-      // 只恢复与当前协议一致的快照：必须带主推方案、资源候选和多方案列表，
-      // 任何旧结构都交给自动开场重新生成，避免界面出现空缺或过期字段。
       const storedPrimary = (stored as AnyRecord | undefined)?.primary as AnyRecord | undefined
       const storedJudgement = (stored as AnyRecord | undefined)?.judgement as AnyRecord | undefined
-      // 协议版本必须与后端一致，否则旧快照会让页面显示过期结构的数据。
       const contractOk = storedJudgement?.contract_version === ADVISOR_CONTRACT_VERSION
         && Boolean(storedPrimary?.resource_options)
         && Boolean((storedJudgement?.plans as unknown[] | undefined)?.length)
@@ -254,35 +233,99 @@ async function load() {
         const normalized = normalizePrimaryParty(restoredPrimary)
         advisor.value = { ...(advisor.value || {}), primary: normalized }
         previousPrimary.value = normalized
-        targetInventoryKey.value = `${normalized.target_date}|${normalized.room_type}`
+        targetInventoryKey.value = String(normalized.target_date) + '|' + String(normalized.room_type)
       }
       if (String(latest.last_execution?.step || '') === 'GENERATED') {
+        const response = await hotelApi.aiProposals('PENDING_CONFIRMATION', Number(latest.id))
+        proposals.value = Array.isArray(response.data) ? response.data : []
         sessionProposalIds.value = proposals.value
           .filter((item) => Number(item.conversation_id) === Number(latest.id))
           .map((item) => Number(item.id))
+      } else {
+        proposals.value = []
+        sessionProposalIds.value = []
       }
     }
-    const now = new Date()
-    loadedAt.value = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  } catch (error) { showToast(errorMessage(error)) }
-  finally { loading.value = false }
+  } catch (error) {
+    // Historical context is optional for viewing current operating data.
+    console.warn('经营分析历史会话读取失败', error)
+  }
 }
 
-const orderRows = computed<AnyRecord[]>(() => (Array.isArray(orders.value.orders) ? orders.value.orders as AnyRecord[] : []))
+async function load() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    const facts = await hotelApi.aiOverview({ section: 'summary' })
+    overview.value = { ...overview.value, ...facts.data }
+    dataReady.value = true
+    const now = new Date()
+    loadedAt.value = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
+    void loadConversationHistory()
+  } catch (error) {
+    loadError.value = errorMessage(error)
+    showToast(loadError.value)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function ensureEvidence(section: Exclude<typeof panel.value, ''>, force = false) {
+  if (!force && evidenceLoaded.value.includes(section)) return
+  const pending = evidenceRequests.get(section)
+  if (pending) return pending
+  const request = (async () => {
+    evidenceLoading.value = section
+    evidenceError.value = ''
+    try {
+      if (section === 'inventory') {
+        const rooms = await hotelApi.rooms({ from_date: localDateKey(new Date()), days: 17 })
+        inventoryRooms.value = rooms.data as AnyRecord[]
+      } else if (section === 'resources') {
+        const response = await hotelApi.aiOverview({ section: 'resources' })
+        overview.value = { ...overview.value, ...response.data }
+      } else if (section === 'orders') {
+        orders.value = (await hotelApi.ordersOverview()).data
+      } else if (section === 'weather') {
+        const response = await hotelApi.aiOverview({ section: 'weather' })
+        overview.value = { ...overview.value, ...response.data }
+      } else if (section === 'knowledge') {
+        const response = await hotelApi.aiOverview({ section: 'knowledge' })
+        overview.value = { ...overview.value, ...response.data }
+      }
+      evidenceLoaded.value = [...new Set([...evidenceLoaded.value, section])]
+    } catch (error) {
+      evidenceError.value = errorMessage(error)
+    } finally {
+      evidenceLoading.value = ''
+      evidenceRequests.delete(section)
+    }
+  })()
+  evidenceRequests.set(section, request)
+  return request
+}
+
+function retryEvidence() {
+  if (panel.value) void ensureEvidence(panel.value, true)
+}
+async function refreshData() {
+  processingMessage.value = '正在刷新经营摘要…'
+  submitting.value = true
+  try {
+    await load()
+    if (panel.value) await ensureEvidence(panel.value, true)
+    if (stageIndex.value >= 2) {
+      await ensureEvidence('inventory', true)
+      await autoStart()
+    }
+  } finally { submitting.value = false }
+}
 function localDateKey(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
 }
-const recentOrderRows = computed<AnyRecord[]>(() => {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const start = new Date(today)
-  start.setDate(start.getDate() - 13)
-  const startKey = localDateKey(start)
-  const todayKey = localDateKey(today)
-  return orderRows.value.filter((row) => String(row.target_date || '') >= startKey && String(row.target_date || '') <= todayKey)
-})
+const recentOrderRows = computed<AnyRecord[]>(() => (Array.isArray(recentOrderSummary.value.orders) ? recentOrderSummary.value.orders as AnyRecord[] : []))
 const recentConfirmedRows = computed<AnyRecord[]>(() => recentOrderRows.value.filter((row) => row.status === '已成交' || row.status === 'CONFIRMED'))
-const recentConfirmedRevenue = computed(() => recentConfirmedRows.value.reduce((total, row) => total + Number(row.amount || 0), 0).toFixed(2))
+const recentConfirmedRevenue = computed(() => String(recentOrderSummary.value.confirmed_revenue ?? recentConfirmedRows.value.reduce((total, row) => total + Number(row.amount || 0), 0).toFixed(2)))
 function batchCreatedText(result: AnyRecord) {
   return ((result.created || []) as AnyRecord[]).map((item) => `${item.target_date} ${item.room_type}`).join('、')
 }
@@ -290,10 +333,15 @@ const historyMessages = computed<AnyRecord[]>(() => {
   const messages = activeConversation.value?.messages
   return Array.isArray(messages) ? messages : []
 })
+const analysisMessages = computed<AnyRecord[]>(() => historyMessages.value.filter((item) => item.kind === 'OPERATIONS_QUERY'))
+const operatingQuestions = ['最近什么产品卖得最好？', '未来哪些房型可售余量最多？', '哪些合作体验已有成交关联？']
+function analysisSignature() {
+  return analysisMessages.value.map((item) => `${item.role}:${item.created_at}:${item.content}`).join('|')
+}
 
 async function applySalesCommand(text: string) {
   const response = await hotelApi.salesCommand(text)
-  orders.value = (await hotelApi.ordersOverview()).data
+  if (evidenceLoaded.value.includes('orders')) await ensureEvidence('orders', true)
   showToast(response.data.message)
 }
 
@@ -419,6 +467,9 @@ function applyRefinedProduct(refinedProduct: AnyRecord | undefined, instruction:
   changeNote.value = describeChange(previousPrimary.value, nextPrimary)
   previousPrimary.value = nextPrimary
   advisor.value = { ...(advisor.value || {}), primary: nextPrimary }
+  proposals.value = proposals.value.map((proposal) => Number(proposal.product_id) === Number(refinedProduct.id)
+    ? { ...proposal, product: { ...(proposal.product as AnyRecord), ...refinedProduct } }
+    : proposal)
   activeAdjust.value = ''
   flashCard()
   logOperation(instruction, changeNote.value, changes, nextPrimary)
@@ -426,10 +477,17 @@ function applyRefinedProduct(refinedProduct: AnyRecord | undefined, instruction:
 
 async function submit() {
   const text = brief.value.trim()
-  if (!text) { showToast('请用一句话说明想怎么调整方案'); return }
+  if (!text) { showToast(stageIndex.value === 1 ? '请输入想了解的经营问题' : '请用一句话说明想怎么调整方案'); return }
   submitting.value = true
-  processingMessage.value = '正在根据你的要求重新计算方案…'
+  processingMessage.value = stageIndex.value === 1 ? '正在查询房态、成交、资源、天气或地点数据…' : '正在根据你的要求重新计算产品组成、价格、容量与行程…'
   try {
+    if (stageIndex.value === 1) {
+      const conversationId = await ensureConversation()
+      const response = await hotelApi.analyzeOperationsQuestion(Number(conversationId), text)
+      mergeConversation(response.data.conversation as AnyRecord)
+      brief.value = ''
+      return
+    }
     const cardAction = ['resources', 'price', 'crowd', 'route', 'service'].includes(activeAdjust.value)
     const refineId = Number(editingProduct.value?.id || (cardAction ? primarySpec.value?.product_id : 0))
     if (refineId) {
@@ -454,7 +512,7 @@ async function submit() {
       proposals.value = [...created, ...proposals.value]
     }
     applyAdvisor(data.advisor as AnyRecord, text)
-    selectedStage.value = (data.advisor as AnyRecord)?.step === 'GENERATED' ? 3 : 2
+    selectedStage.value = (data.advisor as AnyRecord)?.step === 'GENERATED' ? 4 : 2
     brief.value = ''
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
@@ -486,7 +544,7 @@ async function generateFromPlan(primary: AnyRecord) {
   }
   const experience = (primary.experiences || [])[0]?.name || ''
   submitting.value = true
-  processingMessage.value = '正在生成游客端产品预览…'
+  processingMessage.value = '正在核验所选方向的房态、资源名额、成本、价格与游客端行程…'
   try {
     const conversationId = await ensureConversation()
     await hotelApi.advisor(Number(conversationId), `${primary.target_date} ${primary.room_type} + ${experience} 的方案`)
@@ -499,9 +557,28 @@ async function generateFromPlan(primary: AnyRecord) {
       proposals.value = [...created, ...proposals.value]
     }
     applyAdvisor(data.advisor as AnyRecord, '生成候选产品')
+    if (created.length) {
+      const product = created[0]?.product as AnyRecord | undefined
+      if (product) {
+        advisor.value = { ...(advisor.value || {}), primary: primaryFromRefinedProduct(product, primarySpec.value || {}) }
+        editingProduct.value = { id: Number(product.id || created[0].product_id), name: String(product.product_name || primary.product_name) }
+      }
+    }
     selectedStage.value = created.length ? 3 : 2
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
+}
+
+async function selectPlanAndGenerate(item: AnyRecord) {
+  activeAdjust.value = ''
+  editingProduct.value = null
+  const intendedKey = planKey(item)
+  if (!item.is_current) {
+    brief.value = String(item.message || item.name || '')
+    await submit()
+    if (selectedPlanKey.value !== intendedKey) return
+  }
+  if (primarySpec.value && !submitting.value) await generateFromPlan(primarySpec.value)
 }
 
 async function changeGenerationInventory() {
@@ -510,14 +587,30 @@ async function changeGenerationInventory() {
   await ask(`改为 ${targetDate} 的 ${roomType}`)
 }
 
-function toggleEvidence(section: typeof panel.value) {
+async function toggleEvidence(section: typeof panel.value) {
   panel.value = panel.value === section ? '' : section
-  if (panel.value && evidenceFold.value) evidenceFold.value.open = true
+  if (panel.value && evidenceFold.value) {
+    evidenceFold.value.open = true
+    await ensureEvidence(panel.value)
+  }
 }
 
-function selectEvidence(section: typeof panel.value) {
+async function selectEvidence(section: typeof panel.value) {
   panel.value = section
   if (evidenceFold.value) evidenceFold.value.open = true
+  if (section) await ensureEvidence(section)
+}
+
+async function openEvidence(section: typeof panel.value) {
+  selectedStage.value = 1
+  panel.value = section
+  await nextTick()
+  if (evidenceFold.value) evidenceFold.value.open = true
+  if (section) await ensureEvidence(section)
+}
+function askOperatingQuestion(question: string) {
+  brief.value = question
+  void submit()
 }
 
 function resizeVisitorPreview(event: Event) {
@@ -692,7 +785,7 @@ async function confirm(proposal: AnyRecord, action: 'DRAFT' | 'PUBLISH') {
     proposals.value = proposals.value.filter((item) => Number(item.id) !== Number(proposal.id))
     sessionProposalIds.value = sessionProposalIds.value.filter((id) => id !== Number(proposal.id))
     resolvedCandidateCount.value += 1
-    selectedStage.value = 3
+    selectedStage.value = 4
     showToast(action === 'PUBLISH' ? '产品已发布并完成库存复核' : '已加入产品草稿，可以继续生成营销素材')
   } catch (error) { showToast(errorMessage(error)) }
 }
@@ -794,6 +887,12 @@ function statusLabel(value: unknown) {
   return labels[key] || (/^[A-Z_]+$/.test(key) ? '已处理' : String(value || '已处理'))
 }
 
+function weatherScenarioLabel(row: AnyRecord) {
+  if (!row.usable) return '待核验'
+  const labels: Record<string, string> = { RAIN: '有雨', SUNNY: '晴', CLOUDY: '多云' }
+  return labels[String(row.scenario || '')] || '待核验'
+}
+
 function normalizePrimaryParty(primary: AnyRecord) {
   const defaults: Record<string, number> = { FAMILY: 3, COUPLE: 2, FRIENDS: 3, SOLO: 1, LOCAL_WEEKEND: 2 }
   const crowd = String(primary.crowd || '').toUpperCase()
@@ -851,7 +950,7 @@ function candidateReason(proposal: AnyRecord) {
     const quantity = row.quantity_per_package || 1
     bits.push(`酒店服务「${row.resource_name}」每套 ${quantity} 份，已纳入容量校验`)
   }
-  if (topCrowds.length) bits.push(`近 14 天${crowdLabel(topCrowds[0].target_crowd)}成交最集中（${topCrowds[0].confirmed_orders} 单）`)
+  if (topCrowds.length) bits.push(`近 15 天${crowdLabel(topCrowds[0].target_crowd)}成交最集中（${topCrowds[0].confirmed_orders} 单）`)
   if (product.bottleneck_resource) bits.push(`可售上限受「${product.bottleneck_resource}」限制，本轮最多 ${product.sale_quantity} 套`)
   if (product.suggested_price !== undefined && product.unit_cost !== undefined) {
     bits.push(`建议售价 ¥${product.suggested_price}，单位成本 ¥${product.unit_cost}，毛利率 ${marginText(product.gross_margin)}`)
@@ -952,11 +1051,11 @@ const currentObjectLabel = computed(() => {
   return `当前方案 · ${primary.target_date} · ${primary.room_type}${composition ? ` × ${composition}` : ''}`
 })
 
-const AUTO_BRIEF = '重新读取未来17天房态、近14天订单和合作资源，按当前已选方向重新计算；如果没有可用组合，请说明具体原因和需要补充的数据'
+const AUTO_BRIEF = '结合已读取的房态、近15天订单和合作资源，按经营分析阶段记录的关注方向给出产品推荐；如果没有可用组合，请说明具体原因和需要补充的数据'
 
 async function autoStart() {
   submitting.value = true
-  processingMessage.value = '正在读取经营数据并更新推荐…'
+  processingMessage.value = '正在结合房态、近15日成交、合作资源与经营分析关注点生成方案方向…'
   try {
     const conversationId = await ensureConversation()
     const response = await hotelApi.advisor(Number(conversationId), AUTO_BRIEF, true)
@@ -966,22 +1065,23 @@ async function autoStart() {
     const nextPrimary = (advisor.value?.primary as AnyRecord) || null
     previousPrimary.value = nextPrimary
     if (nextPrimary && !targetInventoryKey.value) targetInventoryKey.value = `${nextPrimary.target_date}|${nextPrimary.room_type}`
+    selectedStage.value = 2
+    advisorAnalysisSignature.value = analysisSignature()
+    advisorLoadedThisVisit.value = true
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
 }
 
-onMounted(async () => { await load(); await autoStart() })
+onMounted(async () => { selectedStage.value = 1; await load() })
 </script>
 
 <template>
   <section class="ai-ops">
-    <header class="page-head">
-      <div class="head-actions">
-        <span v-if="loadedAt" class="muted">数据更新 {{ loadedAt }}</span>
-        <el-button size="small" plain :loading="submitting" @click="selectedStage = null; autoStart()">刷新可用资源</el-button>
-        <el-button size="small" plain @click="historyOpen = true">操作历史<template v-if="operationLog.length">（{{ operationLog.length }}）</template></el-button>
-      </div>
-    </header>
+    <div v-toolbar class="head-actions">
+      <span v-if="loadedAt" class="muted">数据更新 {{ loadedAt }}</span>
+      <el-button size="small" plain :loading="submitting || loading" @click="refreshData">刷新经营数据</el-button>
+      <el-button size="small" plain @click="historyOpen = true">操作历史<template v-if="operationLog.length">（{{ operationLog.length }}）</template></el-button>
+    </div>
     <div v-if="submitting" class="recompute-popover" role="status"><span class="recompute-spinner" />{{ processingMessage }}</div>
 
     <!-- ① 流程步骤 -->
@@ -998,20 +1098,20 @@ onMounted(async () => { await load(); await autoStart() })
 
     <!-- ② 经营状态 -->
     <section class="fact-strip">
-      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="toggleEvidence('inventory')">
+      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="openEvidence('inventory')">
         <span>待消化房量</span>
-        <strong>{{ pressure.unsold_room_nights ?? 0 }} 间</strong>
-        <small>未来 {{ pressure.window_days ?? 17 }} 天 · {{ pressure.room_type_count ?? 0 }} 种房型</small>
+        <strong>{{ dataReady ? `${pressure.unsold_room_nights ?? 0} 间` : (loadError ? '读取失败' : '读取中') }}</strong>
+        <small>{{ dataReady ? `未来 ${pressure.window_days ?? 17} 天 · ${pressure.room_type_count ?? 0} 种房型` : (loadError ? '请重试' : '正在读取客房库存') }}</small>
       </button>
-      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="toggleEvidence('inventory')">
+      <button type="button" class="fact-card" :class="{ active: panel === 'inventory' }" @click="openEvidence('inventory')">
         <span>重点库存</span>
-        <strong>{{ focusRoom?.room_type || '—' }} {{ focusRoom?.remaining ?? 0 }} 间</strong>
-        <small>{{ focusRoom?.target_date || '暂无数据' }}</small>
+        <strong>{{ dataReady ? (focusRoom ? `${focusRoom.room_type} ${focusRoom.remaining} 间` : '暂无可售房量') : (loadError ? '读取失败' : '读取中') }}</strong>
+        <small>{{ dataReady ? (focusRoom?.target_date || '未来日期暂无可售客房') : (loadError ? '请重试' : '正在读取库存分布') }}</small>
       </button>
-      <button type="button" class="fact-card" :class="{ active: panel === 'resources' }" @click="toggleEvidence('resources')">
+      <button type="button" class="fact-card" :class="{ active: panel === 'resources' }" @click="openEvidence('resources')">
         <span>可用合作资源</span>
-        <strong>{{ pressure.available_resource_count ?? 0 }} 个</strong>
-        <small>重点日期可组包</small>
+        <strong>{{ dataReady ? `${pressure.available_resource_count ?? 0} 个` : (loadError ? '读取失败' : '读取中') }}</strong>
+        <small>{{ dataReady ? '重点日期可组包' : (loadError ? '请重试' : '正在读取合作资源') }}</small>
       </button>
       <div class="fact-actions">
         <span class="weather-chip">杭州 · {{ weatherLabel }}</span>
@@ -1019,90 +1119,88 @@ onMounted(async () => { await load(); await autoStart() })
       </div>
     </section>
 
-    <!-- ③ 经营分析：证据与本轮执行摘要 -->
-    <section class="panel stage-panel">
+    <div v-if="loadError" class="panel empty-state">经营数据暂时无法读取：{{ loadError }} <el-button type="primary" @click="load">重新加载</el-button></div>
+
+    <!-- ③ 经营分析：数据、判断与产品影响留在各自证据页签中 -->
+    <section v-if="stageIndex === 1" class="panel stage-panel">
+      <div class="stage-panel__head"><h2>经营数据分析</h2><span class="muted">查看经营依据，也可以直接询问数据</span></div>
+      <div v-if="analysisMessages.length" class="analysis-chat" aria-live="polite">
+        <article v-for="(message, index) in analysisMessages" :key="`${message.created_at}-${index}`" class="analysis-message" :class="`analysis-message--${message.role}`">
+          <b>{{ message.role === 'user' ? '你的问题' : '经营分析' }}</b>
+          <p>{{ message.content }}</p>
+        </article>
+      </div>
       <details ref="evidenceFold" class="evidence-fold">
-        <summary>经营证据<span class="muted"> · 房态、合作资源、订单、天气、知识库</span></summary>
+        <summary>经营数据明细</summary>
         <div class="evidence-tabs">
-          <button type="button" :class="{ active: panel === 'inventory' }" @click="selectEvidence('inventory')">房态</button>
+          <button type="button" :class="{ active: panel === 'inventory' }" @click="selectEvidence('inventory')">房态数据</button>
           <button type="button" :class="{ active: panel === 'resources' }" @click="selectEvidence('resources')">合作资源</button>
-          <button type="button" :class="{ active: panel === 'orders' }" @click="selectEvidence('orders')">订单</button>
-          <button type="button" :class="{ active: panel === 'weather' }" @click="selectEvidence('weather')">天气</button>
+          <button type="button" :class="{ active: panel === 'orders' }" @click="selectEvidence('orders')">订单数据</button>
+          <button type="button" :class="{ active: panel === 'weather' }" @click="selectEvidence('weather')">天气预测</button>
           <button type="button" :class="{ active: panel === 'knowledge' }" @click="selectEvidence('knowledge')">知识库</button>
         </div>
+        <div v-if="panel && evidenceLoading === panel" class="evidence-loading">正在读取此分类的数据…</div>
+        <div v-else-if="panel && evidenceError" class="evidence-loading evidence-loading--error">
+          {{ evidenceError }} <el-button link type="primary" @click="retryEvidence">重试</el-button>
+        </div>
 
-        <p v-if="!panel" class="muted">房态、资源容量、天气与利润校验分别来自客房库存、合作资源、天气服务和财务规则。点上面的分类展开原始数据。</p>
-
-        <div v-if="panel === 'inventory'" class="evidence-body">
+        <div v-if="panel === 'inventory' && evidenceLoaded.includes('inventory')" class="evidence-body">
           <div class="chip-row">
-            <span>未来 {{ pressure.window_days ?? 17 }} 天待消化 {{ pressure.unsold_room_nights ?? 0 }} 间</span>
-            <span>有房日期 {{ pressure.date_count ?? 0 }} 个 · 房型 {{ pressure.room_type_count ?? 0 }} 种</span>
-            <span v-if="focusRoom">压力最高 {{ focusRoom.room_type }} {{ focusRoom.remaining }} 间（{{ focusRoom.target_date }}）</span>
+            <span>未来 {{ pressure.window_days ?? 17 }} 天当前可售 {{ roomEvidenceTotal }} 间夜</span>
+            <span>{{ roomEvidenceDateCount }} 个日期 · {{ roomEvidenceTypeCount }} 种房型</span>
+            <span v-if="focusRoom">待售货值最高 {{ focusRoom.room_type }} {{ focusRoom.remaining }} 间（{{ focusRoom.target_date }}）</span>
           </div>
-          <table v-if="advisor?.inventory?.length" class="reply-table">
-            <thead><tr><th>日期</th><th>房型</th><th>剩余</th><th>参考价</th></tr></thead>
-            <tbody><tr v-for="row in advisor.inventory.slice(0, 12)" :key="row.date + row.room_type"><td>{{ String(row.date).slice(5) }} {{ row.weekday }}</td><td>{{ row.room_type }}</td><td>{{ row.remaining }} 间</td><td>¥{{ row.price }}</td></tr></tbody>
+          <table v-if="roomEvidenceRows.length" class="reply-table">
+            <thead><tr><th>日期</th><th>房型</th><th>当前余量</th><th>参考价</th><th>适合人数</th><th>状态</th></tr></thead>
+            <tbody><tr v-for="row in roomEvidenceRows.slice(0, 45)" :key="row.id"><td>{{ row.available_date }}</td><td>{{ row.room_type }}</td><td>{{ row.available_count }} 间</td><td>¥{{ row.normal_price }}</td><td>{{ row.max_guests }} 人</td><td>{{ row.status === 'AVAILABLE' ? '可售' : statusLabel(row.status) }}</td></tr></tbody>
           </table>
+          <div class="evidence-analysis"><b>分析与产品影响</b><p>当前库存接口提供逐日可售间数、房型、参考价与入住人数上限；产品生成据所选日期和房型核定可售套数。系统尚无总房量及历史每日库存快照，因此这里不把可售间数包装成预测入住率。</p><small>数据来源：客房库存 · {{ insights.as_of || '当前' }}读取</small></div>
         </div>
 
-        <div v-if="panel === 'resources'" class="evidence-body">
-          <table v-if="insights.available_partner_resources?.length" class="reply-table">
-            <thead><tr><th>合作资源</th><th>名额</th><th>室内</th><th>适配客群</th></tr></thead>
-            <tbody><tr v-for="row in insights.available_partner_resources" :key="row.name"><td>{{ row.name }}</td><td>{{ row.remaining_capacity }}</td><td>{{ row.indoor ? '是' : '否' }}</td><td>{{ crowdListLabel(row.suitable_crowds) }}</td></tr></tbody>
+        <div v-if="panel === 'resources' && evidenceLoaded.includes('resources')" class="evidence-body">
+          <div class="chip-row"><span>未来日期内 {{ resourceEvidenceRows.length }} 项合作体验可组包</span><span>酒店权益 {{ serviceEvidenceRows.length }} 项</span><span>含历史产品关联次数与近15日确认订单</span></div>
+          <table v-if="resourceEvidenceRows.length" class="reply-table">
+            <thead><tr><th>日期</th><th>合作资源</th><th>库存 / 结算价</th><th>适配客群</th><th>关联产品</th><th>近15日成交</th></tr></thead>
+            <tbody><tr v-for="row in resourceEvidenceRows.slice(0, 35)" :key="row.id"><td>{{ row.available_date }}</td><td><b>{{ row.name }}</b><small class="table-subline">{{ row.merchant_name || row.category }} · {{ row.indoor ? '室内' : '户外' }} · {{ row.address || '地址待补充' }}</small></td><td>{{ row.remaining_capacity }} 份 · ¥{{ row.settlement_price }}</td><td>{{ crowdListLabel(row.suitable_crowds) }}</td><td>{{ row.product_count }} 个</td><td>{{ row.recent_confirmed_orders }} 单</td></tr></tbody>
           </table>
-          <p v-else class="muted">重点日期暂无可组包的合作资源。</p>
+          <table v-if="serviceEvidenceRows.length" class="reply-table"><thead><tr><th>日期</th><th>酒店服务</th><th>余量</th><th>适用客群</th></tr></thead><tbody><tr v-for="row in serviceEvidenceRows.slice(0, 20)" :key="row.id"><td>{{ row.available_date }}</td><td>{{ row.name }}</td><td>{{ row.available_quantity }} 份</td><td>{{ crowdListLabel(row.suitable_crowds) }}</td></tr></tbody></table>
+          <p v-if="!resourceEvidenceRows.length && !serviceEvidenceRows.length" class="muted">当前日期范围内没有可用合作资源或酒店权益。</p>
+          <div class="evidence-analysis"><b>分析与产品影响</b><p>名额决定体验可组合的日期与产品上限；关联产品数反映资源曾进入多少个产品，近15日成交数按确认订单回溯。可用名额为零或未开放组包的资源不会进入推荐。</p><small>数据来源：合作资源、酒店服务、产品组成及确认订单记录</small></div>
         </div>
 
-        <div v-if="panel === 'orders'" class="evidence-body">
+        <div v-if="panel === 'orders' && evidenceLoaded.includes('orders')" class="evidence-body">
           <div class="chip-row">
-            <span>近 14 天已确认 {{ recentConfirmedRows.length }} 单</span>
+            <span>近 15 天已确认 {{ recentOrderSummary.confirmed_count ?? recentConfirmedRows.length }} 单</span>
             <span>成交 ¥{{ recentConfirmedRevenue }}</span>
-            <span>订单最多客群 {{ crowdLabel(insights.top_crowds?.[0]?.target_crowd) || '暂无' }}</span>
+            <span>订单最多客群 {{ crowdLabel(recentOrderSummary.top_crowds?.[0]?.target_crowd) || '暂无' }}</span>
+            <span>平均订单 ¥{{ recentOrderSummary.average_order_value ?? '—' }}</span>
           </div>
-          <ul v-if="signals.length" class="signal-list"><li v-for="(signal, index) in signals" :key="index">{{ signal.message }}</li></ul>
-          <table class="reply-table">
+          <div class="evidence-split">
+            <div><b>近期成交产品</b><table class="reply-table"><thead><tr><th>产品</th><th>确认单</th><th>成交金额</th></tr></thead><tbody><tr v-for="row in (recentOrderSummary.top_products || [])" :key="row.product_id"><td>{{ row.product_name }}</td><td>{{ row.confirmed_orders }}</td><td>¥{{ row.revenue }}</td></tr><tr v-if="!recentOrderSummary.top_products?.length"><td colspan="3" class="muted">近15日暂无成交产品</td></tr></tbody></table></div>
+            <div><b>近期客群结构</b><table class="reply-table"><thead><tr><th>客群</th><th>确认单</th><th>占比</th></tr></thead><tbody><tr v-for="row in (recentOrderSummary.top_crowds || [])" :key="row.target_crowd"><td>{{ crowdLabel(row.target_crowd) }}</td><td>{{ row.confirmed_orders }}</td><td>{{ row.share }}%</td></tr><tr v-if="!recentOrderSummary.top_crowds?.length"><td colspan="3" class="muted">暂无足够成交样本判断客群</td></tr></tbody></table></div>
+          </div>
+          <table v-if="recentOrderRows.length" class="reply-table">
             <thead><tr><th>产品</th><th>类别</th><th>金额</th><th>日期</th><th>状态</th></tr></thead>
-            <tbody><tr v-for="row in recentOrderRows.slice(0, 8)" :key="row.product_name + row.target_date"><td>{{ row.product_name }}</td><td>{{ categoryLabel(row.category) }}</td><td>¥{{ row.amount }}</td><td>{{ row.target_date }}</td><td>{{ statusLabel(row.status) }}</td></tr><tr v-if="!recentOrderRows.length"><td colspan="5" class="muted">近 14 天没有出行记录。</td></tr></tbody>
+            <tbody><tr v-for="row in recentOrderRows" :key="row.id"><td>{{ row.product_name }}</td><td>{{ categoryLabel(row.category) }}</td><td>¥{{ row.amount }}</td><td>{{ String(row.confirmed_at || row.created_at || '').slice(0, 10) }}</td><td>{{ statusLabel(row.status) }}</td></tr></tbody>
           </table>
-          <p class="muted">仅使用汇总经营数据，不含游客个人信息。</p>
+          <div v-if="!recentOrderRows.length" class="muted">近15天没有新订单记录。</div>
+          <div class="evidence-analysis"><b>分析与产品影响</b><p v-if="recentOrderSummary.confirmed_count">成交分布按订单确认时间统计，客群来自已成交产品的目标客群。{{ recentOrderSummary.top_crowds?.length ? `当前成交较集中的客群是${crowdLabel(recentOrderSummary.top_crowds[0].target_crowd)}；` : '' }}生成产品时可将此作为方向参考，不会覆盖用户选择。</p><p v-else>近15日没有确认成交，系统不会从零样本推断主力客群；推荐仍可基于当前房态、可用资源和天气生成。</p><small>金额优先读取提交时的价格快照；旧记录缺少快照时按当前产品价估算（{{ recentOrderSummary.estimated_amount_count ?? 0 }} 笔）。</small></div>
         </div>
 
-        <div v-if="panel === 'weather'" class="evidence-body">
-          <div class="chip-row">
-            <span>天气：{{ weatherLabel }}</span>
-            <span>气温：{{ overview.weather?.temperature_min ?? '—' }}–{{ overview.weather?.temperature_max ?? '—' }}℃</span>
-            <span>降雨概率：{{ overview.weather?.precipitation_probability ?? '—' }}%</span>
-            <span>核验状态：{{ overview.weather?.usable ? '已核验' : '待确认' }}</span>
-          </div>
-          <p>{{ overview.weather?.advisory || '天气信息读取中。' }}</p>
+        <div v-if="panel === 'weather' && evidenceLoaded.includes('weather')" class="evidence-body">
+          <div class="chip-row"><span>杭州未来 {{ weatherEvidenceRows.length }} 天逐日预报</span><span>来源：{{ weatherEvidenceRows.find((row) => row.usable)?.source_name || '天气服务' }}</span><span>天气用于体验适配，不作为生成硬性限制</span></div>
+          <table class="reply-table"><thead><tr><th>日期</th><th>天气</th><th>温度</th><th>降雨概率</th><th>路线建议</th></tr></thead><tbody><tr v-for="row in weatherEvidenceRows" :key="row.target_date"><td>{{ row.target_date }}</td><td>{{ weatherScenarioLabel(row) }}</td><td>{{ row.temperature_min ?? '—' }}–{{ row.temperature_max ?? '—' }}℃</td><td>{{ row.precipitation_probability == null ? '—' : `${row.precipitation_probability}%` }}</td><td>{{ !row.usable ? '待核验；不阻断生成' : row.scenario === 'RAIN' ? '优先室内，户外保留替代安排' : row.scenario === 'SUNNY' ? '可安排户外，注意防晒补水' : '室内外均可，结合路线距离安排' }}</td></tr><tr v-if="!weatherEvidenceRows.length"><td colspan="5" class="muted">当前没有逐日天气记录。</td></tr></tbody></table>
+          <div class="evidence-analysis"><b>分析与产品影响</b><p>降雨概率较高时，推荐排序会提高室内资源与有替代安排的路线；晴好天气可增加户外路线权重。天气未知或超出预报范围时只提示核验，不因此阻止产品生成。</p><small>每日预报来自天气服务；未核验日期不会显示为确定天气。</small></div>
         </div>
 
-        <div v-if="panel === 'knowledge'" class="evidence-body">
-          <p class="muted">知识库共 {{ knowledgeTotal }} 条，含开放时间、预约提示与来源，只作为行程参考，不构成套餐权益。</p>
+        <div v-if="panel === 'knowledge' && evidenceLoaded.includes('knowledge')" class="evidence-body">
+          <div class="chip-row"><span>地点知识 {{ knowledgeTotal }} 条</span><span>仅作非售卖路线参考</span><span>关联成交统计：暂无结构化地点关联</span></div>
           <table class="reply-table">
-            <thead><tr><th>地点</th><th>类别</th><th>区域</th></tr></thead>
-            <tbody><tr v-for="row in (overview.knowledge || []).slice(0, 8)" :key="row.name"><td>{{ row.name }}</td><td>{{ row.category_label || row.category }}</td><td>{{ row.area }}</td></tr></tbody>
+            <thead><tr><th>地点</th><th>适用信息</th><th>开放 / 预约</th><th>核验与来源</th></tr></thead>
+            <tbody><tr v-for="row in (overview.knowledge || []).slice(0, 12)" :key="row.name"><td><b>{{ row.name }}</b><small class="table-subline">{{ row.address || row.area }}</small></td><td>{{ row.category_label || row.category }} · {{ crowdListLabel(row.suitable_crowds) }} · {{ row.weather_adaptations_label || row.weather_adaptations || '天气未标注' }}</td><td>{{ row.opening_hours || '开放时间未登记' }}<small class="table-subline">{{ row.reservation_notice || '无预约说明' }}</small></td><td>{{ row.verification_status === 'ACTIVE' ? '已核验' : row.verification_status === 'STALE' ? '信息待更新' : '需复核' }}<small class="table-subline">{{ row.source_name || '来源未登记' }} · {{ row.verified_at || row.source_updated_at || '无核验日期' }}</small></td></tr></tbody>
           </table>
+          <div class="evidence-analysis"><b>分析与产品影响</b><p>知识库补充地点地址、开放时间、适配客群与天气信息，用于丰富非售卖路线和说明行程衔接；正式包含的权益仍必须来自有库存和结算价的合作资源或酒店服务。</p><small>当前知识地点没有与产品路线、订单建立结构化外键，因此不展示伪造的历史成交排名。</small></div>
         </div>
-      </details>
-    </section>
-
-    <!-- AI 执行摘要 -->
-    <section class="panel stage-panel">
-      <details class="evidence-fold">
-        <summary>AI 执行摘要<span class="muted"> · 这一轮读了什么、校验了什么</span></summary>
-        <ul class="summary-list">
-            <li v-for="item in executionSummary" :key="item.label"><b>✓ {{ item.label }}</b><span>{{ item.value }}</span></li>
-        </ul>
-        <details v-if="judgement.trace?.length" class="tech-fold">
-          <summary>查看技术详情</summary>
-          <ol class="trace-list">
-            <li v-for="step in judgement.trace" :key="step.tool" :class="step.status">
-              <b>{{ step.tool_label || step.tool }}</b><span>{{ step.detail }}</span><em>{{ step.status === 'ok' ? '已通过' : step.status === 'pass' ? '已通过' : '需注意' }}</em>
-            </li>
-          </ol>
-          <p class="muted">技术详情保留原始工具标识，供开发与评审核对。</p>
-        </details>
       </details>
     </section>
 
@@ -1275,11 +1373,124 @@ onMounted(async () => { await load(); await autoStart() })
       </div>
     </section>
 
-    <!-- ⑤ Step 3：候选确认。这里不再显示产品方案编辑控件。 -->
+    <!-- ④ Step 3：产品已生成后才出现具体产品的调整控件。 -->
     <section v-if="stageIndex === 3" class="panel stage-panel">
+      <div class="stage-panel__head"><h2>产品微调</h2><span class="muted">经营分析阶段的关注方向已带入；在这里调整已生成的具体产品</span></div>
+      <!-- 当前选择直接展开在产品微调阶段，推荐方向只负责比较。 -->
+      <div v-if="primarySpec" class="selected-plan-detail">
+        <div class="selected-plan-detail__head">
+          <div>
+            <span class="section-kicker">当前选择</span>
+            <h3>{{ primarySpec.product_name }}</h3>
+            <p class="muted">{{ primarySpec.target_date }}（{{ primarySpec.weekday }}） · {{ primarySpec.crowd_label }} · {{ primarySpec.room_type }}</p>
+          </div>
+        </div>
+        <article class="decision-card" :class="{ 'is-busy': submitting, 'is-flash': cardFlash }">
+          <div class="decision-card__top">
+            <div class="decision-card__head">
+              <p class="decision-card__include"><b>产品组成：</b>{{ primarySpec.room_type }} 1 晚<template v-for="exp in primarySpec.experiences" :key="exp.name"> · {{ exp.name }}<template v-if="exp.window">（{{ exp.window }}）</template></template><template v-for="service in (primarySpec.services || [])" :key="service.id || service.name"> · {{ service.name }} × {{ service.quantity || primarySpec.party_size }}</template></p>
+              <p v-if="primarySpec.route_note" class="decision-card__route">路线调整：{{ primarySpec.route_note }}</p>
+            </div>
+          </div>
+
+          <div class="figure-row">
+            <span>建议售价 <b>¥{{ primarySpec.price }}</b></span>
+            <span>可售 <b>{{ primarySpec.max_sellable }} 套</b></span>
+            <span>毛利率 {{ primarySpec.margin }}%</span>
+          </div>
+
+          <div v-if="budgetShortfall" class="budget-note">
+            <p>当前条件下没有 ¥{{ budgetShortfall.requested }} 以内、且满足最低利润要求的组合，最低可售价为 ¥{{ budgetShortfall.lowest }}。</p>
+            <div class="option-row"><button v-for="option in budgetShortfall.options" :key="option.label" type="button" @click="ask(option.message)">{{ option.label }}</button></div>
+          </div>
+
+          <div v-if="primarySpec.structure" class="product-structure">
+            <div v-for="section in primarySpec.structure" :key="section.label" class="structure-row">
+              <b>{{ section.label }}</b>
+              <span v-for="item in section.items" :key="item.name">{{ item.name }}<template v-if="item.quantity"> × {{ item.quantity }}</template><template v-if="item.window"> · {{ item.window }}</template></span>
+            </div>
+          </div>
+
+          <div v-if="primarySpec.itinerary_days?.length" class="itinerary-days">
+            <article v-for="day in primarySpec.itinerary_days" :key="day.day_index" class="itinerary-day">
+              <header><b>{{ day.label }} · {{ day.title }}</b><span>{{ day.date }}</span></header>
+              <p class="itinerary-day__summary">{{ day.summary }}</p>
+              <div v-for="(item, index) in day.items" :key="String(day.day_index) + '-' + String(index)" class="itinerary-entry">
+                <time>{{ item.time || '时间待确认' }}</time>
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <span v-if="item.route_only" class="route-only-badge">路线建议 · 非套餐权益</span>
+                  <p>{{ item.description }}</p>
+                  <details v-if="item.address || item.duration_text || item.area || item.notes" class="itinerary-entry__details">
+                    <summary>路线详情</summary>
+                    <small>{{ [item.address, item.duration_text, item.area].filter(Boolean).join(' · ') }}</small>
+                    <small v-if="item.notes" class="itinerary-entry__note">出行前核验：{{ item.notes }}</small>
+                  </details>
+                </div>
+              </div>
+              <details v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-fold">
+                <summary>查看转场与核验</summary>
+                <div class="route-transfer-list">
+                  <p v-for="leg in (routeForDay(day.day_index)?.legs || [])" :key="leg.from_stop + leg.to_stop">
+                    {{ leg.from_stop }} → {{ leg.to_stop }} · {{ leg.distance_label || '交通机动' }}<template v-if="leg.minutes"> · 预留约 {{ leg.minutes }} 分钟</template><template v-else> · 具体地点待定，暂不估算耗时</template>
+                    <small>{{ leg.note }}</small>
+                  </p>
+                </div>
+              </details>
+            </article>
+          </div>
+
+          <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more">
+            <summary>价格与收益</summary>
+            <div class="key-evidence">
+              <div><span>单位成本</span><b>¥{{ primarySpec.cost }}</b></div>
+              <div><span>最低合法价</span><b>¥{{ primarySpec.floor_price }}</b></div>
+              <div><span>建议售价</span><b>¥{{ primarySpec.price }}</b></div>
+              <div><span>容量瓶颈</span><b>{{ primarySpec.bottleneck || '已通过' }}</b></div>
+            </div>
+            <div v-if="primarySpec.cost_breakdown?.length" class="calculation-list">
+              <div v-for="item in primarySpec.cost_breakdown" :key="item.label"><span>{{ item.label }}</span><b>¥{{ item.value }}</b></div>
+            </div>
+            <p v-if="primarySpec.pricing_basis?.length" class="muted">定价依据：{{ primarySpec.pricing_basis.join('；') }}</p>
+          </details>
+
+          <div class="decision-card__actions">
+            <el-button type="primary" :disabled="submitting || Boolean(budgetShortfall)" @click="generateFromPlan(primarySpec)">{{ primarySpec.product_id ? '继续优化当前产品' : '生成候选产品' }}</el-button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'resources' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'resources' ? '' : 'resources'">换资源</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'price' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'price' ? '' : 'price'">调价格</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'crowd' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'crowd' ? '' : 'crowd'">换客群</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'route' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'route' ? '' : 'route'">改路线</button>
+            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'service' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'service' ? '' : 'service'">增加资源</button>
+          </div>
+
+          <div v-if="activeAdjust === 'price'" class="adjust-panel">
+            <div class="adjust-panel__head"><b>调整建议售价</b><span class="muted">当前 ¥{{ primarySpec.price }}，最低合法价 ¥{{ primarySpec.floor_price }}；改价会重新跑容量与利润校验</span></div>
+            <div class="option-row"><button type="button" @click="ask(`价格按最低合法价 ${primarySpec.floor_price} 来`)">按最低合法价 ¥{{ primarySpec.floor_price }}</button><button type="button" @click="ask('价格降到 650 以内')">降到 650 以内</button><button type="button" @click="ask('价格降到 600 以内')">降到 600 以内</button></div>
+            <div class="price-input"><input v-model="priceTarget" inputmode="numeric" placeholder="输入目标价，例如 620" /><el-button size="small" type="primary" :disabled="submitting" @click="applyPriceTarget">按这个价格重算</el-button></div>
+          </div>
+
+          <div v-if="activeAdjust === 'crowd'" class="adjust-panel"><div class="adjust-panel__head"><b>切换目标客群</b><span class="muted">仅修改目标客群，房型、体验与酒店权益保持不变；若原资源的客群标签不匹配，会明确提示核对</span></div><div class="option-row"><button v-for="item in crowdChoices" :key="item.label" type="button" @click="ask(item.message)">{{ item.label }}</button></div></div>
+
+          <div v-if="activeAdjust === 'resources'" class="adjust-panel"><div class="adjust-panel__head"><b>替换当前合作资源</b><span class="muted">保持日期、房型和客群，只替换核心体验；增加第二项体验请使用“增加资源”。</span></div><div v-if="resourceSwaps.length" class="alt-grid"><article v-for="item in resourceSwaps" :key="`swap-${item.name}`" class="alt-card"><h3>{{ item.name }}</h3><p class="muted">{{ item.window || '按场次' }} · 仍可支撑 {{ item.sets }} 套 · 预估价 ¥{{ item.estimated_price }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p class="alt-card__why">{{ item.indoor ? '室内体验，雨天不受影响。' : '户外体验，出发前会再核对天气。' }}每人结算 ¥{{ item.settlement_price }}。</p><el-button size="small" plain @click="ask(`${primarySpec.target_date} 的 ${primarySpec.room_type} 换成 ${item.name}`)">换成这个体验</el-button></article></div><p v-else class="muted">当前日期与房型下没有其它可用合作资源。</p></div>
+
+          <div v-if="activeAdjust === 'route'" class="adjust-panel"><div class="adjust-panel__head"><b>选择路线调整方式</b><span class="muted">先选安排，再由 AI 按场次和天气重新校验。</span></div><div class="option-row"><button type="button" @click="ask('路线留出更多自由时间，晚上体验结束后直接回酒店')">留出自由时间</button><button type="button" @click="ask('优先室内路线，减少户外移动')">优先室内路线</button><button type="button" @click="ask('保持当前体验，只调整先后顺序')">只调先后顺序</button></div></div>
+
+          <div v-if="activeAdjust === 'service'" class="adjust-panel"><div class="adjust-panel__head"><b>选择要增加的体验或酒店权益</b><span class="muted">按客群、场次、天气、余量和路线匹配度排序；绿色优先推荐，红色表示不建议优先。</span></div><div v-if="availableAddResources.length" class="alt-grid"><article v-for="item in availableAddResources" :key="`${item.kind}-${item.id || item.name}`" class="alt-card" :class="recommendationClass(item)"><div class="resource-card__head"><span class="section-kicker">{{ item.kind }}<template v-if="item.fit_label"> · {{ item.fit_label }}</template></span><span class="recommendation-badge" :class="recommendationClass(item)">{{ recommendationLabel(item) }}</span></div><h3>{{ item.name }}</h3><p class="muted">可售 {{ item.sets ?? item.available_quantity ?? '—' }} 套<template v-if="item.window"> · {{ item.window }}</template> · 单人成本 ¥{{ item.settlement_price ?? item.unit_cost ?? '—' }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p v-if="item.fit_reason" class="resource-fit-note">{{ item.fit_reason }}</p><el-button size="small" plain :disabled="item.addable === false" @click="ask(item.kind === '体验' ? `增加体验：${item.name}` : `增加酒店服务：${item.name}`)">{{ item.is_selected ? '已加入' : item.addable === false ? '暂不可加入' : `增加这项${item.kind}` }}</el-button></article></div><p v-else class="muted">当前日期没有已启用组包的合作体验或酒店权益。请在合作资源池添加资源并允许组包，再刷新方案。</p></div>
+
+          <details class="reason-fold"><summary>展开推荐依据与风险</summary><div class="detail-tabs"><button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">经营价值</button><button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button><button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险与限制</button><button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button></div><div class="detail-body"><template v-if="detailTab === 'basis'"><p v-for="item in (primarySpec.reason_sections || [])" :key="item.label"><b>{{ item.label }}：</b>{{ item.text }}</p><p v-if="!primarySpec.reason_sections?.length">{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p></template><template v-else-if="detailTab === 'value'"><p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p></template><template v-else-if="detailTab === 'risk'"><p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p></template><template v-else><p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p></template></div></details>
+        </article>
+      </div>
+      <div class="decision-card__actions stage-next">
+        <el-button type="primary" :disabled="!sessionProposalIds.length" @click="selectedStage = 4">查看游客端预览</el-button>
+        <span class="muted">完成调整后进入最终展示与发布</span>
+      </div>
+    </section>
+
+    <!-- ⑤ Step 4：游客端预览与发布。 -->
+    <section v-if="stageIndex === 4" class="panel stage-panel">
       <div class="stage-panel__head">
-        <h2>游客端预览</h2>
-        <span class="muted">方案已在上一阶段完成调整；这里检查成品展示并发布</span>
+        <h2>游客端预览与发布</h2>
+        <span class="muted">产品文案、资源与价格已在上一步确认</span>
       </div>
       <p v-if="primarySpec" class="source-plan">来源方案：{{ primarySpec.product_name }} · {{ primarySpec.room_type }} × {{ primaryExperience?.name || '当前体验' }} · ¥{{ primarySpec.price }}</p>
       <div v-if="!candidateCards.length && resolvedCandidateCount" class="panel empty-state">本轮产品已完成确认，可前往产品库继续制作营销内容。</div>
@@ -1404,30 +1615,30 @@ onMounted(async () => { await load(); await autoStart() })
 
     <!-- 微调记录 -->
     <section v-if="refinements.length" class="panel stage-panel">
-      <div class="stage-panel__head"><h2>微调记录</h2><span class="muted">旧版本保留在版本记录里，可回退</span></div>
-      <div v-for="(item, index) in refinements" :key="`refine-${index}`" class="refine-row">
-        <p><span class="layer-badge">{{ item.layer_label }}</span>{{ item.message }}</p>
+      <div class="stage-panel__head"><h2>微调记录</h2></div>
+      <div v-for="(item, index) in refinements" :key="index" class="refine-row">
+        <strong class="refine-row__instruction">{{ item.instruction || '方案调整' }}</strong>
         <table v-if="item.changes?.length" class="reply-table">
           <thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead>
           <tbody><tr v-for="row in item.changes" :key="row.field"><td>{{ row.label }}</td><td class="muted">{{ row.before }}</td><td>{{ row.after }}</td></tr></tbody>
         </table>
-        <div v-if="item.checks?.length" class="chip-row"><span v-for="check in item.checks" :key="check.label">{{ check.label }}：{{ check.value }}</span></div>
+        <p v-else class="muted">本轮未产生字段变化。</p>
       </div>
     </section>
 
-    <!-- ⑧ 吸底输入区 -->
-    <form class="composer" @submit.prevent="submit()">
+    <!-- ⑧ 经营数据问答与已选产品微调，共用输入区但分属不同阶段。 -->
+    <form v-if="stageIndex === 1 || stageIndex === 3" class="composer" @submit.prevent="submit()">
       <div class="composer__context">
-        <span v-if="editingProduct" class="context-chip is-editing">正在微调：{{ editingProduct.name }}<button type="button" @click="stopEditing">结束</button></span>
-        <span v-else class="context-chip">正在调整：{{ currentObjectLabel }}</span>
-        <button v-if="advisor || operationLog.length" type="button" class="ghost-link" @click="clearConversation">重新开始</button>
+        <span v-if="stageIndex === 1" class="context-chip">经营数据查询助手 · 问题与关注方向会带入产品方案</span>
+        <span v-else class="context-chip is-editing">正在微调：{{ editingProduct?.name || currentObjectLabel }}</span>
+        <button v-if="advisor || operationLog.length || analysisMessages.length" type="button" class="ghost-link" @click="clearConversation">重新开始</button>
       </div>
       <div class="composer__quick">
-        <button v-for="cmd in quickCommands" :key="cmd" type="button" @click="ask(cmd)">{{ cmd }}</button>
+        <button v-for="cmd in (stageIndex === 1 ? operatingQuestions : quickCommands)" :key="cmd" type="button" @click="stageIndex === 1 ? askOperatingQuestion(cmd) : ask(cmd)">{{ cmd }}</button>
       </div>
       <div class="composer__main">
-        <textarea v-model="brief" rows="1" :placeholder="editingProduct ? '例如：价格做到 700 以内；或者换个更适合两个人的体验' : '例如：价格低一点 / 换成双人 / 不要亲子 / 改成 9 月 27 日'" @input="growInput" @keydown.enter.exact.prevent="submit()" />
-        <button type="submit" :disabled="!brief.trim() || submitting">调整方案</button>
+        <textarea v-model="brief" rows="1" :placeholder="stageIndex === 1 ? '输入经营问题，例如：近15天哪款产品成交最多？未来哪些房型余量较高？' : '例如：价格控制在 700 以内；换成更适合两人的体验；把下午路线改轻松一些'" @input="growInput" @keydown.enter.exact.prevent="submit()" />
+        <button type="submit" :disabled="!brief.trim() || submitting">{{ stageIndex === 1 ? '查询经营数据' : '调整方案' }}</button>
       </div>
     </form>
   </section>
@@ -1459,7 +1670,7 @@ onMounted(async () => { await load(); await autoStart() })
 .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* 步骤条 */
-.stage-bar ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.stage-bar ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .stage-bar li { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
 .stage-bar li button { display: flex; width: 100%; align-items: center; gap: 9px; padding: 9px 12px; border: 0; border-radius: inherit; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .stage-bar li button:disabled { cursor: default; }
@@ -1487,6 +1698,13 @@ onMounted(async () => { await load(); await autoStart() })
 .stage-panel { display: grid; gap: 12px; }
 .stage-panel__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .stage-panel__head h2 { margin: 0; font-size: 15px; }
+.analysis-chat { display: grid; gap: 8px; }
+.analysis-message { display: grid; gap: 3px; max-width: 92%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.analysis-message--user { justify-self: end; border-color: #d7e8e1; background: #f2f8f5; }
+.analysis-message--assistant { justify-self: start; }
+.analysis-message b { color: var(--teal-dark); font-size: 10.5px; }
+.analysis-message p { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.7; }
+.stage-next { align-items: center; }
 .recompute-popover { position: fixed; z-index: 100; top: 18px; left: 50%; display: flex; align-items: center; gap: 10px; max-width: min(92vw, 460px); padding: 12px 18px; border: 1px solid #d9e8e1; border-radius: 999px; background: rgba(255,255,255,.97); box-shadow: 0 12px 35px rgba(26,55,45,.16); color: #245e51; font-size: 12px; transform: translateX(-50%); }
 .recompute-spinner { width: 15px; height: 15px; flex: 0 0 auto; border: 2px solid #d8eae2; border-top-color: #267664; border-radius: 50%; animation: recompute-spin .7s linear infinite; }
 @keyframes recompute-spin { to { transform: rotate(360deg); } }
@@ -1647,30 +1865,22 @@ onMounted(async () => { await load(); await autoStart() })
 .badge-row span { padding: 2px 7px; border-radius: 999px; background: #eaf4ef; color: #2f6f60; font-size: 9.5px; }
 .candidate-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
-/* 执行摘要 */
-.summary-list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
-.summary-list li { display: flex; align-items: baseline; gap: 8px; padding: 8px 11px; border-left: 2px solid #cfe2d9; background: #f7fbf9; }
-.summary-list b { color: #2f6f60; font-size: 12px; font-weight: 600; }
-.summary-list span { color: #55635d; font-size: 11px; }
 .local-loading { padding: 11px 12px; border: 1px dashed var(--teal); border-radius: 9px; background: #f7fbf9; color: var(--teal-dark); font-size: 12px; }
 .source-plan { margin: 0; padding: 8px 11px; border-radius: 9px; background: #f7fbf9; color: #55635d; font-size: 11.5px; }
-.tech-fold { margin-top: 12px; }
-.tech-fold summary { cursor: pointer; color: var(--muted); font-size: 11px; }
-.trace-list { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
-.trace-list li { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 6px 10px; border-left: 2px solid #cfe2d9; background: #f7fbf9; font-size: 11px; }
-.trace-list li b { color: #2f6f60; font-size: 10.5px; }
-.trace-list li span { color: #55635d; }
-.trace-list li em { color: #3f8a69; font-style: normal; font-size: 10px; }
-.trace-list li.failed { border-left-color: #e0b473; background: #fff8ec; }
-.trace-list li.failed em { color: #a4703a; }
 
 /* 经营证据 */
-.evidence-fold summary, .tech-fold summary { cursor: pointer; color: var(--teal-dark); font-size: 12px; }
+.evidence-fold summary { cursor: pointer; color: var(--teal-dark); font-size: 12px; }
 .evidence-fold summary .muted { font-size: 11px; }
 .evidence-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .evidence-tabs button { padding: 4px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 11px; cursor: pointer; }
 .evidence-tabs button.active { border-color: var(--teal); background: #f1f8f4; color: var(--teal-dark); }
 .evidence-body { display: grid; gap: 8px; margin-top: 10px; }
+.evidence-analysis { display: grid; gap: 4px; padding: 11px 13px; border: 1px solid #e2ebe6; border-radius: 9px; background: #f7faf8; }
+.evidence-analysis b, .evidence-split > div > b { color: #33463f; font-size: 11.5px; }
+.evidence-analysis p { margin: 0; color: #53625b; font-size: 11.5px; line-height: 1.7; }
+.evidence-analysis small, .table-subline { display: block; color: var(--muted); font-size: 10px; line-height: 1.55; margin-top: 3px; }
+.evidence-split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.evidence-split > div { min-width: 0; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip-row span { padding: 4px 9px; border-radius: 999px; background: var(--panel-soft); color: var(--ink); font-size: 11px; }
 .signal-list { display: grid; gap: 4px; margin: 0; padding-left: 17px; color: #45524c; font-size: 11.5px; line-height: 1.7; }
@@ -1691,8 +1901,9 @@ onMounted(async () => { await load(); await autoStart() })
 .ghost-link.active { background: #f1f8f4; text-decoration: none; }
 .refine-row { display: grid; gap: 7px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
 .refine-row:last-child { border-bottom: 0; }
-.refine-row p { margin: 0; font-size: 12.5px; line-height: 1.7; }
-.layer-badge { margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: var(--teal-dark); color: #fff; font-size: 10px; }
+.refine-row__instruction { font-size: 12.5px; line-height: 1.6; }
+.refine-row .reply-table { margin-top: 2px; }
+.refine-row > p { margin: 0; font-size: 12px; }
 
 /* 吸底输入区 */
 .composer { position: sticky; bottom: 10px; z-index: 3; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 -8px 24px rgba(18, 20, 19, .1); }
@@ -1725,12 +1936,13 @@ onMounted(async () => { await load(); await autoStart() })
 .log-diffs del { color: #9a6d6d; text-decoration: line-through; }
 
 @media (max-width: 1000px) {
-  .stage-bar ol { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stage-bar ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .key-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .decision-card__top { grid-template-columns: 1fr; }
   .decision-card__top > img, .decision-card__ph { min-height: 168px; }
 }
 @media (max-width: 700px) {
+  .evidence-split { grid-template-columns: 1fr; }
   .candidate-grid { grid-template-columns: 1fr; }
   .visitor-preview-frame { height: 720px; min-height: 580px; }
   .date-room-picker { grid-template-columns: 1fr; }
@@ -1739,7 +1951,9 @@ onMounted(async () => { await load(); await autoStart() })
   .figure-row b { font-size: 10.5px; }
   .copy-editor > header { flex-direction: column; }
   .copy-field { grid-template-columns: 1fr; }
-  .stage-bar ol { grid-template-columns: 1fr; }
-  .trace-list li { grid-template-columns: 1fr; }
+  .stage-bar ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage-bar li button { padding: 8px; gap: 6px; }
+  .stage-bar b { font-size: 11px; }
+  .stage-bar small { font-size: 9px; }
 }
 </style>

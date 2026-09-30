@@ -90,13 +90,10 @@ onMounted(load)
 
 <template>
   <div class="settings-page" v-loading="loading">
-    <div class="page-head">
-      <div><h1>API 设置</h1></div>
-      <div class="header-actions">
-        <el-button plain @click="fillPreset">填入当前预设</el-button>
-        <el-button plain :loading="exporting" @click="exportData">导出数据</el-button>
-        <el-button type="primary" :loading="saving" @click="save">保存配置</el-button>
-      </div>
+    <div v-toolbar class="header-actions">
+      <el-button plain @click="fillPreset">填入当前预设</el-button>
+      <el-button plain :loading="exporting" @click="exportData">导出数据</el-button>
+      <el-button type="primary" :loading="saving" @click="save">保存配置</el-button>
     </div>
 
     <section class="panel current-panel">
