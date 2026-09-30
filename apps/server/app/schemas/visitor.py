@@ -102,6 +102,9 @@ class VisitorIntentCreate(BaseModel):
     contact_name: str = Field(min_length=1, max_length=80)
     contact_phone: str = Field(min_length=6, max_length=40)
     conversation_id: str | None = Field(default=None, max_length=120)
+    # Optional idempotency key.  Retrying with the same value returns the
+    # original order instead of reserving inventory a second time.
+    client_request_id: str | None = Field(default=None, max_length=120)
 
 
 class VisitorIntentStatusUpdate(BaseModel):

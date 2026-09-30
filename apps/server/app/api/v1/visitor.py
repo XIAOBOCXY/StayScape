@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from ...agent import AgentOrchestrator
@@ -1694,10 +1695,50 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
     return {"results": results, "trace_id": agent_result.trace_id, "fallback_used": agent_result.fallback_used, "interpreted_needs": interpreted, "provider": getattr(agent_result, "provider", "MOCK"), "skill_name": "stayscape-visitor-matcher", "skill_version": getattr(agent_result, "skill_version", "")}
 
 
+def _intent_submission_view(intent: VisitorIntent, product: TravelProduct | None, *, replayed: bool = False) -> dict[str, Any]:
+    """One response shape for both a fresh submission and an idempotent replay."""
+
+    snapshot = intent.recommendation_result if isinstance(intent.recommendation_result, dict) else {}
+    phone = intent.contact_phone or ""
+    masked = phone[:3] + "****" + phone[-4:] if len(phone) >= 7 else "***"
+    remaining = snapshot.get("remaining_quantity")
+    if remaining is None:
+        remaining = int(product.sale_quantity) if product is not None else 0
+    return {
+        "id": intent.id,
+        "product_id": intent.product_id,
+        "product_name": snapshot.get("product_name") or (product.product_name if product is not None else ""),
+        "intent_status": intent.intent_status,
+        "reservation_status": intent.reservation_status,
+        "reserved_until": intent.reserved_until,
+        "submitted_quantity": snapshot.get("submitted_quantity", 0),
+        "remaining_quantity": remaining,
+        "product_status": snapshot.get("status_after_submission") or (product.status if product is not None else ""),
+        "contact_phone_masked": masked,
+        "message": (
+            "这条购买请求已经受理过，返回的是同一次提交的结果，没有重复占用库存。"
+            if replayed
+            else "购买信息已提交，已暂占用房量、酒店服务和合作体验名额；酒店会在保留时间内联系确认。"
+        ),
+    }
+
+
 @router.post("/intents")
 async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_db)):
     if sweep_expired_intents(db):
         db.commit()
+    request_key = (request.client_request_id or "").strip()
+    if request_key:
+        # A retried submission must return the first result instead of
+        # reserving a second room and a second experience slot.
+        existing = db.scalar(
+            select(VisitorIntent).where(
+                VisitorIntent.product_id == request.product_id,
+                VisitorIntent.client_request_id == request_key,
+            )
+        )
+        if existing is not None:
+            return _intent_submission_view(existing, db.get(TravelProduct, existing.product_id), replayed=True)
     product = db.scalar(
         select(TravelProduct)
         .options(selectinload(TravelProduct.resources), selectinload(TravelProduct.adjustments))
@@ -1788,6 +1829,7 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         "other_requirements": effective.other_requirements or request.natural_language,
         "contact_name": request.contact_name,
         "contact_phone": request.contact_phone,
+        "client_request_id": request_key,
     }
     intent = VisitorIntent(
         **intent_data,
@@ -1798,7 +1840,21 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
         allocation_snapshot=allocation_snapshot,
     )
     db.add(intent)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # Two concurrent retries raced past the lookup above; the unique index
+        # rejected the loser, so roll back its reservation and replay the win.
+        db.rollback()
+        existing = db.scalar(
+            select(VisitorIntent).where(
+                VisitorIntent.product_id == request.product_id,
+                VisitorIntent.client_request_id == request_key,
+            )
+        )
+        if existing is None:
+            raise
+        return _intent_submission_view(existing, db.get(TravelProduct, existing.product_id), replayed=True)
     db.add(
         ProductAdjustmentRecord(
             product_id=product.id,
@@ -1828,8 +1884,6 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
     reconcile_published_capacity(db, product.hotel_id, priority_product_id=product.id)
     db.commit()
     db.refresh(intent)
-    phone = intent.contact_phone
-    masked = phone[:3] + "****" + phone[-4:] if len(phone) >= 7 else "***"
     await manager.broadcast(
         product.hotel_id,
         {
@@ -1849,19 +1903,7 @@ async def create_intent(request: VisitorIntentCreate, db: Session = Depends(get_
             ],
         },
     )
-    return {
-        "id": intent.id,
-        "product_id": intent.product_id,
-        "product_name": product.product_name,
-        "intent_status": intent.intent_status,
-        "reservation_status": intent.reservation_status,
-        "reserved_until": intent.reserved_until,
-        "submitted_quantity": previous_quantity,
-        "remaining_quantity": product.sale_quantity,
-        "product_status": product.status,
-        "contact_phone_masked": masked,
-        "message": "购买信息已提交，已暂占用房量、酒店服务和合作体验名额；酒店会在保留时间内联系确认。",
-    }
+    return _intent_submission_view(intent, product)
 
 
 @router.post("/intents/{intent_id}/cancel")

@@ -390,6 +390,10 @@ class VisitorIntent(TimestampMixin, Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     contact_name: Mapped[str] = mapped_column(String(80), nullable=False)
     contact_phone: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Idempotency key supplied by the client.  A retried submission carries the
+    # same value, so the API can return the original order instead of reserving
+    # a second set of rooms and experience slots.
+    client_request_id: Mapped[str] = mapped_column(String(120), default="", nullable=False, index=True)
 
     product: Mapped[TravelProduct] = relationship(back_populates="visitor_intents")
 
