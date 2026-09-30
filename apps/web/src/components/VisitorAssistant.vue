@@ -236,9 +236,9 @@ onMounted(loadIntro)
 .assistant-room { display: grid; gap: 2px; min-width: 132px; padding: 9px 12px; border: 1px solid #e7ded6; border-radius: 12px; background: #fff; color: #33302e; text-decoration: none; transition: border-color .18s, box-shadow .18s; }
 .assistant-room:hover { border-color: #ff6a00; box-shadow: 0 6px 16px rgba(213, 104, 53, .12); }
 .assistant-room b { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; }
-.assistant-room b em { padding: 1px 6px; border-radius: 999px; background: #fff1e4; color: #d56835; font-size: 10px; font-style: normal; font-weight: 600; }
+.assistant-room b em { padding: 1px 6px; border-radius: 999px; background: #fff1e4; color: #d56835; font-size: 11.5px; font-style: normal; font-weight: 600; }
 .assistant-room span { color: #d56835; font-size: 14px; font-weight: 700; }
-.assistant-room small { color: #9a8f87; font-size: 10px; }
+.assistant-room small { color: #9a8f87; font-size: 11.5px; }
 .assistant-room.is-current { border-color: #ff6a00; background: #fff8f2; }
 .assistant-room.is-soldout { opacity: .5; }
 .assistant-card { display: grid; gap: 6px; }
