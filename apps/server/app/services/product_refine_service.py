@@ -15,13 +15,14 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.exceptions import AppError
-from ..models import HotelService, PartnerResource, ProductRefinement, ProductResource, RoomInventory, TravelProduct, VisitorIntent
+from ..models import HotelService, PartnerResource, ProductRefinement, ProductResource, RoomInventory, TravelProduct
 from .knowledge_service import KnowledgeService
 from .product_service import ProductService
+from .product_rules_service import ProductRulesService
 from .public_copy import build_day_plan, build_stay_plan
 
 CONTENT = "CONTENT"
@@ -91,6 +92,7 @@ class ProductRefiner:
     def __init__(self, db: Session, hotel_id: int) -> None:
         self.db = db
         self.hotel_id = hotel_id
+        self.rules = ProductRulesService(db, hotel_id)
 
     def _room_rows(self, target) -> list[RoomInventory]:
         return list(
@@ -106,29 +108,11 @@ class ProductRefiner:
         )
 
     def _price_floor(self, product: TravelProduct) -> Decimal:
-        unit_cost = Decimal(str(product.unit_cost or 0))
-        required = Decimal(str(product.minimum_gross_margin_requirement or "0.2"))
-        if required >= 1:
-            return unit_cost
-        return (unit_cost / (Decimal("1") - required)).quantize(Decimal("0.01"))
+        return self.rules.price_floor(product)
 
     def _max_sets(self, product: TravelProduct) -> int:
-        """这套商品现在最多能卖几套（房间、体验、酒店服务里最小的那个）。"""
-
-        limits: list[int] = []
-        room = self.db.get(RoomInventory, product.room_inventory_id)
-        if room is not None:
-            limits.append(max(0, int(room.available_count or 0) - self._committed_rooms(room)))
-        for row in product.resources:
-            if row.resource_type == "PARTNER_RESOURCE":
-                partner = self.db.get(PartnerResource, row.resource_id)
-                if partner is not None:
-                    limits.append(int(partner.remaining_capacity or 0) // max(1, int(row.quantity_per_package or 1)))
-            elif row.resource_type == "HOTEL_SERVICE":
-                service = self.db.get(HotelService, row.resource_id)
-                if service is not None:
-                    limits.append(int(service.available_quantity or 0) // max(1, int(row.quantity_per_package or 1)))
-        return min(limits) if limits else 0
+        """这套商品现在最多能卖几套（统一容量规则的结果）。"""
+        return self.rules.sale_quantity(product).sale_quantity
 
     def _cheaper_options(self, product: TravelProduct, target: Decimal, limit: int = 2) -> list[dict[str, Any]]:
         """价格做不到时，找成本更低的替代体验，并算清各自的底价与可售套数。"""
@@ -299,67 +283,38 @@ class ProductRefiner:
 
     # ------------------------------------------------------------ 发布前再核验
     def _committed_rooms(self, room: RoomInventory) -> int:
-        return int(
-            self.db.scalar(
-                select(func.count())
-                .select_from(VisitorIntent)
-                .join(TravelProduct, VisitorIntent.product_id == TravelProduct.id)
-                .join(RoomInventory, RoomInventory.id == TravelProduct.room_inventory_id)
-                .where(
-                    RoomInventory.hotel_id == room.hotel_id,
-                    RoomInventory.room_type == room.room_type,
-                    TravelProduct.target_date == room.available_date,
-                    VisitorIntent.reservation_status.in_(("CONFIRMED", "HELD")),
-                )
-            )
-            or 0
-        )
+        return self.rules.committed_rooms(room)
 
     def publish_check(self, product: TravelProduct) -> dict[str, Any]:
         """发布前再读一次最新库存/资源/成本，返回能不能发、最多能发几套。"""
 
         checks: list[dict[str, str]] = []
-        limits: list[int] = []
         bottlenecks: list[tuple[str, int]] = []
         alternatives: list[dict[str, Any]] = []
-        used_partner_ids = {row.resource_id for row in product.resources if row.resource_type == "PARTNER_RESOURCE"}
-
-        room = self.db.get(RoomInventory, product.room_inventory_id)
-        if room is None or str(room.status) != "AVAILABLE":
-            checks.append({"label": "客房", "value": "不通过（关联客房不存在或已停售）"})
-            limits.append(0)
-        else:
-            pool = max(0, int(room.available_count or 0) - self._committed_rooms(room))
-            limits.append(pool)
-            bottlenecks.append((f"{room.room_type} 房间", pool))
-            checks.append({"label": "客房", "value": f"通过（{room.room_type} {room.available_date} 可售 {pool} 间）"})
-
-        for row in product.resources:
-            if row.resource_type == "PARTNER_RESOURCE":
-                partner = self.db.get(PartnerResource, row.resource_id)
-                if partner is None or str(partner.status) != "AVAILABLE" or not partner.package_enabled:
-                    checks.append({"label": "体验名额", "value": f"不通过（{row.resource_name} 当前不可组包）"})
-                    limits.append(0)
+        # All capacity arithmetic comes from the shared rule service so the
+        # publish gate, the editor and the generator can never disagree.
+        rows = self.rules.capacity_breakdown(product, require_available=True)
+        for row in rows:
+            if row.kind == "ROOM":
+                if not row.available:
+                    checks.append({"label": "客房", "value": "不通过（关联客房不存在或已停售）"})
+                else:
+                    checks.append({"label": "客房", "value": f"通过（{row.name} {row.date_hint} 可售 {row.remaining} 间）"})
+            elif row.kind == "PARTNER_RESOURCE":
+                if not row.available:
+                    checks.append({"label": "体验名额", "value": f"不通过（{row.name} 当前不可组包）"})
                     alternatives.extend(self._alternatives(product, row.resource_id))
-                    continue
-                cap = int(partner.remaining_capacity or 0) // max(1, int(row.quantity_per_package or 1))
-                limits.append(cap)
-                bottlenecks.append((partner.resource_name, cap))
-                checks.append({"label": "体验名额", "value": f"通过（{partner.resource_name} 剩 {partner.remaining_capacity} 个名额 → 最多 {cap} 套）"})
-                indoor = bool(getattr(partner, "indoor", False))
-                if str(product.weather) == "RAIN" and not indoor:
-                    checks.append({"label": "天气", "value": f"注意（{partner.resource_name} 为户外，雨天需准备预案）"})
-            elif row.resource_type == "HOTEL_SERVICE":
-                service = self.db.get(HotelService, row.resource_id)
-                if service is None or str(service.status) != "AVAILABLE":
-                    checks.append({"label": "酒店服务", "value": f"不通过（{row.resource_name} 当前不可用）"})
-                    limits.append(0)
-                    continue
-                cap = int(service.available_quantity or 0) // max(1, int(row.quantity_per_package or 1))
-                limits.append(cap)
-                bottlenecks.append((service.service_name, cap))
+                else:
+                    checks.append({"label": "体验名额", "value": f"通过（{row.name} 剩 {row.remaining} 个名额 → 最多 {row.capacity} 套）"})
+                    if str(product.weather) == "RAIN" and not row.indoor:
+                        checks.append({"label": "天气", "value": f"注意（{row.name} 为户外，雨天需准备预案）"})
+            elif row.kind == "HOTEL_SERVICE" and not row.available:
+                checks.append({"label": "酒店服务", "value": f"不通过（{row.name} 当前不可用）"})
+            if row.available:
+                bottlenecks.append((row.name, row.capacity))
 
-        max_sellable = min(limits) if limits else 0
+        result = self.rules.sale_quantity(product, require_available=True)
+        max_sellable = int(result.sale_quantity)
         current = int(product.sale_quantity or 0)
         adjusted = min(current, max_sellable)
         floor = self._price_floor(product)
@@ -369,7 +324,9 @@ class ProductRefiner:
         if max_sellable <= 0:
             message = "核验未通过：当前库存或体验名额已不足，商品还不能发布。可以先换一个日期、房型或替换体验。"
         elif adjusted < current:
-            tightest = min(bottlenecks, key=lambda item: item[1])[0] if bottlenecks else "资源"
+            tightest = result.bottleneck_resource or (min(bottlenecks, key=lambda item: item[1])[0] if bottlenecks else "资源")
+            if any(item.kind == "ROOM" and item.name == tightest for item in rows):
+                tightest = f"{tightest} 房间"
             message = f"核验通过，但名额变紧：{tightest} 只能支持 {max_sellable} 套，最大可售从 {current} 套下调为 {adjusted} 套，价格与权益不变。"
         else:
             message = f"核验通过：库存、体验名额、天气与最低毛利都满足，可发布 {adjusted} 套。"
