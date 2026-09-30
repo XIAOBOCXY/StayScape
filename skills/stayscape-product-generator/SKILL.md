@@ -91,3 +91,17 @@ Complex reasoning is internal; the response is the final JSON document only.
 Multi-turn state is resolved by the outer session/orchestrator layer. Read
 `references/knowledge-contract.md`, `references/validation-retry.md` and
 `references/operating-workflow.md` only when the caller requests those modes.
+
+## 中文文案与路线规范（文旅产品写法）
+
+运营端与游客端都直接渲染这些字段，命名、路线与文案必须遵守
+`references/copy-and-route.md`：
+
+- `product_name` 8–14 字 = 场景/情绪 + 核心体验；`theme` 4–10 字；`marketing_title` ≤ 20 字。
+- 一天最多 3 个正式体验，且至少留一段自由时间；跨区转场预留 30–45 分钟，按「机动」表述。
+- 有雨时以室内为主，户外只作可替换安排；强度交替，不连续两项高强度；场次冲突先调顺序再换资源。
+- 每条行程都要有「时间 + 地点/资源名 + 做什么 + 大约多久」。
+- `marketing_content` 120–220 字，写清「谁适合来 / 一天怎么过 / 包含什么 / 坏天气为什么不扫兴」；
+  `recommendation_reason` 60–120 字，必须解释路线逻辑（顺序、转场、天气、客群）。
+- 禁用「不容错过 / 必打卡 / 顶级 / 尊享」以及「以官方公告为准」这类空话；没有具体信息就不写这一条。
+- 面向游客的输出不得出现内部枚举（FAMILY / RAIN / HARD_MAX）、内部 id、成本与毛利。
