@@ -68,6 +68,11 @@ function limitRows(chat: Chat) {
 const question = ref('')
 const chats = ref<Chat[]>([])
 const asking = ref(false)
+// 等待期间给出行进感：模型一次返回需要十几秒，分阶段提示比一句「正在查询」更好等。
+const PENDING_STEPS = ['正在检索当前在售的商品…', '正在核对房态、名额与场次…', '正在按同行人数与天气排序…', '正在整理行程与注意事项…']
+const pendingStep = ref(0)
+let pendingTimer: number | undefined
+const pendingLabel = computed(() => PENDING_STEPS[Math.min(pendingStep.value, PENDING_STEPS.length - 1)])
 const greeting = ref('你好，我可以按同行人、天气和当前在售的套餐帮你选路线。')
 const starters = ref<string[]>([])
 const scroller = ref<HTMLElement | null>(null)
@@ -104,6 +109,8 @@ async function ask(text?: string) {
   question.value = ''
   chats.value.push({ user: value })
   asking.value = true
+  pendingStep.value = 0
+  pendingTimer = window.setInterval(() => { pendingStep.value += 1 }, 2600)
   try {
     const response = await visitorApi.consult({
       product_id: props.productId ?? undefined,
@@ -126,6 +133,7 @@ async function ask(text?: string) {
     chats.value.push({ answer: errorMessage(e) })
   } finally {
     asking.value = false
+    if (pendingTimer) { window.clearInterval(pendingTimer); pendingTimer = undefined }
   }
 }
 
@@ -203,7 +211,7 @@ onMounted(loadIntro)
             </div>
           </div>
         </template>
-        <div v-if="asking" class="assistant-answer assistant-answer--pending">正在查询当前在售的套餐…</div>
+        <div v-if="asking" class="assistant-answer assistant-answer--pending">{{ pendingLabel }}</div>
       </div>
     </div>
 
