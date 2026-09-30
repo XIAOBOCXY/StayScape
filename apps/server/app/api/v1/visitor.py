@@ -22,7 +22,7 @@ from ...services.inventory_service import reconcile_published_capacity, release_
 from ...services.media_library_service import MediaLibraryService
 from ...services.knowledge_service import KnowledgeService
 from ...services.weather_service import WeatherService
-from ...services.public_copy import public_travel_copy, visitor_product_to_dict
+from ...services.public_copy import localize_internal_labels, public_travel_copy, visitor_product_to_dict
 from ...services.serializers import build_product_resource_cache, populate_product_resource_cache
 from ...rules.availability_rule import tokens
 from ...rules.crowd_rule import crowd_supported
@@ -1591,15 +1591,34 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
         suggestions = deduped[:4]
     return {
         "trace_id": result.trace_id,
-        "answer": answer,
-        "safety_notes": public_travel_copy(
-            getattr(result.value, "safety_notes", ""),
-            "如有饮食、儿童陪同或行动安排方面的需求，提交购买信息时告诉酒店即可。",
+        # 面向游客的正文一律经过中文枚举转换：模型偶尔会复述 FAMILY / RAIN 这类内部字段。
+        "answer": localize_internal_labels(answer),
+        "safety_notes": localize_internal_labels(
+            public_travel_copy(
+                getattr(result.value, "safety_notes", ""),
+                "如有饮食、儿童陪同或行动安排方面的需求，提交购买信息时告诉酒店即可。",
+            )
         ),
         # 结构化推荐依据：让助手回答不止一段话，而是「为什么推荐 / 时间怎么排 / 哪些改不了」。
-        "reasons": getattr(result.value, "reasons", None) or {},
-        "schedule_notes": getattr(result.value, "schedule_notes", None) or {},
-        "limited_adjustments": getattr(result.value, "limited_adjustments", None) or {},
+        "reasons": {
+            str(key): localize_internal_labels(text)
+            for key, text in (getattr(result.value, "reasons", None) or {}).items()
+        },
+        "schedule_notes": {
+            str(key): [
+                {**item, "content": localize_internal_labels(item.get("content", ""))}
+                if isinstance(item, dict)
+                else localize_internal_labels(item)
+                for item in (items or [])
+            ]
+            for key, items in (getattr(result.value, "schedule_notes", None) or {}).items()
+        },
+        "limited_adjustments": {
+            str(key): [localize_internal_labels(text) for text in items]
+            if isinstance(items, list)
+            else [localize_internal_labels(items)]
+            for key, items in (getattr(result.value, "limited_adjustments", None) or {}).items()
+        },
         "product": visitor_payload(db, product) if product else None,
         "suggestions": suggestions,
         # 换房型问题直接给出可点链接所需的数据（当前套餐 + 各房型 id/价格/余量）。

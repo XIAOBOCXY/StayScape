@@ -69,8 +69,8 @@ onMounted(() => {
 <style scoped>
 /* Product listing keeps the storefront tone: a quiet filter row and image-led cards. */
 .product-list {
-  width: min(1080px, 100%);
-  max-width: 1080px;
+  width: min(960px, 100%);
+  max-width: 960px;
   box-sizing: border-box;
   margin: 0 auto;
   padding: 0 0 44px;

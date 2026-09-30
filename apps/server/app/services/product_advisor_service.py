@@ -1112,6 +1112,9 @@ class ProductAdvisor:
         def replacement_price(option) -> Decimal:
             return self._estimated_price(top, option, per_package, partners=[option, *retained_partners], services=selected_services)
         # 同日期、同房型、同客群下可替换的合作资源：这是「换资源」，不改变产品框架。
+        # 上限放宽到 8 个，并在下面补上「为什么换 / 换完什么变化」，避免建议过少、不够具体。
+        swap_candidates = [row for row in (base_pool or pool) if replacement_fits(row)]
+        swap_source = {str(row.resource_name): row for row in swap_candidates}
         resource_options = [
             {
                 "name": str(option.resource_name),
@@ -1124,10 +1127,7 @@ class ProductAdvisor:
                 "indoor": bool(getattr(option, "indoor", False)),
                 "is_current": str(option.resource_name) == str(partner.resource_name),
             }
-            for option in sorted(
-                [row for row in (base_pool or pool) if replacement_fits(row)],
-                key=lambda row: (replacement_price(row), row.id),
-            )[:5]
+            for option in sorted(swap_candidates, key=lambda row: (replacement_price(row), row.id))[:8]
         ]
         recommendation_scenario = str(forecast.get("scenario") or "").upper()
         outdoor_weather_mismatch = any(
@@ -1144,6 +1144,66 @@ class ProductAdvisor:
             )
         crowd_short = {"FAMILY": "亲子短住", "COUPLE": "双人短住", "FRIENDS": "朋友短住", "SOLO": "独自短住"}.get(crowd_code, "周末短住")
         crowd_audience = {"FAMILY": "亲子家庭", "COUPLE": "情侣等双人", "FRIENDS": "朋友同行", "SOLO": "独自出行"}.get(crowd_code, "周末旅客")
+        # 「换资源」建议要具体到能直接决策：适配人群、天气、名额、价格变化、路线衔接。
+        current_price = Decimal(str(suggested))
+        for option_row in resource_options:
+            option = swap_source.get(str(option_row.get("name")))
+            if option is None:
+                continue
+            crowd_tags = {tag.strip().upper() for tag in str(option.suitable_crowds or "").split(",") if tag.strip()}
+            crowd_known = bool(crowd_tags)
+            crowd_ok = not crowd_known or crowd_code in crowd_tags or "ALL" in crowd_tags
+            indoor = bool(option_row.get("indoor"))
+            option_weather_tags = {tag.strip().upper() for tag in str(getattr(option, "weather_tags", "") or "").split(",") if tag.strip()}
+            weather_ok = indoor or not recommendation_scenario or recommendation_scenario in option_weather_tags or "ALL" in option_weather_tags
+            sets = int(option_row.get("sets") or 0)
+            price_value = Decimal(str(option_row.get("estimated_price") or 0))
+            delta = (price_value - current_price).quantize(Decimal("0.01"))
+            reasons: list[str] = []
+            if crowd_ok:
+                reasons.append(f"适合{crowd_audience}")
+                if not crowd_known:
+                    reasons.append(f"资源未标注适配人群，建议核对是否适合{crowd_label}")
+            else:
+                option_crowds = "、".join(display_crowd_label(tag) for tag in sorted(crowd_tags)) or "未注明"
+                reasons.append(f"适配人群为{option_crowds}，与当前{crowd_label}不完全匹配")
+            if indoor:
+                reasons.append("室内体验，雨天可正常执行")
+            elif not weather_ok:
+                reasons.append(f"当日{weather_text}，该资源天气标签未覆盖，需先确认是否开放")
+            else:
+                reasons.append("户外体验，出行前按当天预报复核")
+            reasons.append(f"名额可支撑 {sets} 套" if sets > 0 else "当前名额不足每套人数，需先补充名额")
+            if delta == 0:
+                reasons.append(f"换后售价约 ¥{option_row.get('estimated_price')}（与当前持平）")
+            elif delta < 0:
+                reasons.append(f"换后售价约 ¥{option_row.get('estimated_price')}（比当前低 ¥{abs(delta)}）")
+            else:
+                reasons.append(f"换后售价约 ¥{option_row.get('estimated_price')}（比当前高 ¥{delta}）")
+            origin_address = _address_for(partner, hotel_address)
+            destination_address = str(option_row.get("address") or _address_for(option, hotel_address))
+            if origin_address and destination_address and str(origin_address) != destination_address:
+                reasons.append(route_proximity(origin_address, destination_address).get("reason", ""))
+            score = (35 if crowd_ok else 0) + (20 + min(sets, 10) if sets > 0 else 0) + (15 if weather_ok else 0) + (5 if option.start_time is not None and option.start_time.hour >= 15 else 0)
+            if not crowd_ok or not weather_ok or sets <= 0:
+                level, label = "caution", "可选，需核对"
+                fit_label = "需核对客群" if not crowd_ok else ("需核对天气" if not weather_ok else "名额不足")
+            elif score >= 60:
+                level, label = "recommended", "优先推荐"
+                fit_label = "适配当前方案"
+            else:
+                level, label = "caution", "可选，需核对"
+                fit_label = "需核对路线"
+            option_row.update({
+                "id": option.id,
+                "recommendation_score": score,
+                "recommendation_level": level,
+                "recommendation_label": label,
+                "fit_label": fit_label,
+                "fit_reason": "；".join(item for item in reasons if item) + "。",
+                "price_delta": str(delta),
+                "weather_ok": weather_ok,
+            })
         route_sequence = sorted(
             selected_partners,
             key=lambda item: (item.start_time or datetime.min.time(), item.id),

@@ -36,6 +36,40 @@ _GENERIC_LANGUAGE = re.compile(
 )
 
 
+# 内部枚举（客群 / 天气 / 分层 / 预算强度）不允许出现在游客可见文案里。
+_INTERNAL_ENUM_LABELS = {
+    "FAMILY": "亲子家庭",
+    "COUPLE": "两人同行",
+    "FRIENDS": "朋友同行",
+    "SOLO": "独自出行",
+    "LOCAL_WEEKEND": "本地周末客",
+    "ALL": "不限客群",
+    "RAIN": "有雨",
+    "SUNNY": "晴天",
+    "CLOUDY": "多云",
+    "SNOW": "有雪",
+    "HARD_MAX": "预算上限",
+    "TARGET": "预算目标",
+    "FLEXIBLE": "预算弹性",
+    "MORNING": "上午",
+    "AFTERNOON": "下午",
+    "CONTENT": "内容层",
+    "EXPERIENCE": "体验层",
+    "EQUITY": "权益层",
+    "UNKNOWN": "待确认",
+}
+_ENUM_TOKEN = re.compile(r"(?<![A-Za-z0-9_])([A-Z][A-Z_]{2,})(?![A-Za-z0-9_])")
+
+
+def localize_internal_labels(value: object) -> str:
+    """把 FAMILY / RAIN 之类的内部枚举换成中文，避免直接暴露给游客。"""
+
+    text = str(value or "")
+    if not text:
+        return text
+    return _ENUM_TOKEN.sub(lambda match: _INTERNAL_ENUM_LABELS.get(match.group(1), match.group(1)), text)
+
+
 def public_travel_copy(value: object, fallback: str = "") -> str:
     """Remove operational sentences from text returned to a traveller."""
 

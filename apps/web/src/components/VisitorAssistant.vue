@@ -35,19 +35,33 @@ function nameFor(chat: Chat, id: string) {
   return found?.product_name || '推荐方案'
 }
 
+// 兜底：模型偶尔会复述内部枚举（FAMILY / RAIN…），展示前统一换成中文。
+const ENUM_LABELS: Record<string, string> = {
+  FAMILY: '亲子家庭', COUPLE: '两人同行', FRIENDS: '朋友同行', SOLO: '独自出行',
+  LOCAL_WEEKEND: '本地周末客', ALL: '不限客群', RAIN: '有雨', SUNNY: '晴天', CLOUDY: '多云', SNOW: '有雪',
+}
+
+function humanizeEnums(value: unknown) {
+  return String(value ?? '').replace(/(^|[^A-Za-z0-9_])([A-Z][A-Z_]{2,})(?![A-Za-z0-9_])/g, (match, prefix: string, token: string) => `${prefix}${ENUM_LABELS[token] || token}`)
+}
+
 function reasonRows(chat: Chat) {
-  return Object.entries(chat.reasons || {}).map(([id, text]) => ({ name: nameFor(chat, id), text: String(text) }))
+  return Object.entries(chat.reasons || {}).map(([id, text]) => ({ name: nameFor(chat, id), text: humanizeEnums(text) }))
 }
 
 function scheduleRows(chat: Chat) {
   return Object.entries(chat.schedule_notes || {})
-    .map(([id, items]) => ({ key: id, name: nameFor(chat, id), items: Array.isArray(items) ? items : [] }))
+    .map(([id, items]) => ({
+      key: id,
+      name: nameFor(chat, id),
+      items: (Array.isArray(items) ? items : []).map((item) => ({ ...item, content: humanizeEnums(item?.content) })),
+    }))
     .filter((row) => row.items.length)
 }
 
 function limitRows(chat: Chat) {
   return Object.entries(chat.limited_adjustments || {})
-    .map(([id, items]) => ({ name: nameFor(chat, id), text: Array.isArray(items) ? items.join('；') : String(items) }))
+    .map(([id, items]) => ({ name: nameFor(chat, id), text: humanizeEnums(Array.isArray(items) ? items.join('；') : items) }))
     .filter((row) => row.text)
 }
 
@@ -62,7 +76,7 @@ const canAsk = computed(() => Boolean(question.value.trim()) && !asking.value)
 
 // 按句号切段显示，避免一整段大白话，让「推荐理由」读起来更清楚。
 function answerParagraphs(chat: Chat): string[] {
-  return String(chat.answer || '')
+  return humanizeEnums(chat.answer)
     .split(/(?<=[。！？!?])/)
     .map((part) => part.trim())
     .filter(Boolean)
@@ -181,7 +195,7 @@ onMounted(loadIntro)
               <b>注意事项</b>
               <ul>
                 <li v-for="row in limitRows(chat)" :key="`limit-${row.name}`"><strong>{{ row.name }}</strong>{{ row.text }}</li>
-                <li v-if="chat.safety_notes"><strong>出行提示</strong>{{ chat.safety_notes }}</li>
+                <li v-if="chat.safety_notes"><strong>出行提示</strong>{{ humanizeEnums(chat.safety_notes) }}</li>
               </ul>
             </div>
             <div v-if="chat.follow_up_questions?.length" class="assistant-followups">

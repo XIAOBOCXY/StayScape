@@ -251,8 +251,7 @@ async function loadConversationHistory() {
       sessionProposalIds.value = proposals.value
         .filter((item) => Number(item.conversation_id) === Number(latest.id))
         .map((item) => Number(item.id))
-      // 已有待确认候选时直接停在「预览与发布」，避免用户以为候选丢了。
-      if (sessionProposalIds.value.length && !resolvedCandidateCount.value) selectedStage.value = 3
+      // 候选只在后台恢复，页面仍从「经营分析」开始：用户一步步走，不直接跳到预览发布。
     }
   } catch (error) {
     // Historical context is optional for viewing current operating data.
@@ -1198,7 +1197,11 @@ function visitorPreviewUrl(card: AnyRecord) {
 const resourceSwaps = computed<AnyRecord[]>(() => {
   const primary = primarySpec.value
   if (!primary) return []
-  return (((primary.resource_options as AnyRecord[]) || [])).filter((item) => !item.is_current)
+  return (((primary.resource_options as AnyRecord[]) || []))
+    .filter((item) => !item.is_current)
+    .slice()
+    .sort((a: AnyRecord, b: AnyRecord) => Number(b.recommendation_score || 0) - Number(a.recommendation_score || 0)
+      || Number(a.estimated_price || 0) - Number(b.estimated_price || 0))
 })
 const budgetShortfall = computed<AnyRecord | null>(() => (primarySpec.value?.budget_shortfall as AnyRecord) || null)
 
@@ -1548,11 +1551,13 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                   <strong>{{ item.title }}</strong>
                   <span v-if="item.route_only" class="route-only-badge">路线建议 · 非套餐权益</span>
                   <p>{{ item.description }}</p>
-                  <details v-if="item.address || item.duration_text || item.area || item.notes" class="itinerary-entry__details">
-                    <summary>路线详情</summary>
-                    <small>{{ [item.address, item.duration_text, item.area].filter(Boolean).join(' · ') }}</small>
-                    <small v-if="item.notes" class="itinerary-entry__note">出行前核验：{{ item.notes }}</small>
-                  </details>
+                  <!-- 不再逐条折叠「路线详情」：地点、时长、区域直接一行显示，核验提示单独一行。 -->
+                  <p v-if="item.address || item.duration_text || item.area" class="itinerary-entry__meta">
+                    <span v-if="item.address">{{ item.address }}</span>
+                    <span v-if="item.duration_text">{{ item.duration_text }}</span>
+                    <span v-if="item.area">{{ item.area }}</span>
+                  </p>
+                  <p v-if="item.notes" class="itinerary-entry__verify">出行前核验：{{ item.notes }}</p>
                 </div>
               </div>
               <details v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-fold">
@@ -1599,7 +1604,23 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 
           <div v-if="activeAdjust === 'crowd'" class="adjust-panel"><div class="adjust-panel__head"><b>切换目标客群</b><span class="muted">仅修改目标客群，房型、体验与酒店权益保持不变；若原资源的客群标签不匹配，会明确提示核对</span></div><div class="option-row"><button v-for="item in crowdChoices" :key="item.label" type="button" @click="ask(item.message)">{{ item.label }}</button></div></div>
 
-          <div v-if="activeAdjust === 'resources'" class="adjust-panel"><div class="adjust-panel__head"><b>替换当前合作资源</b><span class="muted">保持日期、房型和客群，只替换核心体验；增加第二项体验请使用“增加资源”。</span></div><div v-if="resourceSwaps.length" class="alt-grid"><article v-for="item in resourceSwaps" :key="`swap-${item.name}`" class="alt-card"><h3>{{ item.name }}</h3><p class="muted">{{ item.window || '按场次' }} · 仍可支撑 {{ item.sets }} 套 · 预估价 ¥{{ item.estimated_price }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p class="alt-card__why">{{ item.indoor ? '室内体验，雨天不受影响。' : '户外体验，出发前会再核对天气。' }}每人结算 ¥{{ item.settlement_price }}。</p><el-button size="small" plain @click="ask(`${primarySpec.target_date} 的 ${primarySpec.room_type} 换成 ${item.name}`)">换成这个体验</el-button></article></div><p v-else class="muted">当前日期与房型下没有其它可用合作资源。</p></div>
+          <div v-if="activeAdjust === 'resources'" class="adjust-panel">
+            <div class="adjust-panel__head"><b>替换当前合作资源</b><span class="muted">保持日期、房型和客群，只替换核心体验；绿色为优先推荐，黄色需要核对，换完会重新跑容量与利润校验。</span></div>
+            <div v-if="resourceSwaps.length" class="alt-grid">
+              <article v-for="item in resourceSwaps" :key="`swap-${item.name}`" class="alt-card" :class="recommendationClass(item)">
+                <div class="resource-card__head">
+                  <span class="section-kicker">{{ item.window || '按场次' }}<template v-if="item.fit_label"> · {{ item.fit_label }}</template></span>
+                  <span class="recommendation-badge" :class="recommendationClass(item)">{{ recommendationLabel(item) }}</span>
+                </div>
+                <h3>{{ item.name }}</h3>
+                <p class="muted">换后预估价 ¥{{ item.estimated_price }}<template v-if="item.price_delta && Number(item.price_delta) !== 0">（{{ Number(item.price_delta) > 0 ? '涨' : '降' }} ¥{{ Math.abs(Number(item.price_delta)).toFixed(2) }}）</template> · 可售 {{ item.sets }} 套 · 单人成本 ¥{{ item.settlement_price }}</p>
+                <p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p>
+                <p v-if="item.fit_reason" class="resource-fit-note">{{ item.fit_reason }}</p>
+                <el-button size="small" plain @click="ask(`${primarySpec.target_date} 的 ${primarySpec.room_type} 换成 ${item.name}`)">换成这个体验</el-button>
+              </article>
+            </div>
+            <p v-else class="muted">当前日期与房型下没有其它可用合作资源：可以到合作资源池为该日期补充资源并允许组包，或换一个日期再看。</p>
+          </div>
 
           <div v-if="activeAdjust === 'route'" class="adjust-panel"><div class="adjust-panel__head"><b>选择路线调整方式</b><span class="muted">先选安排，再由 AI 按场次和天气重新校验。</span></div><div class="option-row"><button type="button" @click="ask('路线留出更多自由时间，晚上体验结束后直接回酒店')">留出自由时间</button><button type="button" @click="ask('优先室内路线，减少户外移动')">优先室内路线</button><button type="button" @click="ask('保持当前体验，只调整先后顺序')">只调先后顺序</button></div></div>
 
@@ -1847,12 +1868,12 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .exec-summary { display: grid; gap: 8px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
 .exec-summary > summary { cursor: pointer; color: var(--teal-dark); font-size: 12px; font-weight: 650; }
 .exec-summary ul { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
-.exec-summary li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 7px 9px; border-top: 1px solid #eef3f0; font-size: 11.5px; line-height: 1.7; }
+.exec-summary li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 7px 9px; border-top: 1px solid #eef3f0; font-size: 12.5px; line-height: 1.7; }
 .exec-summary li:first-child { border-top: 0; }
 .exec-summary__mark { color: #2f6f60; font-weight: 700; }
 .exec-summary li b { color: var(--ink); }
 .exec-summary__detail { color: #45524c; }
-.exec-summary li small { color: var(--muted); font-size: 10.5px; }
+.exec-summary li small { color: var(--muted); font-size: 11.5px; }
 .exec-summary li.is-pending .exec-summary__mark { color: var(--muted); }
 .exec-summary li.is-pending b, .exec-summary li.is-pending .exec-summary__detail { color: #6b7a74; }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
@@ -1867,8 +1888,8 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .stage-bar li button:disabled { cursor: default; }
 .stage-bar li.available button:hover { background: #f8fbf9; }
 .stage-bar i { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%; background: var(--panel-soft); color: var(--muted); font-size: 11px; font-style: normal; }
-.stage-bar b { display: block; font-size: 12.5px; }
-.stage-bar small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+.stage-bar b { display: block; font-size: 13px; }
+.stage-bar small { display: block; margin-top: 2px; color: var(--muted); font-size: 11.5px; }
 .stage-bar li.active { border-color: var(--teal); background: #f1f8f4; }
 .stage-bar li.active i { background: var(--teal-dark); color: #fff; }
 .stage-bar li.done i { background: #dcece4; color: var(--teal-dark); }
@@ -1878,11 +1899,11 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .fact-card { flex: 1 1 168px; min-width: 0; display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); text-align: left; cursor: pointer; transition: border-color .18s, background .18s; }
 .fact-card:hover { border-color: var(--teal); }
 .fact-card.active { border-color: var(--teal); background: #f1f8f4; }
-.fact-card span { color: var(--muted); font-size: 10px; }
+.fact-card span { color: var(--muted); font-size: 11.5px; }
 .fact-card strong { font-family: var(--font-mono); font-size: 16px; overflow-wrap: anywhere; }
-.fact-card small { color: var(--muted); font-size: 10px; }
+.fact-card small { color: var(--muted); font-size: 11.5px; }
 .fact-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.weather-chip { padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 11px; white-space: nowrap; }
+.weather-chip { padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 12px; white-space: nowrap; }
 .fact-warn { padding: 4px 9px; border-radius: 999px; background: #fff6e5; color: #9a6b2a; font-size: 10px; white-space: nowrap; }
 
 /* 分区容器 */
@@ -1934,7 +1955,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .plan-card ul { display: grid; gap: 2px; margin: 0; padding-left: 16px; color: #45524c; font-size: 11px; line-height: 1.6; }
 .plan-card .plan-capacity-line { display: flex; gap: 5px; padding-left: 0; list-style: none; white-space: nowrap; }
 .plan-capacity-line b { color: #34483f; font-weight: 650; }
-.plan-fit-note,.resource-fit-note { margin: 0; color: #486158; font-size: 11px; line-height: 1.6; }
+.plan-fit-note,.resource-fit-note { margin: 0; color: #486158; font-size: 12.5px; line-height: 1.65; }
 .plan-fit-note b { margin-right: 5px; color: var(--teal-dark); }
 .plan-fit-note.caution,.resource-fit-note { color: #8a642c; }
 .plan-fit-note.caution b { color: #8a642c; }
@@ -1967,13 +1988,13 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .itinerary-entry > time { color: var(--teal-dark); font-family: var(--font-mono); font-size:  13px; font-weight: 700; }
 .itinerary-entry strong { color: var(--ink); font-size:  15px; line-height: 1.45; }
 .itinerary-entry p { margin:  4px 0; color: #55635d; font-size: 14px; line-height: 1.65; }
-.itinerary-entry small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.itinerary-entry small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .itinerary-entry__note { color: #8a642c !important; }
 .route-only-badge { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; background: #eaf2ed; color: #426452; font-size: 9px; }
 .route-transfer-fold { padding-top: 5px; border-top: 1px dashed var(--line); }
 .route-transfer-list { display: grid; gap: 5px; padding-top: 7px; }
 .route-transfer-list p { margin: 0; color: #50615a; font-size:  12px; line-height: 1.65; }
-.route-transfer-list small { display: block; color: var(--muted); font-size:  11px; }
+.route-transfer-list small { display: block; color: var(--muted); font-size: 12px; }
 .calculation-list { display: grid; gap: 4px; margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--line); }
 .calculation-list > div { display: flex; justify-content: space-between; gap: 8px; color: #55635d; font-size: 11px; }
 .calculation-list b { color: var(--ink); font-family: var(--font-mono); }
@@ -1998,7 +2019,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .budget-note p { margin: 0; color: #8a6420; font-size: 12px; line-height: 1.7; }
 .reason-fold summary { cursor: pointer; color: var(--teal-dark); font-size: 11.5px; }
 .reason-fold ul { display: grid; gap: 4px; margin: 8px 0 0; padding-left: 17px; color: #45524c; font-size: 12px; line-height: 1.7; }
-.reason-fold p { margin: 6px 0 0; color: #55635d; font-size: 11.5px; line-height: 1.7; }
+.reason-fold p { margin: 6px 0 0; color: #55635d; font-size: 12.5px; line-height: 1.7; }
 .decision-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .decision-more { padding-top: 1px; }
 
@@ -2018,7 +2039,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .recommendation-badge.resource-card--caution { background: #f7ebcf; color: #805d1f; }
 .recommendation-badge.resource-card--not-recommended { background: #f5dedb; color: #9a4239; }
 .alt-card h3 { margin: 0; font-size: 13px; }
-.alt-card p { margin: 0; font-size: 11px; }
+.alt-card p { margin: 0; font-size: 12.5px; line-height: 1.65; }
 .alt-card__why { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; color: #55635d; font-size: 11px; line-height: 1.6; }
 .alt-card :deep(.el-button) { margin-top: auto; align-self: flex-start; }
 
@@ -2043,7 +2064,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .candidate-card__body p { margin: 0; }
 .candidate-relation { justify-self: start; padding: 3px 8px; border-radius: 999px; background: #f1f8f4; color: #2f6f60; font-size: 10px; }
 .candidate-card__exp { color: #45524c; font-size: 11px; line-height: 1.6; }
-.candidate-card__figures { color: var(--muted); font-size: 10.5px; }
+.candidate-card__figures { color: var(--muted); font-size: 12px; }
 .visitor-preview-frame { display: block; width: 100%; height: 680px; min-height: 480px; max-height: 720px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .batch-apply-fold,.copy-subsection { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfc; }
 .batch-apply-fold summary,.copy-subsection summary { cursor: pointer; color: var(--teal-dark); font-size: 11.5px; font-weight: 650; }
@@ -2066,7 +2087,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .date-room-picker__label b { color: var(--ink); font-size: 12px; }
 .date-room-picker__label span { color: var(--muted); font-size: 10.5px; }
 .badge-row { display: flex; flex-wrap: wrap; gap: 5px; }
-.badge-row span { padding: 2px 7px; border-radius: 999px; background: #eaf4ef; color: #2f6f60; font-size: 9.5px; }
+.badge-row span { padding: 3px 8px; border-radius: 999px; background: #eaf4ef; color: #2f6f60; font-size: 11px; }
 .candidate-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
 .local-loading { padding: 11px 12px; border: 1px dashed var(--teal); border-radius: 9px; background: #f7fbf9; color: var(--teal-dark); font-size: 12px; }
@@ -2088,7 +2109,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip-row span { padding: 4px 9px; border-radius: 999px; background: var(--panel-soft); color: var(--ink); font-size: 11px; }
 .signal-list { display: grid; gap: 4px; margin: 0; padding-left: 17px; color: #45524c; font-size: 11.5px; line-height: 1.7; }
-.reply-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.reply-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
 .reply-table th, .reply-table td { padding: 6px 8px; overflow-wrap: anywhere; text-align: left; }
 .reply-table th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
 .reply-table td { border-bottom: 1px solid var(--panel-soft); }
@@ -2107,7 +2128,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .refine-row:last-child { border-bottom: 0; }
 .refine-row__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .refine-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.refine-meta em { padding: 2px 8px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 10.5px; font-style: normal; }
+.refine-meta em { padding: 2px 8px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 11.5px; font-style: normal; }
 .refine-row__instruction { font-size: 12.5px; line-height: 1.6; }
 .refine-row .reply-table { margin-top: 2px; }
 .refine-row > p { margin: 0; font-size: 12px; }
@@ -2135,11 +2156,11 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .log-item { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
 .log-time { color: var(--muted); font-size: 10.5px; }
 .log-item b { font-size: 12.5px; }
-.log-item small { color: var(--muted); font-size: 10px; }
+.log-item small { color: var(--muted); font-size: 11.5px; }
 .log-item p { margin: 0; color: #45524c; font-size: 11.5px; line-height: 1.7; }
 .log-diffs { display: grid; gap: 3px; color: #45524c; font-size: 11px; line-height: 1.6; }
 .log-diffs span { display: block; }
-.log-diffs span b { margin-right: 4px; color: var(--muted); font-size: 10.5px; }
+.log-diffs span b { margin-right: 4px; color: var(--muted); font-size: 11.5px; }
 .log-diffs del { color: #9a6d6d; text-decoration: line-through; }
 
 @media (max-width: 1000px) {
@@ -2160,7 +2181,15 @@ onMounted(async () => { selectedStage.value = 1; await load() })
   .copy-field { grid-template-columns: 1fr; }
   .stage-bar ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stage-bar li button { padding: 8px; gap: 6px; }
-  .stage-bar b { font-size: 11px; }
-  .stage-bar small { font-size: 9px; }
+  .stage-bar b { font-size: 12.5px; }
+  .stage-bar small { font-size: 11px; }
+  .figure-row { font-size: 12px; }
+  .figure-row b { font-size: 12.5px; }
 }
+/* 行程条目：地点 / 时长 / 区域一行显示，核验提示单独一行，不再逐条折叠。 */
+.itinerary-entry__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 0; color: #4d6159; font-size: 12.5px; line-height: 1.6; }
+.itinerary-entry__meta span { overflow-wrap: anywhere; }
+.itinerary-entry__meta span + span::before { content: '·'; margin-right: 6px; color: var(--muted); }
+.itinerary-entry__verify { margin: 4px 0 0; color: #8a642c; font-size: 12.5px; line-height: 1.6; }
+
 </style>
