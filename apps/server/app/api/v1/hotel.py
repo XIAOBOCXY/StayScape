@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Date, case, cast, func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ...core.exceptions import AppError
@@ -1062,7 +1062,11 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_hotel_user
     ).all()
     confirmed_days = db.execute(
         select(
-            cast(VisitorIntent.confirmed_at, Date),
+            # ``func.date`` behaves the same on PostgreSQL and SQLite.  A raw
+            # ``cast(..., Date)`` is PostgreSQL-only here: SQLite applies
+            # NUMERIC affinity and hands SQLAlchemy an integer, which makes the
+            # DateTime result processor raise while building the dashboard.
+            func.date(VisitorIntent.confirmed_at),
             func.count(VisitorIntent.id),
             func.coalesce(func.sum(TravelProduct.suggested_price), 0),
             func.coalesce(func.sum(TravelProduct.gross_profit), 0),
@@ -1073,7 +1077,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_hotel_user
             VisitorIntent.reservation_status == "CONFIRMED",
             VisitorIntent.confirmed_at.is_not(None),
         )
-        .group_by(cast(VisitorIntent.confirmed_at, Date))
+        .group_by(func.date(VisitorIntent.confirmed_at))
     ).all()
 
     zero = Decimal("0")
