@@ -36,7 +36,7 @@ const evidenceLoaded = ref<string[]>([])
 const evidenceLoading = ref('')
 const evidenceError = ref('')
 const evidenceRequests = new Map<string, Promise<void>>()
-// 本次会话真正生成出来的候选（用于「候选确认」阶段，不再展示历史待确认队列）。
+// 本次会话真正生成出来的候选：生成后直接进入「预览与发布」，不再单独占用一个确认步骤。
 const sessionProposalIds = ref<number[]>([])
 const resolvedCandidateCount = ref(0)
 // 主方案下方「调整这个方案」的展开状态：替代资源默认不展示。
@@ -194,11 +194,11 @@ function routeForDay(dayIndex: number) {
 const stages = [
   { id: 1, label: '经营分析', hint: '查看并询问经营数据' },
   { id: 2, label: '产品方案', hint: '比较方向 · 调整当前方案' },
-  { id: 3, label: '候选确认', hint: '挑选候选并确认' },
-  { id: 4, label: '营销发布', hint: '检查游客端成品' },
+  { id: 3, label: '预览与发布', hint: '确认候选 · 检查游客端成品' },
 ]
 const availableStage = computed(() => {
-  if (resolvedCandidateCount.value > 0 || sessionProposalIds.value.length > 0) return 4
+  // 生成候选后直接进入「预览与发布」：不再单独占用一个确认步骤。
+  if (sessionProposalIds.value.length > 0 || resolvedCandidateCount.value > 0) return 3
   // 经营分析只要读取结束就算完成；即使没有推荐方案，用户也能进入产品方案继续调整条件。
   return analysisDone.value ? 2 : 1
 })
@@ -215,6 +215,8 @@ async function selectStage(id: number) {
       ensureEvidence('weather'),
     ])
     if (!submitting.value && (!advisorLoadedThisVisit.value || advisorAnalysisSignature.value !== analysisSignature())) await autoStart()
+  } else if (id === 3) {
+    void loadRefinementHistory(primarySpec.value?.product_id as number | undefined)
   }
 }
 
@@ -242,14 +244,14 @@ async function loadConversationHistory() {
         previousPrimary.value = normalized
         targetInventoryKey.value = String(normalized.target_date) + '|' + String(normalized.room_type)
       }
-      // 只要本轮会话还有待确认候选，就恢复到「候选确认」阶段：
+      // 只要本轮会话还有待确认候选，就恢复到「预览与发布」阶段：
       // 刷新页面不会让已经生成并校验过的候选消失。
       const response = await hotelApi.aiProposals('PENDING_CONFIRMATION', Number(latest.id))
       proposals.value = Array.isArray(response.data) ? response.data : []
       sessionProposalIds.value = proposals.value
         .filter((item) => Number(item.conversation_id) === Number(latest.id))
         .map((item) => Number(item.id))
-      // 已有待确认候选时直接停在「候选确认」，避免用户以为候选丢了。
+      // 已有待确认候选时直接停在「预览与发布」，避免用户以为候选丢了。
       if (sessionProposalIds.value.length && !resolvedCandidateCount.value) selectedStage.value = 3
     }
   } catch (error) {
@@ -497,15 +499,18 @@ async function submit() {
     }
     const cardAction = ['resources', 'price', 'crowd', 'route', 'service'].includes(activeAdjust.value)
     const refineId = Number(editingProduct.value?.id || (cardAction ? primarySpec.value?.product_id : 0))
-    if (refineId) {
-      const response = await hotelApi.refineProduct(refineId, text)
-      refinements.value.push({ instruction: text, ...response.data })
-      applyRefinedProduct(response.data.product as AnyRecord | undefined, text)
+    // 销售状态指令（暂停/下架/开售）必须优先于商品微调，
+    // 否则「下架这个产品」会被当成文案微调，把营销文案重写掉。
+    if (/(暂停|停售|下架|恢复|上架|开售|开启销售)/.test(text)) {
+      await applySalesCommand(text)
       brief.value = ''
       return
     }
-    if (/(暂停|停售|下架|恢复|上架|开售|开启销售)/.test(text)) {
-      await applySalesCommand(text)
+    if (refineId) {
+      const response = await hotelApi.refineProduct(refineId, text)
+      refinements.value.unshift({ instruction: text, ...response.data })
+      applyRefinedProduct(response.data.product as AnyRecord | undefined, text)
+      void loadRefinementHistory(refineId)
       brief.value = ''
       return
     }
@@ -519,7 +524,7 @@ async function submit() {
       proposals.value = [...created, ...proposals.value]
     }
     applyAdvisor(data.advisor as AnyRecord, text)
-    selectedStage.value = (data.advisor as AnyRecord)?.step === 'GENERATED' ? 4 : 2
+    selectedStage.value = (data.advisor as AnyRecord)?.step === 'GENERATED' ? 3 : 2
     brief.value = ''
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
@@ -542,7 +547,7 @@ function stopEditing() {
   editingProduct.value = null
 }
 
-// 候选确认阶段：预览按需展开，避免一屏同时加载多个 iframe。
+// 预览按需展开（默认不加载 iframe），避免一屏同时加载多个预览。
 const previewCardKey = ref('')
 function toggleCandidatePreview(card: AnyRecord) {
   previewCardKey.value = previewCardKey.value === String(card.key) ? '' : String(card.key)
@@ -592,20 +597,10 @@ async function generateFromPlan(primary: AnyRecord) {
       }
     }
     selectedStage.value = created.length ? 3 : 2
+    const generatedId = Number((created[0]?.product as AnyRecord | undefined)?.id || created[0]?.product_id || 0)
+    if (generatedId) void loadRefinementHistory(generatedId)
   } catch (error) { showToast(errorMessage(error)) }
   finally { submitting.value = false }
-}
-
-async function selectPlanAndGenerate(item: AnyRecord) {
-  activeAdjust.value = ''
-  editingProduct.value = null
-  const intendedKey = planKey(item)
-  if (!item.is_current) {
-    brief.value = String(item.message || item.name || '')
-    await submit()
-    if (selectedPlanKey.value !== intendedKey) return
-  }
-  if (primarySpec.value && !submitting.value) await generateFromPlan(primarySpec.value)
 }
 
 async function changeGenerationInventory() {
@@ -644,11 +639,11 @@ function resizeVisitorPreview(event: Event) {
   const frame = event.target as HTMLIFrameElement | null
   const doc = frame?.contentDocument
   if (!frame || !doc) return
+  // 预览框限高：之前会把 iframe 撑到内容真实高度（实测 1.1 万 px），整页被一张预览拖长。
   const resize = () => {
-    const height = Math.max(doc.body?.scrollHeight || 0, doc.documentElement?.scrollHeight || 0, 600)
+    const contentHeight = Math.max(doc.body?.scrollHeight || 0, doc.documentElement?.scrollHeight || 0, 480)
+    const height = Math.min(contentHeight, 720)
     frame.style.height = `${height}px`
-    doc.documentElement.style.overflow = 'hidden'
-    if (doc.body) doc.body.style.overflow = 'hidden'
   }
   resize()
   window.setTimeout(resize, 250)
@@ -812,8 +807,34 @@ async function confirm(proposal: AnyRecord, action: 'DRAFT' | 'PUBLISH') {
     proposals.value = proposals.value.filter((item) => Number(item.id) !== Number(proposal.id))
     sessionProposalIds.value = sessionProposalIds.value.filter((id) => id !== Number(proposal.id))
     resolvedCandidateCount.value += 1
-    selectedStage.value = 4
+    selectedStage.value = 3
     showToast(action === 'PUBLISH' ? '产品已发布并完成库存复核' : '已加入产品草稿，可以继续生成营销素材')
+  } catch (error) { showToast(errorMessage(error)) }
+}
+
+// 微调历史与回滚：后端每次微调都会生成一条版本记录，这里把它暴露给运营。
+const refinementHistory = ref<AnyRecord[]>([])
+const historyLoading = ref(false)
+async function loadRefinementHistory(productId: number | null | undefined) {
+  if (!productId) return
+  historyLoading.value = true
+  try {
+    const response = await hotelApi.productRefinements(Number(productId))
+    refinementHistory.value = (response.data.items || []) as AnyRecord[]
+  } catch { refinementHistory.value = [] }
+  finally { historyLoading.value = false }
+}
+
+async function rollbackRefinement(item: AnyRecord) {
+  const productId = Number(item.product_id || primarySpec.value?.product_id || 0)
+  const refinementId = Number(item.id || 0)
+  if (!productId || !refinementId) return
+  try {
+    const response = await hotelApi.rollbackRefinement(productId, refinementId)
+    const product = response.data.product as AnyRecord | undefined
+    if (product) applyRefinedProduct(product, `撤销：${item.instruction || '上一次调整'}`)
+    await loadRefinementHistory(productId)
+    showToast('已撤销这条调整，并记为新版本')
   } catch (error) { showToast(errorMessage(error)) }
 }
 
@@ -1137,7 +1158,7 @@ function candidateRelation(proposal: AnyRecord) {
   return '替代路线'
 }
 
-// 候选确认阶段只展示本轮生成的产品，不再把历史待确认队列铺到页面上。
+// 预览与发布阶段只展示本轮生成的产品，不再把历史待确认队列铺到页面上。
 const candidateCards = computed<AnyRecord[]>(() => proposals.value
   .filter((proposal) => sessionProposalIds.value.includes(Number(proposal.id)))
   .slice(0, 1)
@@ -1413,7 +1434,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
       </div>
     </section>
 
-    <!-- ③ Step 2：推荐方向。进入候选确认后收起，避免两个业务阶段同时出现。 -->
+    <!-- ③ Step 2：产品方案。方向比较 + 当前方案调整，满意后生成候选。 -->
     <section v-if="stageIndex === 2" class="panel stage-panel">
       <div class="stage-panel__head">
         <h2>推荐方向</h2>
@@ -1589,171 +1610,15 @@ onMounted(async () => { selectedStage.value = 1; await load() })
       </div>
     </section>
 
-    <!-- ④ Step 3：候选确认。这一阶段只做「挑候选 → 确认」，编辑逻辑收进折叠区。 -->
+    <!-- ④ Step 3：预览与发布。候选由产品方案生成后直接进入这里确认与发布。 -->
     <section v-if="stageIndex === 3" class="panel stage-panel">
-      <div class="stage-panel__head"><h2>候选确认</h2><span class="muted">先确认一个候选，再进入营销发布；需要改动时展开下方的调整区</span></div>
-
-      <div v-if="candidateCards.length" class="candidate-grid">
-        <article v-for="card in candidateCards" :key="`confirm-${card.key}`" class="candidate-card is-confirm">
-          <div class="candidate-card__body">
-            <header>
-              <h3>{{ card.name }}</h3>
-              <b>¥{{ card.price }}</b>
-            </header>
-            <span class="candidate-relation">{{ card.relation }}</span>
-            <p class="muted">{{ card.date }} · {{ card.crowd_label }} · {{ card.party }} 人<template v-if="card.quantity !== ''"> · 可售 {{ card.quantity }} 套</template></p>
-            <p v-if="card.experiences.length" class="candidate-card__exp">正式体验：{{ card.experiences.join('、') }}</p>
-            <p v-if="card.services.length" class="candidate-card__exp">酒店权益：{{ card.services.join('、') }}</p>
-            <p class="candidate-card__figures">成本 ¥{{ card.cost }} · 最低合法价 ¥{{ card.floor_price }}<template v-if="card.margin_label"> · 毛利率 {{ card.margin_label }}</template></p>
-            <div class="badge-row">
-              <span>✓ 库存通过</span>
-              <span>✓ 资源通过</span>
-              <span>✓ 利润通过</span>
-            </div>
-            <div class="candidate-card__actions">
-              <el-button size="small" type="primary" @click="confirm(card.raw, 'DRAFT')">选定并加入草稿</el-button>
-              <el-button size="small" plain @click="continueEditing(card)">继续调整此候选</el-button>
-              <el-button size="small" plain @click="toggleCandidatePreview(card)">{{ previewCardKey === card.key ? '收起预览' : '预览' }}</el-button>
-            </div>
-            <iframe v-if="previewCardKey === card.key" class="visitor-preview-frame" :src="visitorPreviewUrl(card)" title="游客端商品完整预览" loading="lazy" scrolling="no" @load="resizeVisitorPreview" />
-            <details class="reason-fold">
-              <summary>查看推荐依据</summary>
-              <ul class="reason-list">
-                <li v-for="row in candidateEvidenceRows(card.raw)" :key="row.label"><b>{{ row.label }}：</b>{{ row.text }}</li>
-              </ul>
-            </details>
-          </div>
-        </article>
-      </div>
-      <p v-else class="muted">还没有候选产品：先在上一步「产品方案」里调整到满意的方案，再点击「生成候选产品」。</p>
-
-      <details v-if="primarySpec" class="advanced-fold">
-        <summary>继续调整这个方案（房型 / 体验 / 价格 / 路线）</summary>
-        <div class="selected-plan-detail">
-        <div class="selected-plan-detail__head">
-          <div>
-            <span class="section-kicker">当前选择</span>
-            <h3>{{ primarySpec.product_name }}</h3>
-            <p class="muted">{{ primarySpec.target_date }}（{{ primarySpec.weekday }}） · {{ primarySpec.crowd_label }} · {{ primarySpec.room_type }}</p>
-          </div>
-        </div>
-        <article class="decision-card" :class="{ 'is-busy': submitting, 'is-flash': cardFlash }">
-          <div class="decision-card__top">
-            <div class="decision-card__head">
-              <p class="decision-card__include"><b>产品组成：</b>{{ primarySpec.room_type }} 1 晚<template v-for="exp in primarySpec.experiences" :key="exp.name"> · {{ exp.name }}<template v-if="exp.window">（{{ exp.window }}）</template></template><template v-for="service in (primarySpec.services || [])" :key="service.id || service.name"> · {{ service.name }} × {{ service.quantity || primarySpec.party_size }}</template></p>
-              <p v-if="primarySpec.route_note" class="decision-card__route">路线调整：{{ primarySpec.route_note }}</p>
-            </div>
-          </div>
-
-          <div class="figure-row">
-            <span>建议售价 <b>¥{{ primarySpec.price }}</b></span>
-            <span>可售 <b>{{ primarySpec.max_sellable }} 套</b></span>
-            <span>毛利率 {{ primarySpec.margin }}%</span>
-          </div>
-
-          <div class="key-evidence primary-facts">
-            <div v-for="item in primaryEvidence" :key="item.label"><span>{{ item.label }}</span><b>{{ item.text }}</b></div>
-          </div>
-
-          <div v-if="budgetShortfall" class="budget-note">
-            <p>当前条件下没有 ¥{{ budgetShortfall.requested }} 以内、且满足最低利润要求的组合，最低可售价为 ¥{{ budgetShortfall.lowest }}。</p>
-            <div class="option-row"><button v-for="option in budgetShortfall.options" :key="option.label" type="button" @click="ask(option.message)">{{ option.label }}</button></div>
-          </div>
-
-          <div v-if="primarySpec.structure" class="product-structure">
-            <div v-for="section in primarySpec.structure" :key="section.label" class="structure-row">
-              <b>{{ section.label }}</b>
-              <span v-for="item in section.items" :key="item.name">{{ item.name }}<template v-if="item.quantity"> × {{ item.quantity }}</template><template v-if="item.window"> · {{ item.window }}</template></span>
-            </div>
-          </div>
-
-          <details v-if="primarySpec.itinerary_days?.length" class="advanced-fold itinerary-fold">
-            <summary>查看完整行程与转场（{{ primarySpec.itinerary_days.length }} 天）</summary>
-            <div class="itinerary-days">
-            <article v-for="day in primarySpec.itinerary_days" :key="day.day_index" class="itinerary-day">
-              <header><b>{{ day.label }} · {{ day.title }}</b><span>{{ day.date }}</span></header>
-              <p class="itinerary-day__summary">{{ day.summary }}</p>
-              <div v-for="(item, index) in day.items" :key="String(day.day_index) + '-' + String(index)" class="itinerary-entry">
-                <time>{{ item.time || '时间待确认' }}</time>
-                <div>
-                  <strong>{{ item.title }}</strong>
-                  <span v-if="item.route_only" class="route-only-badge">路线建议 · 非套餐权益</span>
-                  <p>{{ item.description }}</p>
-                  <details v-if="item.address || item.duration_text || item.area || item.notes" class="itinerary-entry__details">
-                    <summary>路线详情</summary>
-                    <small>{{ [item.address, item.duration_text, item.area].filter(Boolean).join(' · ') }}</small>
-                    <small v-if="item.notes" class="itinerary-entry__note">出行前核验：{{ item.notes }}</small>
-                  </details>
-                </div>
-              </div>
-              <details v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-fold">
-                <summary>查看转场与核验</summary>
-                <div class="route-transfer-list">
-                  <p v-for="leg in (routeForDay(day.day_index)?.legs || [])" :key="leg.from_stop + leg.to_stop">
-                    {{ leg.from_stop }} → {{ leg.to_stop }} · {{ leg.distance_label || '交通机动' }}<template v-if="leg.minutes"> · 预留约 {{ leg.minutes }} 分钟</template><template v-else> · 具体地点待定，暂不估算耗时</template>
-                    <small>{{ leg.note }}</small>
-                  </p>
-                </div>
-              </details>
-            </article>
-            </div>
-          </details>
-
-          <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more">
-            <summary>价格与收益</summary>
-            <div class="key-evidence">
-              <div><span>单位成本</span><b>¥{{ primarySpec.cost }}</b></div>
-              <div><span>最低合法价</span><b>¥{{ primarySpec.floor_price }}</b></div>
-              <div><span>建议售价</span><b>¥{{ primarySpec.price }}</b></div>
-              <div><span>容量瓶颈</span><b>{{ primarySpec.bottleneck || '已通过' }}</b></div>
-            </div>
-            <div v-if="primarySpec.cost_breakdown?.length" class="calculation-list">
-              <div v-for="item in primarySpec.cost_breakdown" :key="item.label"><span>{{ item.label }}</span><b>¥{{ item.value }}</b></div>
-            </div>
-            <p v-if="primarySpec.pricing_basis?.length" class="muted">定价依据：{{ primarySpec.pricing_basis.join('；') }}</p>
-          </details>
-
-          <div class="decision-card__actions">
-            <el-button type="primary" :disabled="submitting || Boolean(budgetShortfall)" @click="generateFromPlan(primarySpec)">{{ primarySpec.product_id ? '继续优化当前产品' : '生成候选产品' }}</el-button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'resources' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'resources' ? '' : 'resources'">换资源</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'price' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'price' ? '' : 'price'">调价格</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'crowd' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'crowd' ? '' : 'crowd'">换客群</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'route' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'route' ? '' : 'route'">改路线</button>
-            <button type="button" class="ghost-link" :class="{ active: activeAdjust === 'service' }" :disabled="submitting" @click="activeAdjust = activeAdjust === 'service' ? '' : 'service'">增加资源</button>
-          </div>
-
-          <div v-if="activeAdjust === 'price'" class="adjust-panel">
-            <div class="adjust-panel__head"><b>调整建议售价</b><span class="muted">当前 ¥{{ primarySpec.price }}，最低合法价 ¥{{ primarySpec.floor_price }}；改价会重新跑容量与利润校验</span></div>
-            <div class="option-row"><button type="button" @click="ask(`价格按最低合法价 ${primarySpec.floor_price} 来`)">按最低合法价 ¥{{ primarySpec.floor_price }}</button><button type="button" @click="ask('价格降到 650 以内')">降到 650 以内</button><button type="button" @click="ask('价格降到 600 以内')">降到 600 以内</button></div>
-            <div class="price-input"><input v-model="priceTarget" inputmode="numeric" placeholder="输入目标价，例如 620" /><el-button size="small" type="primary" :disabled="submitting" @click="applyPriceTarget">按这个价格重算</el-button></div>
-          </div>
-
-          <div v-if="activeAdjust === 'crowd'" class="adjust-panel"><div class="adjust-panel__head"><b>切换目标客群</b><span class="muted">仅修改目标客群，房型、体验与酒店权益保持不变；若原资源的客群标签不匹配，会明确提示核对</span></div><div class="option-row"><button v-for="item in crowdChoices" :key="item.label" type="button" @click="ask(item.message)">{{ item.label }}</button></div></div>
-
-          <div v-if="activeAdjust === 'resources'" class="adjust-panel"><div class="adjust-panel__head"><b>替换当前合作资源</b><span class="muted">保持日期、房型和客群，只替换核心体验；增加第二项体验请使用“增加资源”。</span></div><div v-if="resourceSwaps.length" class="alt-grid"><article v-for="item in resourceSwaps" :key="`swap-${item.name}`" class="alt-card"><h3>{{ item.name }}</h3><p class="muted">{{ item.window || '按场次' }} · 仍可支撑 {{ item.sets }} 套 · 预估价 ¥{{ item.estimated_price }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p class="alt-card__why">{{ item.indoor ? '室内体验，雨天不受影响。' : '户外体验，出发前会再核对天气。' }}每人结算 ¥{{ item.settlement_price }}。</p><el-button size="small" plain @click="ask(`${primarySpec.target_date} 的 ${primarySpec.room_type} 换成 ${item.name}`)">换成这个体验</el-button></article></div><p v-else class="muted">当前日期与房型下没有其它可用合作资源。</p></div>
-
-          <div v-if="activeAdjust === 'route'" class="adjust-panel"><div class="adjust-panel__head"><b>选择路线调整方式</b><span class="muted">先选安排，再由 AI 按场次和天气重新校验。</span></div><div class="option-row"><button type="button" @click="ask('路线留出更多自由时间，晚上体验结束后直接回酒店')">留出自由时间</button><button type="button" @click="ask('优先室内路线，减少户外移动')">优先室内路线</button><button type="button" @click="ask('保持当前体验，只调整先后顺序')">只调先后顺序</button></div></div>
-
-          <div v-if="activeAdjust === 'service'" class="adjust-panel"><div class="adjust-panel__head"><b>选择要增加的体验或酒店权益</b><span class="muted">按客群、场次、天气、余量和路线匹配度排序；绿色优先推荐，红色表示不建议优先。</span></div><div v-if="availableAddResources.length" class="alt-grid"><article v-for="item in availableAddResources" :key="`${item.kind}-${item.id || item.name}`" class="alt-card" :class="recommendationClass(item)"><div class="resource-card__head"><span class="section-kicker">{{ item.kind }}<template v-if="item.fit_label"> · {{ item.fit_label }}</template></span><span class="recommendation-badge" :class="recommendationClass(item)">{{ recommendationLabel(item) }}</span></div><h3>{{ item.name }}</h3><p class="muted">可售 {{ item.sets ?? item.available_quantity ?? '—' }} 套<template v-if="item.window"> · {{ item.window }}</template> · 单人成本 ¥{{ item.settlement_price ?? item.unit_cost ?? '—' }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p v-if="item.fit_reason" class="resource-fit-note">{{ item.fit_reason }}</p><el-button size="small" plain :disabled="item.addable === false" @click="ask(item.kind === '体验' ? `增加体验：${item.name}` : `增加酒店服务：${item.name}`)">{{ item.is_selected ? '已加入' : item.addable === false ? '暂不可加入' : `增加这项${item.kind}` }}</el-button></article></div><p v-else class="muted">当前日期没有已启用组包的合作体验或酒店权益。请在合作资源池添加资源并允许组包，再刷新方案。</p></div>
-
-          <details class="reason-fold"><summary>展开推荐依据与风险</summary><div class="detail-tabs"><button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">经营价值</button><button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button><button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险与限制</button><button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button></div><div class="detail-body"><template v-if="detailTab === 'basis'"><p v-for="item in (primarySpec.reason_sections || [])" :key="item.label"><b>{{ item.label }}：</b>{{ item.text }}</p><p v-if="!primarySpec.reason_sections?.length">{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p></template><template v-else-if="detailTab === 'value'"><p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p></template><template v-else-if="detailTab === 'risk'"><p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p></template><template v-else><p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p></template></div></details>
-        </article>
-        </div>
-      </details>
-      <div class="decision-card__actions stage-next">
-        <el-button type="primary" :disabled="!sessionProposalIds.length" @click="selectedStage = 4">查看游客端预览</el-button>
-        <span class="muted">确认候选后进入营销发布，可继续微调游客端文案</span>
-      </div>
-    </section>
-
-    <!-- ⑤ Step 4：游客端预览与发布。 -->
-    <section v-if="stageIndex === 4" class="panel stage-panel">
       <div class="stage-panel__head">
         <h2>游客端预览与发布</h2>
         <span class="muted">产品文案、资源与价格已在上一步确认</span>
       </div>
       <p v-if="primarySpec" class="source-plan">来源方案：{{ primarySpec.product_name }} · {{ primarySpec.room_type }} × {{ primaryExperience?.name || '当前体验' }} · ¥{{ primarySpec.price }}</p>
       <div v-if="!candidateCards.length && resolvedCandidateCount" class="panel empty-state">本轮产品已完成确认，可前往产品库继续制作营销内容。</div>
+      <p v-if="!candidateCards.length && !resolvedCandidateCount" class="muted">还没有候选产品：回到「产品方案」调整好方向后点击「生成候选产品」，这里会直接给出预览、文案与发布入口。</p>
       <div class="candidate-grid">
         <article v-for="card in candidateCards" :key="card.key" class="candidate-card">
           <div class="candidate-card__body">
@@ -1766,7 +1631,6 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             <p v-if="card.experiences.length" class="candidate-card__exp">正式体验：{{ card.experiences.join('、') }}</p>
             <p v-if="card.services.length" class="candidate-card__exp">酒店权益：{{ card.services.join('、') }}</p>
             <p class="candidate-card__figures">成本 ¥{{ card.cost }} · 最低合法价 ¥{{ card.floor_price }}<template v-if="card.margin_label"> · 毛利率 {{ card.margin_label }}</template></p>
-            <iframe class="visitor-preview-frame" :src="visitorPreviewUrl(card)" title="游客端商品完整预览" loading="lazy" scrolling="no" @load="resizeVisitorPreview" />
             <div class="badge-row">
               <span>✓ 库存通过</span>
               <span>✓ 资源通过</span>
@@ -1775,8 +1639,11 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             <div class="candidate-card__actions">
               <el-button size="small" type="primary" @click="confirm(card.raw, 'PUBLISH')">确认并发布</el-button>
               <el-button size="small" plain @click="confirm(card.raw, 'DRAFT')">保存为草稿</el-button>
+              <el-button size="small" plain @click="previewCardKey === card.key ? previewCardKey = '' : previewCardKey = String(card.key)">{{ previewCardKey === card.key ? '收起预览' : '预览游客端' }}</el-button>
+              <el-button size="small" plain @click="continueEditing(card)">继续调整此候选</el-button>
               <el-button size="small" plain @click="editVisitorCopy(card)">{{ Number(copyDraft?.id) === Number(card.product_id) ? '收起文案编辑' : '微调游客文案' }}</el-button>
             </div>
+            <iframe v-if="previewCardKey === card.key" class="visitor-preview-frame" :src="visitorPreviewUrl(card)" title="游客端商品完整预览" loading="lazy" scrolling="auto" @load="resizeVisitorPreview" />
             <details class="batch-apply-fold">
               <summary>批量应用到其他日期与房型</summary>
               <p class="muted">只创建房量、人数和同名资源都满足条件的草稿；不满足的目标会列出原因。</p>
@@ -1866,24 +1733,56 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             </section>
             <details class="reason-fold">
               <summary>查看推荐依据</summary>
-              <p>{{ card.reason }}</p>
+              <ul class="reason-list">
+                <li v-for="row in candidateEvidenceRows(card.raw)" :key="row.label"><b>{{ row.label }}：</b>{{ row.text }}</li>
+              </ul>
             </details>
           </div>
         </article>
       </div>
     </section>
 
-    <!-- 微调记录 -->
-    <section v-if="refinements.length" class="panel stage-panel">
-      <div class="stage-panel__head"><h2>微调记录</h2></div>
-      <div v-for="(item, index) in refinements" :key="index" class="refine-row">
-        <strong class="refine-row__instruction">{{ item.instruction || '方案调整' }}</strong>
-        <table v-if="item.changes?.length" class="reply-table">
-          <thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead>
-          <tbody><tr v-for="row in item.changes" :key="row.field"><td>{{ row.label }}</td><td class="muted">{{ row.before }}</td><td>{{ row.after }}</td></tr></tbody>
-        </table>
-        <p v-else class="muted">本轮未产生字段变化。</p>
+    <!-- 微调记录：说清改的是哪一层、第几版，并支持撤销 -->
+    <section v-if="refinementHistory.length || refinements.length" class="panel stage-panel">
+      <div class="stage-panel__head">
+        <h2>微调记录</h2>
+        <span class="muted">内容层只改文案；权益层每次都会重新校验容量、成本与利润，可撤销</span>
       </div>
+      <template v-if="refinementHistory.length">
+        <div v-for="item in refinementHistory" :key="`h-${item.id}`" class="refine-row">
+          <div class="refine-row__head">
+            <strong class="refine-row__instruction">{{ item.instruction || '方案调整' }}</strong>
+            <span class="refine-meta">
+              <em v-if="item.layer_label">{{ item.layer_label }}</em>
+              <em>v{{ item.version }}</em>
+              <em v-if="item.created_at">{{ String(item.created_at).slice(0, 16).replace('T', ' ') }}</em>
+            </span>
+          </div>
+          <p v-if="item.message" class="muted">{{ item.message }}</p>
+          <table v-if="item.changes?.length" class="reply-table">
+            <thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead>
+            <tbody><tr v-for="row in item.changes" :key="row.field"><td>{{ row.label }}</td><td class="muted">{{ row.before }}</td><td>{{ row.after }}</td></tr></tbody>
+          </table>
+          <el-button size="small" plain :loading="historyLoading" @click="rollbackRefinement(item)">撤销这次调整</el-button>
+        </div>
+      </template>
+      <template v-else>
+        <div v-for="(item, index) in refinements" :key="`l-${index}`" class="refine-row">
+          <div class="refine-row__head">
+            <strong class="refine-row__instruction">{{ item.instruction || '方案调整' }}</strong>
+            <span class="refine-meta">
+              <em v-if="item.layer_label">{{ item.layer_label }}</em>
+              <em v-if="item.version">v{{ item.version }}</em>
+            </span>
+          </div>
+          <p v-if="item.message" class="muted">{{ item.message }}</p>
+          <table v-if="item.changes?.length" class="reply-table">
+            <thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead>
+            <tbody><tr v-for="row in item.changes" :key="row.field"><td>{{ row.label }}</td><td class="muted">{{ row.before }}</td><td>{{ row.after }}</td></tr></tbody>
+          </table>
+          <p v-else class="muted">本轮未产生字段变化。</p>
+        </div>
+      </template>
     </section>
 
     <!-- AI 执行摘要：整个工作台只出现一次，一行一条结论并附可核查的依据。 -->
@@ -1899,12 +1798,14 @@ onMounted(async () => { selectedStage.value = 1; await load() })
       </ul>
     </details>
 
-    <!-- ⑧ 无论有没有方案，输入区都固定可用：有方案是调整，没有方案就是规划。 -->
+    <!-- ⑤ 无论有没有方案，输入区都固定可用：有方案是调整，没有方案就是规划。 -->
     <form class="composer" @submit.prevent="submit()">
       <div class="composer__context">
         <span v-if="stageIndex === 1 && !primarySpec" class="context-chip">经营数据查询助手 · 问题与关注方向会带入产品方案</span>
-        <span v-else-if="primarySpec" class="context-chip is-editing">正在调整：{{ editingProduct?.name || currentObjectLabel }}</span>
+        <span v-else-if="editingProduct" class="context-chip is-editing">正在微调：{{ editingProduct.name }} · 只改这个已生成产品（改权益会重新校验容量与价格）</span>
+        <span v-else-if="primarySpec" class="context-chip is-editing">正在调整方案：{{ currentObjectLabel }} · 会重新计算价格、容量与行程</span>
         <span v-else class="context-chip is-editing">正在规划新方案 · 说明日期、客群或预算即可</span>
+        <button v-if="editingProduct" type="button" class="ghost-link" @click="stopEditing">改为重算方案</button>
         <button v-if="advisor || operationLog.length || analysisMessages.length" type="button" class="ghost-link" @click="clearConversation">重新开始</button>
       </div>
       <div class="composer__quick">
@@ -1960,7 +1861,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* 步骤条 */
-.stage-bar ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.stage-bar ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .stage-bar li { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
 .stage-bar li button { display: flex; width: 100%; align-items: center; gap: 9px; padding: 9px 12px; border: 0; border-radius: inherit; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .stage-bar li button:disabled { cursor: default; }
@@ -2143,7 +2044,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .candidate-relation { justify-self: start; padding: 3px 8px; border-radius: 999px; background: #f1f8f4; color: #2f6f60; font-size: 10px; }
 .candidate-card__exp { color: #45524c; font-size: 11px; line-height: 1.6; }
 .candidate-card__figures { color: var(--muted); font-size: 10.5px; }
-.visitor-preview-frame { display: block; width: 100%; height: 720px; min-height: 600px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.visitor-preview-frame { display: block; width: 100%; height: 680px; min-height: 480px; max-height: 720px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .batch-apply-fold,.copy-subsection { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfc; }
 .batch-apply-fold summary,.copy-subsection summary { cursor: pointer; color: var(--teal-dark); font-size: 11.5px; font-weight: 650; }
 .batch-apply-fold p { margin: 0; font-size: 11px; }
@@ -2204,6 +2105,9 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .ghost-link.active { background: #f1f8f4; text-decoration: none; }
 .refine-row { display: grid; gap: 7px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
 .refine-row:last-child { border-bottom: 0; }
+.refine-row__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.refine-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.refine-meta em { padding: 2px 8px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 10.5px; font-style: normal; }
 .refine-row__instruction { font-size: 12.5px; line-height: 1.6; }
 .refine-row .reply-table { margin-top: 2px; }
 .refine-row > p { margin: 0; font-size: 12px; }
@@ -2247,7 +2151,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 @media (max-width: 700px) {
   .evidence-split { grid-template-columns: 1fr; }
   .candidate-grid { grid-template-columns: 1fr; }
-  .visitor-preview-frame { height: 720px; min-height: 580px; }
+  .visitor-preview-frame { height: 520px; min-height: 420px; }
   .date-room-picker { grid-template-columns: 1fr; }
   .plan-grid { grid-template-columns: 1fr; }
   .figure-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 9px 7px; font-size: 10px; }

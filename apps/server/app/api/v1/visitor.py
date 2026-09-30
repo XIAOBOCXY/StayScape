@@ -1596,6 +1596,10 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
             getattr(result.value, "safety_notes", ""),
             "如有饮食、儿童陪同或行动安排方面的需求，提交购买信息时告诉酒店即可。",
         ),
+        # 结构化推荐依据：让助手回答不止一段话，而是「为什么推荐 / 时间怎么排 / 哪些改不了」。
+        "reasons": getattr(result.value, "reasons", None) or {},
+        "schedule_notes": getattr(result.value, "schedule_notes", None) or {},
+        "limited_adjustments": getattr(result.value, "limited_adjustments", None) or {},
         "product": visitor_payload(db, product) if product else None,
         "suggestions": suggestions,
         # 换房型问题直接给出可点链接所需的数据（当前套餐 + 各房型 id/价格/余量）。

@@ -19,10 +19,36 @@ type RoomOption = {
 type Chat = {
   user?: string
   answer?: string
+  safety_notes?: string
+  reasons?: Record<string, string>
+  schedule_notes?: Record<string, Array<{ time?: string; content?: string }>>
+  limited_adjustments?: Record<string, string[]>
   suggestions?: TravelProduct[]
   follow_up_questions?: string[]
   product_id?: number | null
   room_options?: RoomOption[]
+}
+
+// 助手回答不止一段话：把「为什么推荐 / 时间怎么排 / 哪些改不了」结构化展示出来。
+function nameFor(chat: Chat, id: string) {
+  const found = (chat.suggestions || []).find((item) => String(item.id) === String(id))
+  return found?.product_name || '推荐方案'
+}
+
+function reasonRows(chat: Chat) {
+  return Object.entries(chat.reasons || {}).map(([id, text]) => ({ name: nameFor(chat, id), text: String(text) }))
+}
+
+function scheduleRows(chat: Chat) {
+  return Object.entries(chat.schedule_notes || {})
+    .map(([id, items]) => ({ key: id, name: nameFor(chat, id), items: Array.isArray(items) ? items : [] }))
+    .filter((row) => row.items.length)
+}
+
+function limitRows(chat: Chat) {
+  return Object.entries(chat.limited_adjustments || {})
+    .map(([id, items]) => ({ name: nameFor(chat, id), text: Array.isArray(items) ? items.join('；') : String(items) }))
+    .filter((row) => row.text)
 }
 
 const question = ref('')
@@ -73,6 +99,10 @@ async function ask(text?: string) {
     })
     chats.value.push({
       answer: String(response.data.answer || ''),
+      safety_notes: String(response.data.safety_notes || ''),
+      reasons: (response.data.reasons as Record<string, string>) || {},
+      schedule_notes: (response.data.schedule_notes as Chat['schedule_notes']) || {},
+      limited_adjustments: (response.data.limited_adjustments as Chat['limited_adjustments']) || {},
       suggestions: (response.data.suggestions as TravelProduct[]) || [],
       follow_up_questions: (response.data.follow_up_questions as string[]) || [],
       product_id: (response.data.product_id as number) ?? props.productId ?? null,
@@ -132,6 +162,28 @@ onMounted(loadIntro)
                 <ProductCard :product="item" public-view compact />
               </div>
             </div>
+            <div v-if="reasonRows(chat).length" class="assistant-block">
+              <b>为什么推荐</b>
+              <ul>
+                <li v-for="row in reasonRows(chat)" :key="`reason-${row.name}`"><strong>{{ row.name }}</strong>{{ row.text }}</li>
+              </ul>
+            </div>
+            <div v-if="scheduleRows(chat).length" class="assistant-block">
+              <b>时间怎么安排</b>
+              <ul>
+                <li v-for="row in scheduleRows(chat)" :key="`schedule-${row.key}`">
+                  <strong>{{ row.name }}</strong>
+                  <span v-for="(item, i) in row.items" :key="`slot-${row.key}-${i}`">{{ item.time ? `${item.time} ` : '' }}{{ item.content }}</span>
+                </li>
+              </ul>
+            </div>
+            <div v-if="limitRows(chat).length || chat.safety_notes" class="assistant-block assistant-block--note">
+              <b>注意事项</b>
+              <ul>
+                <li v-for="row in limitRows(chat)" :key="`limit-${row.name}`"><strong>{{ row.name }}</strong>{{ row.text }}</li>
+                <li v-if="chat.safety_notes"><strong>出行提示</strong>{{ chat.safety_notes }}</li>
+              </ul>
+            </div>
             <div v-if="chat.follow_up_questions?.length" class="assistant-followups">
               <button v-for="item in chat.follow_up_questions" :key="item" type="button" @click="ask(item)">{{ item }}</button>
             </div>
@@ -178,6 +230,13 @@ onMounted(loadIntro)
 .assistant-card { display: grid; gap: 6px; }
 .assistant-card__link { display: inline-block; color: #d56835; font-size: 12px; font-weight: 650; text-decoration: none; }
 .assistant-card__link:hover { text-decoration: underline; }
+/* 结构化回答：为什么推荐 / 时间怎么排 / 注意事项 */
+.assistant-block { display: grid; gap: 7px; margin-top: 12px; padding: 11px 13px; border: 1px solid #ece2da; border-radius: 12px; background: #fdfbf9; }
+.assistant-block > b { color: #b4531f; font-size: 12.5px; font-weight: 700; }
+.assistant-block ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.assistant-block li { display: grid; gap: 3px; color: #4a423c; font-size: 12.5px; line-height: 1.7; }
+.assistant-block li strong { color: #26211d; font-size: 12.5px; font-weight: 650; }
+.assistant-block--note { border-color: #f0e2cf; background: #fffaf2; }
 .assistant-followups { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .assistant-followups button { padding: 6px 10px; border: 1px solid #e6ded7; border-radius: 999px; background: #fff; color: #7a6f68; font-size: 11px; cursor: pointer; }
 
@@ -189,7 +248,7 @@ onMounted(loadIntro)
 .assistant-input button { flex: 0 0 auto; height: 44px; padding: 0 22px; border: 0; border-radius: 14px; background: #ff6a00; color: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
 .assistant-input button:disabled { opacity: .5; cursor: not-allowed; }
 
-.assistant-cards :deep(.product-card--compact) { grid-template-columns: 108px minmax(0, 1fr); min-height: 104px; border: 1px solid #eee3da; border-radius: 12px; }
+.assistant-cards :deep(.product-card--compact) { grid-template-columns: 132px minmax(0, 1fr); min-height: 116px; border: 1px solid #eee3da; border-radius: 12px; }
 .assistant-cards :deep(.product-card--compact > .product-card__media) { height: 100%; min-height: 104px; }
 .assistant-cards :deep(.product-card--compact > .product-card__media > .media-image) { height: 100%; min-height: 104px; aspect-ratio: auto; }
 .assistant-cards :deep(.product-card--compact .product-card__body) { display: grid; align-content: center; gap: 4px; padding: 9px 11px; }
@@ -202,7 +261,7 @@ onMounted(loadIntro)
   .assistant-answer { font-size: 13px; }
   .assistant-input button { height: 40px; padding: 0 16px; font-size: 13px; border-radius: 12px; }
   .assistant-input textarea { min-height: 40px; font-size: 12px; }
-  .assistant-cards :deep(.product-card--compact) { grid-template-columns: 92px minmax(0, 1fr); min-height: 92px; }
+  .assistant-cards :deep(.product-card--compact) { grid-template-columns: 116px minmax(0, 1fr); min-height: 104px; }
   .assistant-cards :deep(.product-card--compact > .product-card__media),
   .assistant-cards :deep(.product-card--compact > .product-card__media > .media-image) { min-height: 92px; }
 }

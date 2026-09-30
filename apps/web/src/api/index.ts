@@ -40,6 +40,8 @@ export const hotelApi = {
     message: string
     product: TravelProduct
   }>(`/hotel/products/${id}/refine`, { natural_language }),
+  productRefinements: (id: number) => api.get<{ version: number; items: Array<Record<string, any>> }>(`/hotel/products/${id}/refinements`),
+  rollbackRefinement: (id: number, refinementId: number) => api.post<Record<string, any> & { product: TravelProduct }>(`/hotel/products/${id}/refinements/${refinementId}/rollback`, {}),
   deleteProduct: (id: number) => api.delete<{ deleted: boolean; archived: boolean; message: string }>(`/hotel/products/${id}`),
   regenerateMarketing: (id: number, payload: { style?: 'ARTISTIC' | 'PROMOTIONAL' | 'EMPATHETIC' | 'SEEDING'; generate_image?: boolean } = {}) => api.post<TravelProduct>(`/hotel/products/${id}/marketing-assets`, payload),
   productStatus: (id: number, status: string) => api.patch<TravelProduct>(`/hotel/products/${id}/status`, { status }),

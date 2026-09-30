@@ -54,8 +54,10 @@ onMounted(() => {
     <el-alert v-if="error" :title="error" type="error" show-icon />
     <div v-if="loading" class="home-loading"><span /> 正在加载商品…</div>
     <div v-else-if="items.length" class="product-grid product-grid--editorial product-grid--wide"><ProductCard v-for="product in items" :key="product.id" :product="product" public-view /></div>
-    <div v-if="hasMore && !loading" class="catalog-load-more"><el-button plain :loading="loadingMore" @click="loadMore">继续加载</el-button></div>
-    <div v-else class="list-empty"><h2>暂时没有匹配的商品</h2><p>换一个日期、主题或预算再试。</p><div><el-button plain @click="clear">清除筛选</el-button></div></div>
+    <div v-if="hasMore && !loading && items.length" class="catalog-load-more"><el-button plain :loading="loadingMore" @click="loadMore">继续加载</el-button></div>
+    <!-- 空状态只跟「有没有商品」有关，之前误挂在「继续加载」的 v-else 上，
+         导致有商品时底部也会出现「暂时没有匹配的商品」。 -->
+    <div v-if="!loading && !items.length" class="list-empty"><h2>暂时没有匹配的商品</h2><p>换一个日期、主题或预算再试。</p><div><el-button plain @click="clear">清除筛选</el-button></div></div>
   </main>
 </template>
 
@@ -67,8 +69,8 @@ onMounted(() => {
 <style scoped>
 /* Product listing keeps the storefront tone: a quiet filter row and image-led cards. */
 .product-list {
-  width: min(960px, 100%);
-  max-width: 960px;
+  width: min(1080px, 100%);
+  max-width: 1080px;
   box-sizing: border-box;
   margin: 0 auto;
   padding: 0 0 44px;
