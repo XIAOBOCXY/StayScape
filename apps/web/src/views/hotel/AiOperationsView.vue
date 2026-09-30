@@ -21,6 +21,8 @@ const brief = ref('')
 const loading = ref(false)
 const loadError = ref('')
 const dataReady = ref(false)
+// 经营分析是否已跑完一轮（成功或失败都算完成），步骤条只表示业务进度，不锁死后续工作。
+const analysisDone = ref(false)
 const submitting = ref(false)
 const processingMessage = ref('正在读取未来房态、近期成交、合作资源、天气与地点信息…')
 const advisorAnalysisSignature = ref('')
@@ -191,22 +193,27 @@ function routeForDay(dayIndex: number) {
 
 const stages = [
   { id: 1, label: '经营分析', hint: '查看并询问经营数据' },
-  { id: 2, label: '产品方案', hint: '比较生成方向' },
-  { id: 3, label: '产品微调', hint: '调整已选产品' },
-  { id: 4, label: '预览与发布', hint: '检查游客端成品' },
+  { id: 2, label: '产品方案', hint: '比较方向 · 调整当前方案' },
+  { id: 3, label: '候选确认', hint: '挑选候选并确认' },
+  { id: 4, label: '营销发布', hint: '检查游客端成品' },
 ]
 const availableStage = computed(() => {
   if (resolvedCandidateCount.value > 0 || sessionProposalIds.value.length > 0) return 4
-  // Analysis is complete when its data has loaded, even if no recommendation
-  // exists yet. The stepper reports progress; it never blocks the next task.
-  return dataReady.value ? 2 : 1
+  // 经营分析只要读取结束就算完成；即使没有推荐方案，用户也能进入产品方案继续调整条件。
+  return analysisDone.value ? 2 : 1
 })
 const stageIndex = computed(() => Math.min(selectedStage.value || 1, availableStage.value))
 async function selectStage(id: number) {
   if (id > availableStage.value) return
   selectedStage.value = id
   if (id === 2) {
-    await ensureEvidence('inventory')
+    // 进入产品方案前补齐四类经营证据：AI 执行摘要据此给出真实数字，而不是占位结论。
+    await Promise.allSettled([
+      ensureEvidence('inventory'),
+      ensureEvidence('orders'),
+      ensureEvidence('resources'),
+      ensureEvidence('weather'),
+    ])
     if (!submitting.value && (!advisorLoadedThisVisit.value || advisorAnalysisSignature.value !== analysisSignature())) await autoStart()
   }
 }
@@ -235,16 +242,15 @@ async function loadConversationHistory() {
         previousPrimary.value = normalized
         targetInventoryKey.value = String(normalized.target_date) + '|' + String(normalized.room_type)
       }
-      if (String(latest.last_execution?.step || '') === 'GENERATED') {
-        const response = await hotelApi.aiProposals('PENDING_CONFIRMATION', Number(latest.id))
-        proposals.value = Array.isArray(response.data) ? response.data : []
-        sessionProposalIds.value = proposals.value
-          .filter((item) => Number(item.conversation_id) === Number(latest.id))
-          .map((item) => Number(item.id))
-      } else {
-        proposals.value = []
-        sessionProposalIds.value = []
-      }
+      // 只要本轮会话还有待确认候选，就恢复到「候选确认」阶段：
+      // 刷新页面不会让已经生成并校验过的候选消失。
+      const response = await hotelApi.aiProposals('PENDING_CONFIRMATION', Number(latest.id))
+      proposals.value = Array.isArray(response.data) ? response.data : []
+      sessionProposalIds.value = proposals.value
+        .filter((item) => Number(item.conversation_id) === Number(latest.id))
+        .map((item) => Number(item.id))
+      // 已有待确认候选时直接停在「候选确认」，避免用户以为候选丢了。
+      if (sessionProposalIds.value.length && !resolvedCandidateCount.value) selectedStage.value = 3
     }
   } catch (error) {
     // Historical context is optional for viewing current operating data.
@@ -267,6 +273,7 @@ async function load() {
     showToast(loadError.value)
   } finally {
     loading.value = false
+    analysisDone.value = true
   }
 }
 
@@ -533,6 +540,26 @@ function startEditing(card: AnyRecord) {
 
 function stopEditing() {
   editingProduct.value = null
+}
+
+// 候选确认阶段：预览按需展开，避免一屏同时加载多个 iframe。
+const previewCardKey = ref('')
+function toggleCandidatePreview(card: AnyRecord) {
+  previewCardKey.value = previewCardKey.value === String(card.key) ? '' : String(card.key)
+}
+
+// 「继续调整此候选」回到产品方案阶段，并把这个候选设为正在微调的对象。
+async function continueEditing(card: AnyRecord) {
+  if (card?.product_id) editingProduct.value = { id: Number(card.product_id), name: String(card.name || '') }
+  const target = card?.raw?.product as AnyRecord | undefined
+  if (target) {
+    const nextPrimary = primaryFromRefinedProduct(target, primarySpec.value || {})
+    advisor.value = { ...(advisor.value || {}), primary: nextPrimary }
+    previousPrimary.value = nextPrimary
+  }
+  selectedStage.value = 2
+  await nextTick()
+  showToast('已回到产品方案，直接说要改什么即可')
 }
 
 // 「生成候选产品」把当前方案变成真正待确认的产品。
@@ -958,16 +985,154 @@ function candidateReason(proposal: AnyRecord) {
   return bits.join('；') + '。'
 }
 
+// 「查看推荐依据」要能回答「为什么是它」，因此按房态、资源、定价、客群、校验逐项给出可核查的事实。
+function candidateEvidenceRows(proposal: AnyRecord): AnyRecord[] {
+  const product = proposal?.product as AnyRecord | undefined
+  if (!product) return []
+  const resources = (product.resources || []) as AnyRecord[]
+  const room = resources.find((row) => row.resource_type === 'ROOM')
+  const partners = resources.filter((row) => row.resource_type === 'PARTNER_RESOURCE')
+  const services = resources.filter((row) => row.resource_type === 'HOTEL_SERVICE')
+  const insight = (proposal?.insight_snapshot || {}) as AnyRecord
+  const topCrowds = ((insight.top_crowds || []) as AnyRecord[])
+  const rows: AnyRecord[] = []
+  if (room) {
+    const remaining = room.remaining_capacity ?? room.available_count ?? room.capacity ?? '—'
+    rows.push({
+      label: '房态与容量',
+      text: `房型「${room.resource_name}」${product.target_date}${remaining === '—' || remaining === null || remaining === undefined ? '' : ` 余量 ${remaining} 间`}，可住 ${product.party_size} 人；据房量与体验席位核定本产品最多可售 ${product.sale_quantity ?? '—'} 套。`,
+    })
+  }
+  for (const row of partners) {
+    const window = row.start_time && row.end_time ? `${String(row.start_time).slice(0, 5)}–${String(row.end_time).slice(0, 5)}` : '按场次'
+    const seat = row.quantity_per_package || 1
+    const remain = row.remaining_capacity ?? row.available_quantity ?? '—'
+    const hasRemain = remain !== '—' && remain !== null && remain !== undefined
+    rows.push({
+      label: '体验资源',
+      text: `「${row.resource_name}」${window}，每套占用 ${seat} 席${hasRemain ? `，当期余量 ${remain} 份` : ''}${row.indoor === true ? '，室内体验，雨天可执行' : row.indoor === false ? '，户外体验，出行前复核天气' : ''}${row.settlement_price !== undefined ? `，结算价 ¥${row.settlement_price}/份` : ''}。`,
+    })
+  }
+  for (const row of services) {
+    rows.push({
+      label: '酒店权益',
+      text: `「${row.resource_name}」每套 ${row.quantity_per_package || 1} 份${row.available_quantity !== undefined ? `，当期余量 ${row.available_quantity} 份` : ''}${row.unit_cost !== undefined ? `，单份成本 ¥${row.unit_cost}` : ''}，已纳入容量校验。`,
+    })
+  }
+  if (product.suggested_price !== undefined && product.unit_cost !== undefined) {
+    rows.push({
+      label: '价格与利润',
+      text: `建议售价 ¥${product.suggested_price}，单位成本 ¥${product.unit_cost}，最低合法价 ${product.minimum_allowed_price !== undefined ? `¥${product.minimum_allowed_price}` : '按成本与最低毛利核定'}，毛利率 ${marginText(product.gross_margin) || '—'}；容量瓶颈：${product.bottleneck_resource || '未触发限制'}。`,
+    })
+  }
+  if (topCrowds.length) {
+    const top = topCrowds[0]
+    const share = top.share === undefined || top.share === null ? '' : `，占比 ${top.share}%`
+    rows.push({
+      label: '客群依据',
+      text: `近 15 天成交最集中的客群是${crowdLabel(top.target_crowd)}（${top.confirmed_orders} 单${share}），本产品目标客群为${crowdLabel(product.target_crowd)}。`,
+    })
+  } else {
+    rows.push({
+      label: '客群依据',
+      text: `近 15 天没有可用的成交样本，本产品目标客群${crowdLabel(product.target_crowd)}来自房型可住人数与资源适配标签，不做历史成交推断。`,
+    })
+  }
+  rows.push({
+    label: '校验结论',
+    text: `库存、资源名额、价格下限与利润已通过校验${product.sale_quantity ? `（可售 ${product.sale_quantity} 套）` : ''}；发布前会再按实时房态复核一次。`,
+  })
+  return rows
+}
+
+// 「AI 执行摘要」只出现一次：这一轮读了什么、校验了什么，每行一条结论并附可核查依据。
+const execSummary = computed<AnyRecord[]>(() => {
+  const roomCount = roomEvidenceRows.value.length
+  const orders = recentOrderSummary.value as AnyRecord
+  const confirmed = Number(orders.confirmed_count ?? recentConfirmedRows.value.length ?? 0)
+  const topCrowd = ((orders.top_crowds || []) as AnyRecord[])[0]
+  const partnerCount = resourceEvidenceRows.value.length
+  const serviceCount = serviceEvidenceRows.value.length
+  const usableWeather = weatherEvidenceRows.value.filter((row) => row.usable).length
+  const primary = primarySpec.value
+  const rows: AnyRecord[] = [
+    {
+      key: 'inventory',
+      label: '房态已读取',
+      done: dataReady.value,
+      headline: roomCount
+        ? `未来 ${pressure.value.window_days ?? 17} 天 · ${roomEvidenceDateCount.value} 个日期 × ${roomEvidenceTypeCount.value} 种房型 · 共 ${roomEvidenceTotal.value} 间夜`
+        : `未来 ${pressure.value.window_days ?? 17} 天 · 待消化 ${pressure.value.unsold_room_nights ?? 0} 间夜 · ${pressure.value.room_type_count ?? 0} 种房型`,
+      basis: focusRoom.value
+        ? `余量最高：${focusRoom.value.room_type} ${focusRoom.value.remaining} 间（${focusRoom.value.target_date}） · 数据来源：客房库存`
+        : '数据来源：客房库存接口，按所选日期与房型核定可售套数',
+    },
+    {
+      key: 'orders',
+      label: '客群需求已分析',
+      done: evidenceLoaded.value.includes('orders'),
+      headline: !evidenceLoaded.value.includes('orders')
+        ? '待读取订单明细：展开后可给出近 15 天成交额与最集中客群'
+        : confirmed
+          ? `近 15 天已确认 ${confirmed} 单 · 成交 ¥${orders.confirmed_revenue ?? recentConfirmedRevenue.value} · 最集中：${crowdLabel(topCrowd?.target_crowd)}（${topCrowd?.confirmed_orders ?? 0} 单）`
+          : '近 15 天暂无确认成交，按房态与资源适配推断客群',
+      basis: !evidenceLoaded.value.includes('orders')
+        ? '数据来源：展开「经营数据明细 → 订单数据」后按确认订单统计'
+        : confirmed
+          ? '数据来源：确认订单（含提交时价格快照）；客群取自产品目标客群'
+          : '数据来源：订单接口已读取，样本不足时不推断主力客群',
+    },
+    {
+      key: 'resources',
+      label: '合作资源已匹配',
+      done: evidenceLoaded.value.includes('resources'),
+      headline: !evidenceLoaded.value.includes('resources')
+        ? `待读取合作资源明细：重点日期可组包 ${pressure.value.available_resource_count ?? '—'} 个`
+        : partnerCount || serviceCount
+          ? `${partnerCount} 项可组包体验 · ${serviceCount} 项酒店权益 · 重点日期可组包 ${pressure.value.available_resource_count ?? '—'} 个`
+          : `已读取合作资源与酒店权益（可组包 ${pressure.value.available_resource_count ?? '—'} 个）`,
+      basis: evidenceLoaded.value.includes('resources')
+        ? '数据来源：合作资源余量、结算价、场次、室内外标签与是否允许组包'
+        : '数据来源：展开「经营数据明细 → 合作资源」后按余量、结算价与场次核对',
+    },
+    {
+      key: 'weather',
+      label: '天气与路线已核对',
+      done: evidenceLoaded.value.includes('weather'),
+      headline: !evidenceLoaded.value.includes('weather')
+        ? '待读取天气明细：展开后按日给出降雨概率与温度'
+        : usableWeather
+          ? `杭州未来 ${weatherEvidenceRows.value.length} 天逐日预报，其中 ${usableWeather} 天可用 · 当前：${weatherLabel.value}`
+          : `当前：${weatherLabel.value} · 天气未知时只提示核验，不阻断生成`,
+      basis: evidenceLoaded.value.includes('weather')
+        ? '数据来源：天气服务；降雨日优先室内资源，并保留可替换路线'
+        : '数据来源：展开「经营数据明细 → 天气预测」后按日核对；未知天气不阻断生成',
+    },
+    {
+      key: 'plan',
+      label: primary ? '当前方案可生成候选' : '当前条件暂无推荐组合',
+      done: Boolean(primary),
+      headline: primary
+        ? `${primary.product_name || '当前方案'} · 建议售价 ¥${primary.price} · 可售 ${primary.max_sellable} 套 · 毛利率 ${primary.margin}%`
+        : (judgement.value.text || '可以先调整日期、客群、体验或价格目标后重新计算'),
+      basis: primary
+        ? '已校验：库存 → 资源名额 → 成本 → 最低合法价 → 毛利率，全部通过后才允许生成候选产品'
+        : '调整条件后重新计算，任何一步校验失败都会说明原因并保留上一版方案',
+    },
+  ]
+  return rows
+})
+
 function candidateRelation(proposal: AnyRecord) {
   const names = experienceNames(proposal)
   const product = proposal?.product as AnyRecord | undefined
   const current = ((primarySpec.value?.experiences as AnyRecord[]) || []).map((item) => String(item.name || '')).filter(Boolean)
   const roomName = String(((product?.resources || []) as AnyRecord[]).find((item) => item.resource_type === 'ROOM')?.resource_name || '')
   const sameFrame = product?.target_date === primarySpec.value?.target_date && roomName === String(primarySpec.value?.room_type || '')
-  if (!sameFrame) return '替代日期或路线'
-  if (current.length && current.length === names.length && current.every((name) => names.includes(name))) return '沿用当前组合'
-  if (current.length && current.every((name) => names.includes(name))) return '沿用当前体验 · 增加资源'
-  if (current.some((name) => names.includes(name))) return '保留部分体验 · 调整资源'
+  if (!sameFrame) return '替代日期 / 房型'
+  if (current.length && current.length === names.length && current.every((name) => names.includes(name))) return '沿用当前资源'
+  if (current.length && current.every((name) => names.includes(name))) return '沿用当前资源 · 已增加体验'
+  if (current.some((name) => names.includes(name))) return '保留部分体验 · 替换其余资源'
   if (names.length) return '替换体验资源'
   return '替代路线'
 }
@@ -1015,6 +1180,21 @@ const resourceSwaps = computed<AnyRecord[]>(() => {
   return (((primary.resource_options as AnyRecord[]) || [])).filter((item) => !item.is_current)
 })
 const budgetShortfall = computed<AnyRecord | null>(() => (primarySpec.value?.budget_shortfall as AnyRecord) || null)
+
+// 当前方案的默认视图：只保留四条能直接支撑决策的事实，长行程与推荐逻辑默认折叠。
+const primaryEvidence = computed<AnyRecord[]>(() => {
+  const primary = primarySpec.value
+  if (!primary) return []
+  const orders = recentOrderSummary.value as AnyRecord
+  const topCrowd = ((orders.top_crowds || []) as AnyRecord[])[0]
+  const confirmed = Number(orders.confirmed_count ?? 0)
+  return [
+    { label: '库存压力', text: focusRoom.value ? `${focusRoom.value.room_type} 余 ${focusRoom.value.remaining} 间（${focusRoom.value.target_date}）` : `待消化 ${pressure.value.unsold_room_nights ?? 0} 间夜` },
+    { label: '客群依据', text: confirmed && topCrowd ? `近 15 天${crowdLabel(topCrowd.target_crowd)}成交最集中（${topCrowd.confirmed_orders} 单）` : `${crowdLabel(primary.crowd)} · 按房型可住人数与资源适配` },
+    { label: '资源容量', text: primary.bottleneck ? `瓶颈：${primary.bottleneck}` : `可售 ${primary.max_sellable} 套（体验名额充足）` },
+    { label: '天气', text: weatherLabel.value },
+  ]
+})
 
 const logicByTitle = computed<Record<string, string>>(() => {
   const out: Record<string, string> = {}
@@ -1082,8 +1262,6 @@ onMounted(async () => { selectedStage.value = 1; await load() })
       <el-button size="small" plain :loading="submitting || loading" @click="refreshData">刷新经营数据</el-button>
       <el-button size="small" plain @click="historyOpen = true">操作历史<template v-if="operationLog.length">（{{ operationLog.length }}）</template></el-button>
     </div>
-    <div v-if="submitting" class="recompute-popover" role="status"><span class="recompute-spinner" />{{ processingMessage }}</div>
-
     <!-- ① 流程步骤 -->
     <nav class="stage-bar" aria-label="产品生成流程">
       <ol>
@@ -1095,6 +1273,16 @@ onMounted(async () => { selectedStage.value = 1; await load() })
         </li>
       </ol>
     </nav>
+
+    <!-- 处理中只在页面内提示：步骤条、经营数据与输入区保持可见可操作。 -->
+    <div v-if="submitting" class="work-status" role="status">
+      <span class="recompute-spinner" />
+      <div>
+        <b>{{ processingMessage }}</b>
+        <small v-if="primarySpec">正在根据新条件重新计算，当前方案会保留到新结果返回；失败时不会清空已有方案。</small>
+        <small v-else>读取过程中仍可查看经营数据、切换步骤或直接输入新的要求。</small>
+      </div>
+    </div>
 
     <!-- ② 经营状态 -->
     <section class="fact-strip">
@@ -1202,6 +1390,27 @@ onMounted(async () => { selectedStage.value = 1; await load() })
           <div class="evidence-analysis"><b>分析与产品影响</b><p>知识库补充地点地址、开放时间、适配客群与天气信息，用于丰富非售卖路线和说明行程衔接；正式包含的权益仍必须来自有库存和结算价的合作资源或酒店服务。</p><small>当前知识地点没有与产品路线、订单建立结构化外键，因此不展示伪造的历史成交排名。</small></div>
         </div>
       </details>
+
+      <!-- 无方案不等于卡住：分析完成后直接给出原因与可执行的下一步。 -->
+      <div v-if="analysisDone && !primarySpec" class="next-step-note">
+        <b>经营分析已完成，当前条件没有推荐组合</b>
+        <p>{{ judgement.text || '系统已读取房态、订单与合作资源，但按当前日期、客群、体验或价格目标没有满足条件的组合。' }}</p>
+        <ul>
+          <li v-if="focusRoom">可优先把日期换到 {{ focusRoom.target_date }} 的 {{ focusRoom.room_type }}（余 {{ focusRoom.remaining }} 间）。</li>
+          <li v-if="!evidenceLoaded.includes('resources')">合作资源还未读取，刷新资源后再算一次可以排除名额不足。</li>
+          <li v-else>若名额不足，可在合作资源池补充资源或允许更多资源组包。</li>
+          <li>也可以放宽价格目标或换一个客群，让约束条件更容易满足。</li>
+        </ul>
+        <div class="option-row">
+          <button type="button" @click="ask('换一个日期')">换日期</button>
+          <button type="button" @click="ask('换成两人同行')">换客群</button>
+          <button type="button" @click="ask('换一个室内体验')">换体验</button>
+          <button type="button" @click="ask('预算降低到 700 以内')">调整价格目标</button>
+          <button type="button" :disabled="submitting" @click="ask('重新读取房态和合作资源，重新计算当前方案')">刷新资源并重算</button>
+          <router-link class="ghost-link" to="/hotel/rooms">维护客房库存</router-link>
+          <router-link class="ghost-link" to="/hotel/resources">维护合作资源</router-link>
+        </div>
+      </div>
     </section>
 
     <!-- ③ Step 2：推荐方向。进入候选确认后收起，避免两个业务阶段同时出现。 -->
@@ -1290,6 +1499,10 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             <span>毛利率 {{ primarySpec.margin }}%</span>
           </div>
 
+          <div class="key-evidence primary-facts">
+            <div v-for="item in primaryEvidence" :key="item.label"><span>{{ item.label }}</span><b>{{ item.text }}</b></div>
+          </div>
+
           <div v-if="budgetShortfall" class="budget-note">
             <p>当前条件下没有 ¥{{ budgetShortfall.requested }} 以内、且满足最低利润要求的组合，最低可售价为 ¥{{ budgetShortfall.lowest }}。</p>
             <div class="option-row"><button v-for="option in budgetShortfall.options" :key="option.label" type="button" @click="ask(option.message)">{{ option.label }}</button></div>
@@ -1302,7 +1515,9 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             </div>
           </div>
 
-          <div v-if="primarySpec.itinerary_days?.length" class="itinerary-days">
+          <details v-if="primarySpec.itinerary_days?.length" class="advanced-fold itinerary-fold">
+            <summary>查看完整行程与转场（{{ primarySpec.itinerary_days.length }} 天）</summary>
+            <div class="itinerary-days">
             <article v-for="day in primarySpec.itinerary_days" :key="day.day_index" class="itinerary-day">
               <header><b>{{ day.label }} · {{ day.title }}</b><span>{{ day.date }}</span></header>
               <p class="itinerary-day__summary">{{ day.summary }}</p>
@@ -1329,7 +1544,8 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                 </div>
               </details>
             </article>
-          </div>
+            </div>
+          </details>
 
           <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more">
             <summary>价格与收益</summary>
@@ -1373,11 +1589,47 @@ onMounted(async () => { selectedStage.value = 1; await load() })
       </div>
     </section>
 
-    <!-- ④ Step 3：产品已生成后才出现具体产品的调整控件。 -->
+    <!-- ④ Step 3：候选确认。这一阶段只做「挑候选 → 确认」，编辑逻辑收进折叠区。 -->
     <section v-if="stageIndex === 3" class="panel stage-panel">
-      <div class="stage-panel__head"><h2>产品微调</h2><span class="muted">经营分析阶段的关注方向已带入；在这里调整已生成的具体产品</span></div>
-      <!-- 当前选择直接展开在产品微调阶段，推荐方向只负责比较。 -->
-      <div v-if="primarySpec" class="selected-plan-detail">
+      <div class="stage-panel__head"><h2>候选确认</h2><span class="muted">先确认一个候选，再进入营销发布；需要改动时展开下方的调整区</span></div>
+
+      <div v-if="candidateCards.length" class="candidate-grid">
+        <article v-for="card in candidateCards" :key="`confirm-${card.key}`" class="candidate-card is-confirm">
+          <div class="candidate-card__body">
+            <header>
+              <h3>{{ card.name }}</h3>
+              <b>¥{{ card.price }}</b>
+            </header>
+            <span class="candidate-relation">{{ card.relation }}</span>
+            <p class="muted">{{ card.date }} · {{ card.crowd_label }} · {{ card.party }} 人<template v-if="card.quantity !== ''"> · 可售 {{ card.quantity }} 套</template></p>
+            <p v-if="card.experiences.length" class="candidate-card__exp">正式体验：{{ card.experiences.join('、') }}</p>
+            <p v-if="card.services.length" class="candidate-card__exp">酒店权益：{{ card.services.join('、') }}</p>
+            <p class="candidate-card__figures">成本 ¥{{ card.cost }} · 最低合法价 ¥{{ card.floor_price }}<template v-if="card.margin_label"> · 毛利率 {{ card.margin_label }}</template></p>
+            <div class="badge-row">
+              <span>✓ 库存通过</span>
+              <span>✓ 资源通过</span>
+              <span>✓ 利润通过</span>
+            </div>
+            <div class="candidate-card__actions">
+              <el-button size="small" type="primary" @click="confirm(card.raw, 'DRAFT')">选定并加入草稿</el-button>
+              <el-button size="small" plain @click="continueEditing(card)">继续调整此候选</el-button>
+              <el-button size="small" plain @click="toggleCandidatePreview(card)">{{ previewCardKey === card.key ? '收起预览' : '预览' }}</el-button>
+            </div>
+            <iframe v-if="previewCardKey === card.key" class="visitor-preview-frame" :src="visitorPreviewUrl(card)" title="游客端商品完整预览" loading="lazy" scrolling="no" @load="resizeVisitorPreview" />
+            <details class="reason-fold">
+              <summary>查看推荐依据</summary>
+              <ul class="reason-list">
+                <li v-for="row in candidateEvidenceRows(card.raw)" :key="row.label"><b>{{ row.label }}：</b>{{ row.text }}</li>
+              </ul>
+            </details>
+          </div>
+        </article>
+      </div>
+      <p v-else class="muted">还没有候选产品：先在上一步「产品方案」里调整到满意的方案，再点击「生成候选产品」。</p>
+
+      <details v-if="primarySpec" class="advanced-fold">
+        <summary>继续调整这个方案（房型 / 体验 / 价格 / 路线）</summary>
+        <div class="selected-plan-detail">
         <div class="selected-plan-detail__head">
           <div>
             <span class="section-kicker">当前选择</span>
@@ -1399,6 +1651,10 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             <span>毛利率 {{ primarySpec.margin }}%</span>
           </div>
 
+          <div class="key-evidence primary-facts">
+            <div v-for="item in primaryEvidence" :key="item.label"><span>{{ item.label }}</span><b>{{ item.text }}</b></div>
+          </div>
+
           <div v-if="budgetShortfall" class="budget-note">
             <p>当前条件下没有 ¥{{ budgetShortfall.requested }} 以内、且满足最低利润要求的组合，最低可售价为 ¥{{ budgetShortfall.lowest }}。</p>
             <div class="option-row"><button v-for="option in budgetShortfall.options" :key="option.label" type="button" @click="ask(option.message)">{{ option.label }}</button></div>
@@ -1411,7 +1667,9 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             </div>
           </div>
 
-          <div v-if="primarySpec.itinerary_days?.length" class="itinerary-days">
+          <details v-if="primarySpec.itinerary_days?.length" class="advanced-fold itinerary-fold">
+            <summary>查看完整行程与转场（{{ primarySpec.itinerary_days.length }} 天）</summary>
+            <div class="itinerary-days">
             <article v-for="day in primarySpec.itinerary_days" :key="day.day_index" class="itinerary-day">
               <header><b>{{ day.label }} · {{ day.title }}</b><span>{{ day.date }}</span></header>
               <p class="itinerary-day__summary">{{ day.summary }}</p>
@@ -1438,7 +1696,8 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                 </div>
               </details>
             </article>
-          </div>
+            </div>
+          </details>
 
           <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more">
             <summary>价格与收益</summary>
@@ -1479,10 +1738,11 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 
           <details class="reason-fold"><summary>展开推荐依据与风险</summary><div class="detail-tabs"><button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">经营价值</button><button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button><button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险与限制</button><button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button></div><div class="detail-body"><template v-if="detailTab === 'basis'"><p v-for="item in (primarySpec.reason_sections || [])" :key="item.label"><b>{{ item.label }}：</b>{{ item.text }}</p><p v-if="!primarySpec.reason_sections?.length">{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p></template><template v-else-if="detailTab === 'value'"><p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p></template><template v-else-if="detailTab === 'risk'"><p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p></template><template v-else><p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p></template></div></details>
         </article>
-      </div>
+        </div>
+      </details>
       <div class="decision-card__actions stage-next">
         <el-button type="primary" :disabled="!sessionProposalIds.length" @click="selectedStage = 4">查看游客端预览</el-button>
-        <span class="muted">完成调整后进入最终展示与发布</span>
+        <span class="muted">确认候选后进入营销发布，可继续微调游客端文案</span>
       </div>
     </section>
 
@@ -1626,19 +1886,33 @@ onMounted(async () => { selectedStage.value = 1; await load() })
       </div>
     </section>
 
-    <!-- ⑧ 经营数据问答与已选产品微调，共用输入区但分属不同阶段。 -->
-    <form v-if="stageIndex === 1 || stageIndex === 3" class="composer" @submit.prevent="submit()">
+    <!-- AI 执行摘要：整个工作台只出现一次，一行一条结论并附可核查的依据。 -->
+    <details class="exec-summary">
+      <summary>AI 执行摘要 · 这一轮读了什么、校验了什么（{{ execSummary.length }} 项）</summary>
+      <ul>
+        <li v-for="row in execSummary" :key="row.key" :class="{ 'is-pending': !row.done }">
+          <span class="exec-summary__mark">{{ row.done ? '✓' : '·' }}</span>
+          <b>{{ row.label }}</b>
+          <span class="exec-summary__detail">{{ row.headline }}</span>
+          <small>{{ row.basis }}</small>
+        </li>
+      </ul>
+    </details>
+
+    <!-- ⑧ 无论有没有方案，输入区都固定可用：有方案是调整，没有方案就是规划。 -->
+    <form class="composer" @submit.prevent="submit()">
       <div class="composer__context">
-        <span v-if="stageIndex === 1" class="context-chip">经营数据查询助手 · 问题与关注方向会带入产品方案</span>
-        <span v-else class="context-chip is-editing">正在微调：{{ editingProduct?.name || currentObjectLabel }}</span>
+        <span v-if="stageIndex === 1 && !primarySpec" class="context-chip">经营数据查询助手 · 问题与关注方向会带入产品方案</span>
+        <span v-else-if="primarySpec" class="context-chip is-editing">正在调整：{{ editingProduct?.name || currentObjectLabel }}</span>
+        <span v-else class="context-chip is-editing">正在规划新方案 · 说明日期、客群或预算即可</span>
         <button v-if="advisor || operationLog.length || analysisMessages.length" type="button" class="ghost-link" @click="clearConversation">重新开始</button>
       </div>
       <div class="composer__quick">
-        <button v-for="cmd in (stageIndex === 1 ? operatingQuestions : quickCommands)" :key="cmd" type="button" @click="stageIndex === 1 ? askOperatingQuestion(cmd) : ask(cmd)">{{ cmd }}</button>
+        <button v-for="cmd in (stageIndex === 1 && !primarySpec ? operatingQuestions : quickCommands)" :key="cmd" type="button" @click="stageIndex === 1 && !primarySpec ? askOperatingQuestion(cmd) : ask(cmd)">{{ cmd }}</button>
       </div>
       <div class="composer__main">
-        <textarea v-model="brief" rows="1" :placeholder="stageIndex === 1 ? '输入经营问题，例如：近15天哪款产品成交最多？未来哪些房型余量较高？' : '例如：价格控制在 700 以内；换成更适合两人的体验；把下午路线改轻松一些'" @input="growInput" @keydown.enter.exact.prevent="submit()" />
-        <button type="submit" :disabled="!brief.trim() || submitting">{{ stageIndex === 1 ? '查询经营数据' : '调整方案' }}</button>
+        <textarea v-model="brief" rows="1" :placeholder="stageIndex === 1 && !primarySpec ? '输入经营问题，例如：近15天哪款产品成交最多？未来哪些房型余量较高？' : '例如：价格控制在 700 以内；换成更适合两人的体验；把下午路线改轻松一些'" @input="growInput" @keydown.enter.exact.prevent="submit()" />
+        <button type="submit" :disabled="!brief.trim() || submitting">{{ stageIndex === 1 && !primarySpec ? '查询经营数据' : primarySpec ? '调整方案' : '规划方案' }}</button>
       </div>
     </form>
   </section>
@@ -1664,6 +1938,22 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 <style scoped>
 /* 正文控制在易读宽度内，超宽屏不出现横跨整屏的中文长行。 */
 .ai-ops { display: grid; gap: 14px; width: 100%; min-width: 0; max-width: 1280px; margin-inline: auto; box-sizing: border-box; }
+/* 所有状态共用同一容器宽度：展开推荐逻辑、候选与表格都不会把页面撑宽。 */
+.ai-ops > nav, .ai-ops > section, .ai-ops > div, .ai-ops > details, .ai-ops > form { min-width: 0; max-width: 100%; }
+.ai-ops :deep(.reply-table), .reason-list li, .exec-summary li, .candidate-card, .decision-card { overflow-wrap: anywhere; }
+
+/* AI 执行摘要：一行一条结论，并给出可核查的依据；默认折叠。 */
+.exec-summary { display: grid; gap: 8px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.exec-summary > summary { cursor: pointer; color: var(--teal-dark); font-size: 12px; font-weight: 650; }
+.exec-summary ul { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.exec-summary li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 7px 9px; border-top: 1px solid #eef3f0; font-size: 11.5px; line-height: 1.7; }
+.exec-summary li:first-child { border-top: 0; }
+.exec-summary__mark { color: #2f6f60; font-weight: 700; }
+.exec-summary li b { color: var(--ink); }
+.exec-summary__detail { color: #45524c; }
+.exec-summary li small { color: var(--muted); font-size: 10.5px; }
+.exec-summary li.is-pending .exec-summary__mark { color: var(--muted); }
+.exec-summary li.is-pending b, .exec-summary li.is-pending .exec-summary__detail { color: #6b7a74; }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .page-head__text strong { display: block; font-size: 15px; }
 .page-head__text p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
@@ -1705,7 +1995,20 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .analysis-message b { color: var(--teal-dark); font-size: 10.5px; }
 .analysis-message p { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.7; }
 .stage-next { align-items: center; }
-.recompute-popover { position: fixed; z-index: 100; top: 18px; left: 50%; display: flex; align-items: center; gap: 10px; max-width: min(92vw, 460px); padding: 12px 18px; border: 1px solid #d9e8e1; border-radius: 999px; background: rgba(255,255,255,.97); box-shadow: 0 12px 35px rgba(26,55,45,.16); color: #245e51; font-size: 12px; transform: translateX(-50%); }
+/* 处理中：内联提示条，不覆盖步骤条、经营数据与输入区。 */
+.work-status { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; border: 1px solid #d9e8e1; border-radius: 10px; background: #f5faf7; color: #245e51; }
+.work-status b { display: block; font-size: 12px; line-height: 1.6; }
+.work-status small { display: block; margin-top: 3px; color: #5d7a70; font-size: 10.5px; line-height: 1.6; }
+.next-step-note { display: grid; gap: 8px; padding: 12px 14px; border: 1px dashed var(--teal); border-radius: 11px; background: #f7fbf9; }
+.next-step-note > b { color: var(--teal-dark); font-size: 12.5px; }
+.next-step-note p { margin: 0; color: #4d5f58; font-size: 12px; line-height: 1.7; }
+.next-step-note ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #55635d; font-size: 11.5px; line-height: 1.7; }
+.advanced-fold { display: grid; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfc; }
+.advanced-fold > summary { cursor: pointer; color: var(--teal-dark); font-size: 11.5px; font-weight: 650; }
+.advanced-fold[open] > summary { margin-bottom: 8px; }
+.reason-list { display: grid; gap: 5px; margin: 8px 0 0; padding-left: 0; list-style: none; color: #45524c; font-size: 11.5px; line-height: 1.7; }
+.reason-list li { display: block; overflow-wrap: anywhere; }
+.reason-list b { color: #2f6053; }
 .recompute-spinner { width: 15px; height: 15px; flex: 0 0 auto; border: 2px solid #d8eae2; border-top-color: #267664; border-radius: 50%; animation: recompute-spin .7s linear infinite; }
 @keyframes recompute-spin { to { transform: rotate(360deg); } }
 .change-note { display: grid; gap: 7px; margin: 0; padding: 10px 12px; border: 1px solid #d4e7dc; border-radius: 9px; background: #f5faf7; color: #2f6f60; font-size: 11.5px; line-height: 1.65; }
@@ -1906,7 +2209,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 .refine-row > p { margin: 0; font-size: 12px; }
 
 /* 吸底输入区 */
-.composer { position: sticky; bottom: 10px; z-index: 3; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 -8px 24px rgba(18, 20, 19, .1); }
+.composer { position: sticky; bottom: 10px; z-index: 12; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 -8px 24px rgba(18, 20, 19, .1); }
 .composer__context { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .context-chip { padding: 4px 10px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 11px; }
 .context-chip.is-editing { background: #fff4ec; color: #9a6427; }
