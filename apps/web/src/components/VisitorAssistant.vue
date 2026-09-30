@@ -215,17 +215,17 @@ onMounted(loadIntro)
 </template>
 
 <style scoped>
-.assistant { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.assistant-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; scrollbar-width: none; }
+.assistant { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; }
+.assistant-scroll { flex: 1 1 auto; width: 100%; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; scrollbar-width: none; }
 .assistant-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .assistant-intro { display: grid; gap: 12px; padding: 8px 0; }
 .assistant-greeting { margin: 0; color: #4a5a54; font-size: 14px; line-height: 1.8; }
 .assistant-starters { display: flex; flex-wrap: wrap; gap: 7px; }
 .assistant-starters button { padding: 8px 12px; border: 1px solid #e6ded7; border-radius: 999px; background: #fff; color: #6f6259; font-size: 12px; cursor: pointer; }
 .assistant-starters button:hover { border-color: #d56835; color: #d56835; }
-.assistant-chat { display: grid; gap: 14px; }
+.assistant-chat { display: grid; gap: 14px; width: 100%; }
 .assistant-bubble { max-width: 82%; padding: 10px 13px; border-radius: 14px 14px 4px 14px; background: #eaf4ef; color: #23483d; font-size: 13px; line-height: 1.7; justify-self: end; }
-.assistant-answer { max-width: 96%; color: #33403b; font-size: 14px; line-height: 1.8; }
+.assistant-answer { width: 100%; max-width: 100%; color: #33403b; font-size: 14px; line-height: 1.8; }
 .assistant-answer--pending { color: var(--muted); font-size: 13px; }
 .assistant-paragraph { margin: 0 0 8px; }
 .assistant-paragraph:last-child { margin-bottom: 0; }

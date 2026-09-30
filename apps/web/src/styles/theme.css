@@ -514,7 +514,8 @@ body{background:var(--canvas);font-family:var(--font-sans)}.admin-shell{backgrou
   min-height: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  /* 用 stretch + 子元素 margin 居中，避免 align-items:center 触发 shrink-to-fit。 */
+  align-items: stretch;
   padding: 10px 14px 14px;
   overflow: hidden;
 }
@@ -525,7 +526,8 @@ body{background:var(--canvas);font-family:var(--font-sans)}.admin-shell{backgrou
   max-width: 960px;
   min-width: 0;
   box-sizing: border-box;
-  margin: 0;
+  /* 居中交给 margin，宽度只由百分比决定，和消息内容无关。 */
+  margin: 0 auto;
 }
 @media (max-width: 700px) {
   .visitor-shell--chat .visitor-main,

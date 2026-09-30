@@ -35,6 +35,40 @@ _GENERIC_LANGUAGE = re.compile(
     re.IGNORECASE,
 )
 
+# 公共路线提示：只保留文旅库里的具体信息（开放时间、预约要求、是否收费），
+# 纯免责声明（“以官方公告为准”“请先核验”）不再转成行程里的提示。
+_CONCRETE_SIGNAL = re.compile(
+    r"(\d{1,2}[:：]\d{2}"
+    r"|\d+\s*(?:分钟|小时|元|天)"
+    r"|周[一二三四五六日天]"
+    r"|免费|免票"
+    r"|停止入馆|闭馆"
+    r"|无需(?:提前)?预约|需(?:要)?提前预约"
+    r"|门票\s*\d)"
+)
+_NOTE_TAIL = re.compile(
+    r"(?:请?以[^。；，]{0,24}(?:为准|公告)|请(?:先|出发前)?(?:核验|确认|核对)|可能(?:会)?(?:不同|调整))"
+)
+
+
+def _concrete_note(value: object) -> str:
+    """把文旅库字段压成一句可执行的事实，没有事实就返回空串。"""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[（(][^）)]*(?:为准|核验|确认|调整|不同)[^）)]*[）)]", "", text)
+    kept: list[str] = []
+    for sentence in _SENTENCES.findall(text):
+        clean = _NOTE_TAIL.split(sentence.strip())[0].strip(" ，,；;、")
+        parts = [part.strip() for part in re.split(r"[；;]", clean) if part.strip()]
+        parts = [part for part in parts if _CONCRETE_SIGNAL.search(part)]
+        clean = "；".join(parts)
+        if not clean:
+            continue
+        kept.append(clean if clean.endswith(("。", "！", "？")) else clean + "。")
+    return "".join(kept)
+
 
 # 内部枚举（客群 / 天气 / 分层 / 预算强度）不允许出现在游客可见文案里。
 _INTERNAL_ENUM_LABELS = {
@@ -516,8 +550,8 @@ def build_day_plan(
 
     def public_entry(place: dict[str, Any], time_text: str, slot: str, role: str) -> dict[str, Any]:
         duration = int(place.get("suggested_duration_minutes") or 90)
-        open_note = str(place.get("opening_hours") or "开放安排请出发前核验。")
-        booking_note = str(place.get("reservation_notice") or "预约规则请出发前核验。")
+        open_note = _concrete_note(place.get("opening_hours"))
+        booking_note = _concrete_note(place.get("reservation_notice"))
         status = str(place.get("verification_status") or "VERIFY_REQUIRED")
         verification = "公共路线建议，不包含门票、预约或交通费用。"
         return {
@@ -528,7 +562,7 @@ def build_day_plan(
             "description": str(place.get("description") or "") + " " + verification,
             "duration_minutes": duration,
             "duration_text": _duration_text(duration),
-            "notes": " ".join(item for item in (open_note, booking_note) if item and not any(generic in item for generic in ("以当天官方公告为准", "请出发前核验", "请出发前核对"))),
+            "notes": " ".join(item for item in (open_note, booking_note) if item.strip()),
             "address": str(place.get("address") or ""),
             "kind": "PUBLIC_REFERENCE",
             "included": False,

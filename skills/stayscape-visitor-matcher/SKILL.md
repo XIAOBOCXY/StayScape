@@ -85,3 +85,17 @@ Return JSON only, without Markdown fences. For each result include:
 
 Keep the existing output schema when the caller supplies one. Complex reasoning
 is internal; the response is the final visitor JSON document only.
+
+## 面向游客的文案与格式（文旅产品写法）
+
+`prompts/system-prompt.md` 里的结构必须遵守，这里只补充判断口径：
+
+- **先结论后理由**：第一句必须是「推荐哪一个 / 能不能去」，不要先铺陈背景。
+- **一行一个候选**：【体验名】｜日期 + 时间｜室内或户外｜价格｜一句适配理由。
+- **具体优于免责**：能用文旅库里的开放时间、预约要求、是否含门票，就不要写「请以官方公告为准」；
+  文旅库没有具体信息时，这一条直接省略。
+- **理由要可核查**：房型余量、体验名额、场次时间、雨天适配、同行人数上限，至少命中一条。
+- **替代方案必须有**：主推受天气 / 预算 / 同行人数影响时，给出可替换的室内体验或更便宜的组合。
+- **写给出行的画面感**：一句话里同时出现「什么时候 + 去哪里 + 做什么」，例如
+  「下雨的傍晚 18:00 走到仁和路，用一桌杭帮菜把杭州的鲜和甜吃明白」。
+- **禁用**：内部枚举（FAMILY / RAIN / HARD_MAX…）、商品 id、成本、毛利，以及「不容错过 / 必打卡 / 顶级体验」这类套话。

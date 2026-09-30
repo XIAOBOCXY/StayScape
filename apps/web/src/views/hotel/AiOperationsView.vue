@@ -1557,7 +1557,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                     <span v-if="item.duration_text">{{ item.duration_text }}</span>
                     <span v-if="item.area">{{ item.area }}</span>
                   </p>
-                  <p v-if="item.notes" class="itinerary-entry__verify">出行前核验：{{ item.notes }}</p>
+                  <p v-if="item.notes" class="itinerary-entry__verify">{{ item.notes }}</p>
                 </div>
               </div>
               <details v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-fold">
