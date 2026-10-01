@@ -541,16 +541,15 @@ class KnowledgeService:
             slug = str(value["slug"])
             existing = self.db.scalar(select(TravelKnowledge).where(TravelKnowledge.slug == slug))
             if existing is None:
-                self.db.add(
-                    TravelKnowledge(
-                        **value,
-                        verification_status="VERIFY_REQUIRED",
-                        verified_at=None,
-                        source_updated_at=None,
-                        verified_fields=[],
-                        status="ACTIVE",
-                    )
+                record = dict(value)
+                record.update(
+                    verification_status="VERIFY_REQUIRED",
+                    verified_at=None,
+                    source_updated_at=None,
+                    verified_fields=[],
+                    status="ACTIVE",
                 )
+                self.db.add(TravelKnowledge(**record))
                 created += 1
                 continue
             update = KNOWLEDGE_FIELD_UPDATES.get(slug, {})
