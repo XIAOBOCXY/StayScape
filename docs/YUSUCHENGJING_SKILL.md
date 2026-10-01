@@ -56,7 +56,7 @@ stayscape_recheck_product_health，重新计算容量、价格边界和状态。
 时间和 verification_status。默认状态为 VERIFY_REQUIRED，因此 Agent 必须提示
 信息需确认，不能把开放时间、预约或票务说成已确认事实。
 
-建议在比赛前由项目组每周核验：
+建议在上线前由项目组每周核验：
 
 1. 地址、开放时间、闭馆日与预约说明。
 2. 来源页面是否可访问。

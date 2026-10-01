@@ -50,7 +50,7 @@ Feishu ──▶ official OpenClaw Feishu Channel ──▶ stayscape-main
 
 ### 余宿成景 Hotel Ops Skill
 
-这是酒店运营任务的总控 Skill。它先调用受限的机会分析 Tool，取得临期客房、近 14 天经营聚合、带来源天气、审核合作资源和带来源公共文旅知识；再把已验证方向交给 Product Generator 创建待确认候选。它不拥有 Shell、数据库或任意 HTTP 权限，也不能自行发布产品。独立 ZIP 内还提供一套不依赖 SaaS 的 Python 示例数据、计算脚本和测试，用于可复现答辩演示。
+这是酒店运营任务的总控 Skill。它先调用受限的机会分析 Tool，取得临期客房、近 14 天经营聚合、带来源天气、审核合作资源和带来源公共文旅知识；再把已验证方向交给 Product Generator 创建待确认候选。它不拥有 Shell、数据库或任意 HTTP 权限，也不能自行发布产品。独立 ZIP 内还提供一套不依赖 SaaS 的 Python 示例数据、计算脚本和测试，用于可复现产品演示。
 
 ### Visitor Matcher Skill
 

@@ -200,7 +200,12 @@ class TravelKnowledge(TimestampMixin, Base):
     source_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # ACTIVE: checked within the configured review window; VERIFY_REQUIRED:
+    source_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_reachable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verified_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    verification_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    verified_fields: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # ACTIVE: manually reviewed within the configured review window; VERIFY_REQUIRED:
     # use only with an explicit confirmation note; STALE: never present as a
     # factual opening-time or reservation claim.
     verification_status: Mapped[str] = mapped_column(String(30), default="VERIFY_REQUIRED", nullable=False)

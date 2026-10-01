@@ -263,7 +263,7 @@
 .refine-row > p { margin: 0; font-size: 12px; }
 
 /* 吸底输入区 */
-.composer { position: sticky; bottom: 10px; z-index: 12; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 -8px 24px rgba(18, 20, 19, .1); }
+ .composer { position: sticky; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 12; display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 -8px 24px rgba(18, 20, 19, .1); }
 .composer__context { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .context-chip { padding: 4px 10px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 11px; }
 .context-chip.is-editing { background: #fff4ec; color: #9a6427; }
@@ -320,3 +320,5 @@
 .itinerary-entry__meta span { overflow-wrap: anywhere; }
 .itinerary-entry__meta span + span::before { content: '·'; margin-right: 6px; color: var(--muted); }
 .itinerary-entry__verify { margin: 4px 0 0; color: #8a642c; font-size: 12.5px; line-height: 1.6; }
+
+@media (prefers-reduced-motion: reduce) { .composer, .composer * { scroll-behavior: auto; transition-duration: .01ms; animation-duration: .01ms; } }

@@ -530,11 +530,9 @@ class KnowledgeService:
         self.db = db
 
     def seed_curated_hangzhou(self) -> int:
-        """Insert new records and refresh the curated facts in place.
+        """Sync curated content without claiming operator review.
 
-        Content fields (opening hours, descriptions, notices) are re-synced so a
-        deployment stops showing placeholder text, while the hotel-visible
-        verification timestamp is refreshed at the same time.
+        Changed facts invalidate prior review; link reachability is transport metadata.
         """
 
         created = 0
@@ -546,8 +544,10 @@ class KnowledgeService:
                 self.db.add(
                     TravelKnowledge(
                         **value,
-                        verified_at=now,
-                        source_updated_at=now,
+                        verification_status="VERIFY_REQUIRED",
+                        verified_at=None,
+                        source_updated_at=None,
+                        verified_fields=[],
                         status="ACTIVE",
                     )
                 )
@@ -559,10 +559,13 @@ class KnowledgeService:
                 if getattr(existing, field, None) != new_value:
                     setattr(existing, field, new_value)
                     changed = True
-            if changed or existing.verification_status != "ACTIVE":
-                existing.verification_status = "ACTIVE"
-                existing.verified_at = now
-                existing.source_updated_at = now
+            if changed:
+                existing.verification_status = "VERIFY_REQUIRED"
+                existing.verified_at = None
+                existing.verified_by_user_id = None
+                existing.verification_note = ""
+                existing.verified_fields = []
+                existing.source_updated_at = None
         if created:
             self.db.flush()
         return created
@@ -607,6 +610,9 @@ class KnowledgeService:
             "source_name": item.source_name,
             "source_url": item.source_url,
             "source_updated_at": item.source_updated_at.isoformat() if item.source_updated_at else None,
+            "source_checked_at": item.source_checked_at.isoformat() if item.source_checked_at else None,
+            "source_reachable": item.source_reachable,
+            "verified_fields": item.verified_fields or [],
             "verified_at": item.verified_at.isoformat() if item.verified_at else None,
             "source_age_days": verified_age_days,
             "verification_status": status,
@@ -667,6 +673,11 @@ class KnowledgeService:
                     "source_name": item.source_name,
                     "source_url": item.source_url,
                     "verified_at": item.verified_at.isoformat() if item.verified_at else None,
+                    "verified_by_user_id": item.verified_by_user_id,
+                    "verification_note": item.verification_note,
+                    "verified_fields": item.verified_fields or [],
+                    "source_checked_at": item.source_checked_at.isoformat() if item.source_checked_at else None,
+                    "source_reachable": item.source_reachable,
                     "source_updated_at": item.source_updated_at.isoformat() if item.source_updated_at else None,
                     "source_age_days": _age_in_days(item.verified_at),
                     "review_window_days": max(1, settings.knowledge_review_days),
@@ -706,12 +717,14 @@ class KnowledgeService:
             items = [item for item in items if not item.area or city in str(item.area) or city in str(item.address or "")]
         if limit:
             items = items[:limit]
-        checked = refreshed = 0
+        checked = reachable_count = 0
         failed: list[dict[str, str]] = []
         for item in items:
             url = str(item.source_url or "").strip()
             checked += 1
             if not url:
+                item.source_checked_at = now
+                item.source_reachable = False
                 failed.append({"name": item.name, "reason": "未配置来源链接"})
                 continue
             try:
@@ -719,21 +732,42 @@ class KnowledgeService:
                 reachable = response.status_code < 400
             except Exception:  # noqa: BLE001 - network failures are reported, not raised
                 reachable = False
+            item.source_checked_at = now
+            item.source_reachable = reachable
             if reachable:
-                item.verified_at = now
-                item.source_updated_at = now
-                item.verification_status = "ACTIVE"
-                refreshed += 1
+                reachable_count += 1
             else:
                 failed.append({"name": item.name, "reason": "来源页暂时无法访问"})
         self.db.flush()
         return {
             "checked": checked,
-            "refreshed": refreshed,
+            "reachable_count": reachable_count,
+            "facts_reverified": 0,
             "failed": failed[:10],
             "failed_count": len(failed),
             "checked_at": now.isoformat(),
         }
+
+    def review_item(self, item_id: int, *, reviewer_id: int, reviewed_fields: list[str], note: str) -> dict[str, Any]:
+        required = {"name", "category", "area", "address", "indoor_outdoor", "suitable_crowds", "minimum_age", "maximum_age", "suggested_duration_minutes", "opening_hours", "weather_adaptations", "reservation_notice", "description", "source_name", "source_url"}
+        if set(reviewed_fields) != required:
+            raise ValueError("必须逐项核对全部知识字段")
+        clean_note = " ".join(str(note or "").split())
+        if len(clean_note) < 8:
+            raise ValueError("核验说明至少需要 8 个字符")
+        item = self.db.get(TravelKnowledge, item_id)
+        if item is None:
+            raise LookupError("知识记录不存在")
+        if not str(item.source_url or "").strip():
+            raise ValueError("缺少可追溯的来源链接，不能记录事实核验")
+        now = _utc_now()
+        item.verified_at = now
+        item.verified_by_user_id = reviewer_id
+        item.verification_note = clean_note[:1000]
+        item.verified_fields = sorted(required)
+        item.verification_status = "ACTIVE"
+        self.db.flush()
+        return self.to_context(item)
 
     def search(self, query: str = "", *, target_crowd: str = "", weather: str = "", limit: int = 8) -> list[dict[str, Any]]:
         items = list(

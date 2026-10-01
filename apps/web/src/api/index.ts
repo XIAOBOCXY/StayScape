@@ -64,8 +64,9 @@ export const hotelApi = {
   confirmAiProposal: (proposalId: number, action: 'DRAFT' | 'PUBLISH') => api.post<Record<string, unknown>>(`/hotel/ai/proposals/${proposalId}/confirm`, { action }),
   clearAiConversation: (conversationId: number) => api.post<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}/clear`),
   deleteAiConversation: (conversationId: number) => api.delete<Record<string, unknown>>(`/hotel/ai/conversations/${conversationId}`),
-  knowledge: (params?: { q?: string; category?: string; limit?: number }) => api.get<{ items: Array<Record<string, unknown>>; categories: string[]; total: number; disclosure: string }>('/hotel/knowledge', { params }),
-  refreshKnowledge: () => api.post<{ checked: number; refreshed: number; failed_count: number; failed: Array<{ name: string; reason: string }>; checked_at: string }>('/hotel/knowledge/refresh'),
+  knowledge: (params?: { q?: string; category?: string; limit?: number }) => api.get<{ items: Array<Record<string, unknown>>; categories: Array<{ value: string; label: string }>; total: number; disclosure: string }>('/hotel/knowledge', { params }),
+  refreshKnowledge: () => api.post<{ checked: number; reachable_count: number; facts_reverified: number; failed_count: number; failed: Array<{ name: string; reason: string }>; checked_at: string }>('/hotel/knowledge/refresh'),
+  verifyKnowledge: (id: number, reviewed_fields: string[], review_note: string) => api.post<{ item: Record<string, any> }>('/hotel/knowledge/' + id + '/verify', { reviewed_fields, review_note }),
   salesCommand: (natural_language: string) => api.post<{ action: string; scope: string; affected: Array<Record<string, unknown>>; message: string }>('/hotel/products/sales-command', { natural_language }),
   ordersOverview: () => api.get<{
     total: number

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { hotelApi } from '../../api'
 import { errorMessage } from '../../api/client'
 
@@ -48,11 +48,35 @@ async function refreshSources() {
   try {
     const response = await hotelApi.refreshKnowledge()
     const data = response.data
-    refreshNote.value = `已核对 ${data.checked} 条来源，更新 ${data.refreshed} 条${data.failed_count ? `，${data.failed_count} 条来源暂时打不开` : ''}。（${String(data.checked_at).slice(0, 16).replace('T', ' ')}）`
-    ElMessage.success('知识库已按来源页重新核对')
+    refreshNote.value = '已检查 ' + data.checked + ' 条来源链接，其中 ' + data.reachable_count + ' 条可访问；这不代表事实已核验。'
+    ElMessage.success('来源链接检查完成')
     await load()
   } catch (error) { ElMessage.error(errorMessage(error)) }
   finally { refreshing.value = false }
+}
+
+const reviewFields = [
+  'name', 'category', 'area', 'address', 'indoor_outdoor', 'suitable_crowds',
+  'minimum_age', 'maximum_age', 'suggested_duration_minutes', 'opening_hours',
+  'weather_adaptations', 'reservation_notice', 'description', 'source_name', 'source_url'
+]
+
+async function verifySelected() {
+  if (!selected.value) return
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '请先打开来源页面，逐项对照地点名称、类别、区域、地址、适合人群、年龄、时长、开放时间、天气适配、预约提示、介绍及来源信息。确认全部一致后，填写简要核验说明。',
+      '人工核验文旅事实',
+      { confirmButtonText: '确认已逐项核对', cancelButtonText: '取消', inputPlaceholder: '例如：已对照景区官网开放时间与地址，2026-10-01', inputValidator: (v: string) => v.trim().length >= 8 || '请填写至少 8 个字符的核验说明' }
+    )
+    const id = selected.value.id
+    await hotelApi.verifyKnowledge(id, reviewFields, value)
+    ElMessage.success('已记录人工核验')
+    await load()
+    selected.value = items.value.find(item => item.id === id) || null
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(errorMessage(error))
+  }
 }
 
 onMounted(load)
@@ -60,7 +84,7 @@ onMounted(load)
 
 <template>
   <div class="knowledge-page">
-    <div v-toolbar class="header-actions"><span class="live-pill"><i /> {{ items.length }} 条记录</span><el-button plain :loading="loading" @click="load">刷新列表</el-button><el-button type="primary" :loading="refreshing" @click="refreshSources">按来源更新</el-button></div>
+    <div v-toolbar class="header-actions"><span class="live-pill"><i /> {{ items.length }} 条记录</span><el-button plain :loading="loading" @click="load">刷新列表</el-button><el-button type="primary" :loading="refreshing" @click="refreshSources">检查来源链接</el-button></div>
 
     <section class="knowledge-filter">
       <el-input v-model="keyword" placeholder="搜索地点、类别、开放时间或来源" clearable @keyup.enter="load" />
@@ -82,8 +106,8 @@ onMounted(load)
           <el-table-column label="建议停留" width="110"><template #default="{ row }">{{ durationText(row.suggested_duration_minutes) }}</template></el-table-column>
           <el-table-column label="开放时间" min-width="170"><template #default="{ row }">{{ row.opening_hours || '未收录' }}</template></el-table-column>
           <el-table-column label="来源" min-width="150"><template #default="{ row }">{{ row.source_name }}</template></el-table-column>
-          <el-table-column label="核验状态" width="110"><template #default="{ row }"><el-tag :type="statusType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-          <el-table-column label="更新" width="110"><template #default="{ row }">{{ row.verified_at ? String(row.verified_at).slice(0, 10) : '未核验' }}</template></el-table-column>
+          <el-table-column label="人工核验" width="110"><template #default="{ row }"><el-tag :type="statusType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="核验日期" width="110"><template #default="{ row }">{{ row.verified_at ? String(row.verified_at).slice(0, 10) : '未核验' }}</template></el-table-column>
         </el-table>
         <div v-if="!loading && !items.length" class="empty-state">没有匹配的知识记录，换一个关键词试试。</div>
       </div>
@@ -108,6 +132,8 @@ onMounted(load)
             <dt>来源</dt><dd>{{ selected.source_name }}<a v-if="selected.source_url" :href="selected.source_url" target="_blank" rel="noreferrer">打开来源</a></dd>
             <dt>核验</dt><dd>{{ statusLabel(selected.status) }}<template v-if="selected.source_age_days !== null"> · 已过 {{ selected.source_age_days }} 天（复核窗口 {{ selected.review_window_days }} 天）</template></dd>
           </dl>
+          <p class="detail-note">链接可访问不代表事实准确。{{ selected.source_checked_at ? '最近检查：' + String(selected.source_checked_at).slice(0, 16).replace('T', ' ') + '；' + (selected.source_reachable ? '来源可访问' : '来源暂不可访问') + '。' : '尚未检查来源链接。' }}</p>
+          <el-button v-if="selected.status !== 'ACTIVE'" type="primary" plain :disabled="!selected.source_url" @click="verifySelected">对照来源并记录核验</el-button>
         </template>
         <div v-else class="empty-state">从左侧选择一条记录查看公开资料原文与来源。</div>
       </aside>

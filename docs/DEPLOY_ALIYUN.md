@@ -4,7 +4,7 @@
 
 ## 1. 购买和准备 ECS
 
-在阿里云 ECS 控制台创建 Linux x64 实例，比赛演示建议至少 4 vCPU / 8 GB / 80 GB SSD，选择 Ubuntu 22.04/24.04 LTS 或阿里云 Linux。购买公网 IPv4，并在安全组只放行：
+在阿里云 ECS 控制台创建 Linux x64 实例，产品演示建议至少 4 vCPU / 8 GB / 80 GB SSD，选择 Ubuntu 22.04/24.04 LTS 或阿里云 Linux。购买公网 IPv4，并在安全组只放行：
 
 | 端口 | 来源 | 用途 |
 |---|---|---|
@@ -97,7 +97,7 @@ bash scripts/deploy.sh live
 7. 通过 `openclaw skills list --agent stayscape-main --json` 检查四个 Skill，并检查 Qwen provider、StayScape Tool Plugin 和模型清单
 8. 通过一次真实 `POST /v1/responses` smoke test 后才把 FastAPI 的 `OPENCLAW_LIVE_READY` 标记为 true；模型 Key 无效时部署失败，不伪装成 Live
 
-访问 `http://<ECS公网IP>/`。演示账号由 Seed 创建并由部署输出提示，登录页不会预填用户名或密码。正式比赛前请在服务端更换演示密码；确认演示数据后，把 `SEED_DEMO_ON_STARTUP=false` 写入 `.env`，再执行：
+访问 `http://<ECS公网IP>/`。演示账号由 Seed 创建并由部署输出提示，登录页不会预填用户名或密码。正式上线前请在服务端更换演示密码；确认演示数据后，把 `SEED_DEMO_ON_STARTUP=false` 写入 `.env`，再执行：
 
 ```bash
 docker compose --env-file .env --profile live up -d server
@@ -105,7 +105,7 @@ docker compose --env-file .env --profile live up -d server
 
 ## 5. HTTPS
 
-比赛现场可以先使用公网 IP 的 HTTP。正式域名按阿里云证书/备案流程配置 443，并在 Nginx 前增加 HTTPS 终止。不要为了让浏览器访问而把 Gateway 端口映射出来。
+现场体验可以先使用公网 IP 的 HTTP。正式域名按阿里云证书/备案流程配置 443，并在 Nginx 前增加 HTTPS 终止。不要为了让浏览器访问而把 Gateway 端口映射出来。
 
 ## 6. 运维命令
 
@@ -121,4 +121,4 @@ docker compose --env-file .env --profile live down
 
 ## 7. NOT VERIFIED 项
 
-本地开发机没有可用 Docker Engine、阿里云 ECS SSH 凭证、模型供应商凭证或飞书 App Secret，因此本地只能验证配置/代码契约，不能在本轮实际完成公网部署、模型调用或飞书消息闭环。部署到你的 ECS 后应保存 `/health`、Skill discovery、产品生成和飞书日志作为比赛验收证据。
+本地开发机没有可用 Docker Engine、阿里云 ECS SSH 凭证、模型供应商凭证或飞书 App Secret，因此本地只能验证配置/代码契约，不能在本轮实际完成公网部署、模型调用或飞书消息闭环。部署到你的 ECS 后应保存 `/health`、Skill discovery、产品生成和飞书日志作为上线验收记录。

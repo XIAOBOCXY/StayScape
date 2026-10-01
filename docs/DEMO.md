@@ -1,4 +1,4 @@
-# StayScape 比赛演示脚本
+# StayScape 产品体验流程
 
 ## 1. 启动
 

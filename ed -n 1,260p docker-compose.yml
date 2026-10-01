@@ -1,8 +1,0 @@
-a3ba998 (HEAD -> main) feat: strengthen hotel AI product generation
-dce6abe update 9.2
-faf6486 (tag: backup-20260828-prechange, origin/main, origin/HEAD) fix: keep workbench text clear of imagery
-9fa96ab feat: enrich live travel operations and visual workflows
-5ee4b45 feat: refine live agent and travel workbench
-0f5e132 fix: complete live OpenClaw configuration
-610efe9 docs: explain local-only API configuration
-51c545d feat: finalize OpenClaw live deployment wiring

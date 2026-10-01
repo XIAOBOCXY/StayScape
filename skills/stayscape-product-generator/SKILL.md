@@ -87,10 +87,7 @@ returns a well-formed candidate. Use the output contract in
    rewrite only with those options. Do not repair by inventing facts or by
    changing price/capacity/status.
 
-Complex reasoning is internal; the response is the final JSON document only.
-Multi-turn state is resolved by the outer session/orchestrator layer. Read
-`references/knowledge-contract.md`, `references/validation-retry.md` and
-`references/operating-workflow.md` only when the caller requests those modes.
+Complex reasoning is internal; the response is the final JSON document only. Multi-turn state is resolved by the outer session/orchestrator layer. Apply reference rules only when their content is explicitly supplied in context; do not assume filesystem access.
 
 ## 中文文案与路线规范（文旅产品写法）
 

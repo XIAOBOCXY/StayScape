@@ -1,4 +1,4 @@
-"""Verify the single public StayScape Skill in OpenClaw discovery output."""
+"""Verify all production StayScape Skills in OpenClaw discovery output."""
 
 from __future__ import annotations
 
@@ -8,6 +8,9 @@ from typing import Any
 
 REQUIRED = {
     "yusuchengjing-hotel-ops",
+    "stayscape-product-generator",
+    "stayscape-visitor-matcher",
+    "stayscape-marketing-writer",
 }
 
 

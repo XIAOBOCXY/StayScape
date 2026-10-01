@@ -51,6 +51,12 @@ class HotelPartnerResourceCreate(PartnerResourceCreate):
     merchant_id: int = Field(gt=0)
 
 
+class KnowledgeVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reviewed_fields: list[str] = Field(min_length=15, max_length=15)
+    review_note: str = Field(min_length=8, max_length=1000)
+
+
 class AgentTokenCreateRequest(BaseModel):
     name: str = Field(default="ClawHive 只读接入", min_length=1, max_length=120)
 
@@ -551,18 +557,30 @@ def hotel_knowledge(q: str = "", category: str = "", limit: int = 80, db: Sessio
         "items": service.listing(query=q, category=category, limit=limit),
         "categories": service.categories(),
         "total": service.total(),
-        "disclosure": "",
+        "disclosure": "来源链接检查只反映网页是否可访问，不代表内容真实或仍然有效；访客可见事实须由运营人员逐项对照来源核验。",
     }
 
 
 @router.post("/knowledge/refresh")
 def refresh_hotel_knowledge(db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
-    """Re-check each stored source page and stamp the records that respond."""
+    """Check source URL reachability without verifying factual content."""
 
     _ = user
     result = KnowledgeService(db).refresh_sources(city="杭州")
     db.commit()
     return result
+
+
+@router.post("/knowledge/{item_id}/verify")
+def verify_hotel_knowledge(item_id: int, request: KnowledgeVerificationRequest, db: Session = Depends(get_db), user: User = Depends(get_hotel_user)):
+    try:
+        item = KnowledgeService(db).review_item(item_id, reviewer_id=user.id, reviewed_fields=request.reviewed_fields, note=request.review_note)
+    except LookupError as exc:
+        raise AppError(code="KNOWLEDGE_NOT_FOUND", message=str(exc), status_code=404) from exc
+    except ValueError as exc:
+        raise AppError(code="KNOWLEDGE_REVIEW_INCOMPLETE", message=str(exc), status_code=422) from exc
+    db.commit()
+    return {"item": item}
 
 
 @router.post("/products/sales-command", response_model=SalesCommandResponse)

@@ -50,7 +50,7 @@ GitHub 和前端代码都不会读取或保存该 Key。首次 Live 部署会执
 检查和一次真实 `/v1/responses` smoke test；没有 Key 时应明确失败，不能显示
 `OPENCLAW LIVE` 或静默伪装成 Mock。
 
-本地无模型费用演示使用 `bash scripts/deploy.sh demo`；正式比赛环境使用
+本地无模型费用演示使用 `bash scripts/deploy.sh demo`；生产环境使用
 `bash scripts/deploy.sh live`。官方 Qwen provider 的安装与认证方式以
 [OpenClaw Qwen provider 文档](https://docs.openclaw.ai/providers/qwen) 为准。
 

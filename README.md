@@ -146,4 +146,4 @@ npm.cmd --prefix apps/web run build
 - `integrations/stayscape-openclaw-plugin`：官方 OpenClaw Tool Plugin
 - `deploy/openclaw`：固定版本 OpenClaw 容器和配置模板
 - `scripts`：本地 Seed、Skill 打包、demo/live 一键部署
-- `docs`：架构、赛题对齐、业务调研、测试案例、OpenClaw、飞书和阿里云部署说明
+- `docs`：架构、需求追溯、业务调研、知识治理（docs/KNOWLEDGE_GOVERNANCE.md）、测试案例、OpenClaw、飞书和阿里云部署说明

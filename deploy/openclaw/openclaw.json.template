@@ -135,7 +135,10 @@
         "primary": "${OPENCLAW_PRIMARY_MODEL}"
       },
       "skills": [
-        "yusuchengjing-hotel-ops"
+        "yusuchengjing-hotel-ops",
+        "stayscape-product-generator",
+        "stayscape-visitor-matcher",
+        "stayscape-marketing-writer"
       ]
     },
     "list": [
@@ -144,7 +147,10 @@
         "default": true,
         "workspace": "/home/node/.openclaw/workspace",
         "skills": [
-          "yusuchengjing-hotel-ops"
+          "yusuchengjing-hotel-ops",
+          "stayscape-product-generator",
+          "stayscape-visitor-matcher",
+          "stayscape-marketing-writer"
         ]
       }
     ]

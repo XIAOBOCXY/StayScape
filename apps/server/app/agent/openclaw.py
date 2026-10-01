@@ -173,7 +173,7 @@ class OpenClawAgent:
             f"Run the installed Skill '{skill_name}' for this request. "
             f"Complete the supplied travel workflow in one response: {operation}. "
             f"Workflow rules: {workflow_rules} "
-            "Do not call tools, do not read files, do not search for files, and do not ask for extra data. "
+            "This bounded generation request has no state-changing tools. Use only supplied facts; when a required fact is absent, mark it unavailable instead of inventing it. "
             "Use only the facts and IDs supplied in the workflow input. "
             "Never expose inventory, capacity, cost, margin, rule engine, API, Demo, Mock, "
             "or internal IDs in visitor-facing Chinese. "
