@@ -49,6 +49,15 @@ onMounted(() => {
 <template>
   <main class="product-list storefront-list">
     <header class="product-list__head"><div><h1>杭州旅居商品</h1></div><span class="list-count">{{ resultLabel }}</span></header>
+    <section class="catalog-assistant" aria-label="AI 行程助手">
+      <span class="catalog-assistant__icon" aria-hidden="true">✳</span>
+      <div class="catalog-assistant__copy">
+        <small>STAYSCAPE · TRAVEL ASSISTANT</small>
+        <h2>还在挑选？让旅居助手帮你理清方向</h2>
+        <p>说说出行日期、同行人和预算，获取可订方案与推荐依据。</p>
+      </div>
+      <router-link to="/visitor/assistant">聊聊我的行程 <b aria-hidden="true">→</b></router-link>
+    </section>
 <div class="list-topics"><span>快速筛选</span><button v-for="topic in topics" :key="topic" :class="{ active: form.interest === topic }" @click="form.interest = topic; load()">{{ topic }}</button><button v-if="hasFilters" class="topic-clear" type="button" @click="clear">清除筛选</button></div>
     <section class="product-filter"><label><span>日期</span><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" type="date" placeholder="选择入住日期" /></label><label class="filter-interest"><span>主题或地点</span><el-input v-model="form.interest" placeholder="如：博物馆、运河、亲子" clearable @keyup.enter="load" /></label><label><span>预算</span><el-input v-model="form.budget" placeholder="最高 ¥" inputmode="numeric" /></label><el-button type="primary" @click="load">查找商品</el-button><el-button v-if="hasFilters" plain @click="clear">清除筛选</el-button></section>
     <el-alert v-if="error" :title="error" type="error" show-icon />
@@ -169,5 +178,20 @@ onMounted(() => {
   .storefront-list > .product-grid { margin: 10px; gap: 7px; }
   .storefront-list > .product-grid .product-card--editorial h3 { font-size: 12px; }
   .storefront-list > .product-grid .product-card__hook { font-size: 11px; }
+}
+.storefront-list .catalog-assistant { display: grid; grid-template-columns: 40px minmax(0,1fr) auto; align-items: center; gap: 14px; margin: 16px 20px 0; padding: 15px 17px; border: 1px solid #dce8dd; border-radius: 13px; background: linear-gradient(110deg,#f2f6ee,#fbf8ef 70%,#f7f4ea); }
+.catalog-assistant__icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: #21473d; color: #e9d39e; font-size: 18px; }
+.catalog-assistant__copy small { color: #71867a; font-size: 9px; letter-spacing: .12em; }
+.catalog-assistant__copy h2 { margin: 4px 0 3px; color: #2e4038; font: 500 16px/1.35 Georgia,'Songti SC',serif; }
+.catalog-assistant__copy p { margin: 0; color: #7d867f; font-size: 10.5px; line-height: 1.5; }
+.catalog-assistant > a { padding: 10px 13px; border-radius: 6px; background: #24483e; color: white; font-size: 10.5px; white-space: nowrap; transition: background .18s, transform .18s; }
+.catalog-assistant > a:hover { transform: translateY(-1px); background: #346152; }
+.catalog-assistant > a b { margin-left: 6px; color: #e7ce91; }
+@media (max-width: 700px) {
+  .storefront-list .catalog-assistant { grid-template-columns: 34px minmax(0,1fr); gap: 10px; margin: 12px 14px 0; padding: 12px; }
+  .catalog-assistant__icon { width: 32px; height: 32px; border-radius: 10px; font-size: 15px; }
+  .catalog-assistant__copy h2 { font-size: 14px; }
+  .catalog-assistant__copy p { font-size: 10px; }
+  .catalog-assistant > a { grid-column: 2; justify-self: start; padding: 8px 10px; }
 }
 </style>

@@ -152,10 +152,25 @@ onMounted(loadIntro)
   <section class="assistant">
     <div ref="scroller" class="assistant-scroll">
       <div v-if="!chats.length" class="assistant-intro">
-        <p class="assistant-greeting">{{ greeting }}</p>
-        <div class="assistant-starters">
-          <button v-for="item in starters" :key="item" type="button" @click="ask(item)">{{ item }}</button>
+        <div class="assistant-intro__heading">
+          <span class="assistant-intro__mark" aria-hidden="true">S</span>
+          <div>
+            <span class="assistant-intro__eyebrow">STAYSCAPE · 杭州旅居顾问</span>
+            <h2>把想法，变成一趟合适的旅程</h2>
+          </div>
         </div>
+        <p class="assistant-greeting">{{ greeting }}</p>
+        <div class="assistant-intro__basis">
+          <span class="assistant-intro__basis-icon" aria-hidden="true">✳</span>
+          <span><b>建议有据可查</b><small>参考当前可订套餐、房型余量与商品行程；不确定的信息会提醒你核实</small></span>
+        </div>
+        <div class="assistant-starters">
+          <span class="assistant-starters__label">从一个问题开始</span>
+          <button v-for="(item, index) in starters" :key="item" type="button" @click="ask(item)">
+            <i>{{ String(index + 1).padStart(2, '0') }}</i><span>{{ item }}</span><b aria-hidden="true">↗</b>
+          </button>
+        </div>
+        <p class="assistant-intro__hint">也可以直接输入日期、同行人数、预算或想去的地方</p>
       </div>
 
       <div v-if="chats.length" class="assistant-chat">
@@ -226,11 +241,30 @@ onMounted(loadIntro)
 .assistant { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; }
 .assistant-scroll { flex: 1 1 auto; width: 100%; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; scrollbar-width: none; }
 .assistant-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.assistant-intro { display: grid; gap: 12px; padding: 8px 0; }
-.assistant-greeting { margin: 0; color: #4a5a54; font-size: 14px; line-height: 1.8; }
-.assistant-starters { display: flex; flex-wrap: wrap; gap: 7px; }
-.assistant-starters button { padding: 8px 12px; border: 1px solid #e6ded7; border-radius: 999px; background: #fff; color: #6f6259; font-size: 12px; cursor: pointer; }
-.assistant-starters button:hover { border-color: #d56835; color: #d56835; }
+.assistant-intro { display: grid; gap: 18px; width: min(100%, 760px); margin: clamp(24px, 8vh, 86px) auto 36px; padding: clamp(22px, 4vw, 42px); border: 1px solid #e9e3d7; border-radius: 22px; background: radial-gradient(ellipse at 100% 0, rgba(224, 236, 222, .72), transparent 42%), linear-gradient(145deg, #fffefa 0%, #f8f5ed 100%); box-shadow: 0 22px 65px rgba(35, 58, 48, .08); }
+.assistant-intro__heading { display: flex; align-items: center; gap: 15px; }
+.assistant-intro__mark { display: grid; place-items: center; width: 48px; height: 48px; flex: 0 0 auto; border-radius: 16px; background: #173f37; color: #ecd39e; font: 500 27px/1 Georgia, serif; box-shadow: 0 8px 18px rgba(23, 63, 55, .16); }
+.assistant-intro__eyebrow { display: block; color: #6a8276; font-size: 10px; font-weight: 700; letter-spacing: .13em; }
+.assistant-intro__heading h2 { margin: 6px 0 0; color: #203b32; font: 500 clamp(22px, 3vw, 30px)/1.25 Georgia, 'Songti SC', serif; letter-spacing: -.4px; }
+.assistant-greeting { max-width: 610px; margin: 0; color: #65736b; font-size: 13px; line-height: 1.8; }
+.assistant-intro__basis { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border: 1px solid rgba(44, 94, 72, .12); border-radius: 12px; background: rgba(255,255,255,.66); }
+.assistant-intro__basis-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 50%; background: #e8f1e8; color: #3c7456; font-size: 15px; }
+.assistant-intro__basis b,.assistant-intro__basis small { display: block; }
+.assistant-intro__basis b { color: #345341; font-size: 11.5px; }
+.assistant-intro__basis small { margin-top: 3px; color: #78847d; font-size: 10.5px; line-height: 1.55; }
+.assistant-starters { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.assistant-starters__label { grid-column: 1 / -1; margin-bottom: 1px; color: #8a938c; font-size: 10.5px; letter-spacing: .04em; }
+.assistant-starters button { display: grid; grid-template-columns: 25px minmax(0,1fr) 14px; align-items: center; gap: 9px; min-height: 52px; padding: 9px 11px; border: 1px solid #e9e4da; border-radius: 11px; background: rgba(255,255,255,.8); color: #41584b; text-align: left; font-size: 11.5px; line-height: 1.5; cursor: pointer; transition: border-color .18s, background .18s, transform .18s; }
+.assistant-starters button:hover { transform: translateY(-1px); border-color: #a9c5b2; background: #fff; }
+.assistant-starters button i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #f0f3ec; color: #6f8876; font: 10px var(--font-mono); font-style: normal; }
+.assistant-starters button b { color: #a9b5ab; font-size: 13px; font-weight: 500; }
+.assistant-intro__hint { margin: -7px 0 0; color: #8a938c; font-size: 10.5px; }
+@media (max-width: 600px) {
+  .assistant-intro { gap: 15px; margin: 20px auto 26px; padding: 21px 17px; border-radius: 17px; }
+  .assistant-intro__mark { width: 42px; height: 42px; border-radius: 14px; font-size: 24px; }
+  .assistant-starters { grid-template-columns: 1fr; }
+  .assistant-starters button { min-height: 46px; }
+}
 .assistant-chat { display: grid; gap: 14px; width: 100%; }
 .assistant-bubble { max-width: 82%; padding: 10px 13px; border-radius: 14px 14px 4px 14px; background: #eaf4ef; color: #23483d; font-size: 13px; line-height: 1.7; justify-self: end; }
 .assistant-answer { width: 100%; max-width: 100%; color: #33403b; font-size: 14px; line-height: 1.8; }
