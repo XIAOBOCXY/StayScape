@@ -5,6 +5,7 @@ import httpx
 from app.agent.context import RequestContext
 from app.agent.openclaw import OpenClawAgent
 from app.agent.orchestrator import AgentOrchestrator
+from app.agent.schemas import VisitorAgentOutput
 from app.config import settings
 
 
@@ -110,3 +111,55 @@ def test_agent_retries_httpx_timeout_at_request_level():
         assert db.items[0].actor_role == "HOTEL_OPERATOR"
     finally:
         settings.agent_max_retries = old_retries
+
+
+def test_visitor_match_logs_are_redacted_and_actionable():
+    class InMemoryLog:
+        def __init__(self):
+            self.items = []
+
+        def add(self, item):
+            self.items.append(item)
+
+    db = InMemoryLog()
+    context = RequestContext(source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id="private-session")
+    orchestrator = AgentOrchestrator(db, provider=object(), context=context)
+    orchestrator._log(
+        trace_id="trace_redacted",
+        skill_name="stayscape-visitor-matcher",
+        scene="visitor_matching",
+        payload={
+            "question": "孩子 4 岁，对花生过敏",
+            "natural_language": "孩子 4 岁，对花生过敏",
+            "adult_count": 2,
+            "child_count": 1,
+            "child_ages": [4],
+            "budget": "700",
+            "target_date": "2026-10-08",
+            "weather": "RAIN",
+            "interests": ["MUSEUM"],
+            "requested_places": [],
+            "dietary_restrictions": ["peanut"],
+            "allergy_information": "花生严重过敏",
+            "products": [{"id": 31}],
+        },
+        raw='{"answer":"花生过敏需要确认"}',
+        final_value=VisitorAgentOutput(answer="花生过敏需要确认", selected_product_ids=[31], allergy_warning="需确认"),
+        status="SUCCESS",
+        validation={"valid": True, "errors": []},
+        error_code=None,
+        error_message=None,
+        duration_ms=50,
+        retry_count=0,
+        fallback_used=False,
+    )
+
+    log = db.items[0]
+    serialized = str(log.request_json) + log.raw_response + str(log.final_response)
+    assert log.request_json["candidate_count"] == 1
+    assert log.final_response["selected_product_ids"] == [31]
+    assert log.raw_response == ""
+    assert log.conversation_id == ""
+    assert "花生" not in serialized
+    assert "2026-10-08" not in serialized
+    assert "700" not in serialized

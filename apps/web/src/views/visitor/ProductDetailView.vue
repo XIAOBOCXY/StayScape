@@ -250,6 +250,13 @@ const ratingAverage = computed(() => {
   return value === undefined || value === null || value === '' ? '—' : Number(value).toFixed(1)
 })
 const ratingCount = computed(() => Number(product.value?.rating_count || 0))
+function displayAdviceLines(value: unknown): string[] {
+  const source = Array.isArray(value) ? value.join('\n') : String(value || '')
+  return source.split(/\n+|[；;]|(?<=[。！？])\s*/)
+    .map((line) => line.trim().replace(/^[•·→⇒\s-]+/, ''))
+    .filter(Boolean)
+}
+
 const recommendationNote = computed(() => {
   const time = earliestExperience.value ? `首个体验安排在 ${earliestExperience.value}` : '体验时间按行程卡片安排'
   return `${time}；集合地点为${addressSummary.value}。${crowdLabel.value}可按页面路线前往。`
@@ -499,7 +506,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
     </section>
 
     <section class="commerce-summary">
-      <div class="commerce-head"><div class="commerce-title"><h2>{{ product.product_name }}</h2><p>{{ publicTitle }}</p><div class="commerce-tags"><span>杭州旅居套餐</span><span>{{ crowdLabel }}</span><span>{{ stayLabel }}</span><span>含住宿</span><span>{{ experienceResources.length }}项体验</span></div></div>
+      <div class="commerce-head"><div class="commerce-title"><h2>{{ product.product_name }}</h2><p>{{ publicTitle }}</p><div class="commerce-tags"><span>{{ crowdLabel }}</span><span>{{ stayLabel }}</span><span>含住宿</span><span>{{ experienceResources.length }}项体验</span></div></div>
       <div class="commerce-price"><strong>¥{{ stayPrice }}</strong><span>起 / 套 · {{ stayLabel }}</span><em>已售 {{ product.sold_quantity ?? 0 }} 套</em></div>
       </div>
       <div class="date-picker-row"><b>出行日期</b><span v-for="d in dateOptions" :key="d.id" :class="['date-chip', { active: d.id === product.id }]" @click="chooseDate(d)"><strong>{{ d.target_date.slice(5) }} {{ d.weekday }}</strong><small>{{ d.sale_quantity > 0 ? `余 ${d.sale_quantity} 席` : '售罄' }}</small></span><span v-if="!dateOptions.length" class="date-chip active"><strong>{{ targetDateLabel }}</strong><small>{{ previewMode ? '预览中' : product.sale_quantity > 0 ? `余 ${product.sale_quantity} 席` : '售罄' }}</small></span><span class="date-note">{{ stayLabel }} · {{ stayRange }}</span></div>
@@ -566,11 +573,11 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
           <div class="detail-extra">
             <div>
               <span class="section-kicker">花费</span>
-              <p v-for="(line, index) in product.detail_sections.spend_notes" :key="index">{{ line }}</p>
+              <ul class="detail-advice-list"><li v-for="(line, index) in displayAdviceLines(product.detail_sections.spend_notes)" :key="`spend-${index}`">{{ line }}</li></ul>
             </div>
             <div>
               <span class="section-kicker">出行建议</span>
-              <p v-for="(line, index) in product.detail_sections.tips" :key="index">{{ line }}</p>
+              <ul class="detail-advice-list"><li v-for="(line, index) in displayAdviceLines(product.detail_sections.tips)" :key="`tip-${index}`">{{ line }}</li></ul>
             </div>
           </div>
         </template>
@@ -597,7 +604,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
                   <div class="day-plan__meta">
                     <span v-if="entry.duration_text">{{ entry.duration_text }}</span>
                     <span v-if="entry.address">{{ entry.address }}</span>
-                    <span v-if="entry.notes" class="day-plan__note">注意：{{ entry.notes }}</span>
+                    <span v-if="entry.notes" class="day-plan__note" :class="{ 'day-plan__note--warning': entry.schedule_conflict }">{{ entry.notes }}</span>
                   </div>
                 </div>
               </li>
@@ -662,18 +669,6 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
             <small v-if="guide.verified_at" class="guide-verified">资料核验时间：{{ String(guide.verified_at).slice(0, 10) }}</small>
           </article>
         </div>
-      </section>
-
-      <section v-if="!hotelContext" id="reviews" class="review-section">
-        <div class="section-heading"><div><span class="section-kicker">游客评价</span><h2>真实出行反馈</h2></div><span v-if="ratingCount" class="review-rating">{{ ratingAverage }} 分 · {{ ratingCount }} 条</span></div>
-        <div v-if="reviews.length" class="review-list">
-          <article v-for="(review, index) in reviews" :key="review.id || index" class="review-card">
-            <header><strong>{{ review.author_name || '游客评价' }}</strong><span>{{ review.rating }} 分<template v-if="review.stayed_on"> · 出行日期 {{ review.stayed_on }}</template></span></header>
-            <p>{{ review.content || '暂无评价内容' }}</p>
-            <div v-if="review.highlights?.length" class="review-highlights"><span v-for="item in review.highlights" :key="item">{{ item }}</span></div>
-          </article>
-        </div>
-        <p v-else class="review-empty">这款产品还没有游客评价。</p>
       </section>
 
       <section v-if="gallery.length" class="moments-section">
@@ -1488,6 +1483,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 .day-plan__meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .day-plan__meta span { padding: 3px 7px; border-radius: 999px; background: #f6f1ec; color: #8a7c72; font-size: 11.5px; }
 .day-plan__meta .day-plan__note { background: #fff5e6; color: #a4703a; }
+.day-plan__meta .day-plan__note--warning{background:#fff0eb;color:#9a4f36;border:1px solid #efd2c5;border-radius:7px;padding:6px 8px}
 .day-plan__items b { display: block; color: #33302e; font-size: 13px; }
 .day-plan__items p { margin: 4px 0 0; color: #7a6f68; font-size: 11px; line-height: 1.6; }
 @media (max-width: 700px) {
@@ -1638,9 +1634,9 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 .experience-details ul { display: grid; gap: 5px; margin: 9px 0 0; padding: 9px 0 0; border-top: 1px dashed #f0e8e0; list-style: none; }
 .experience-details li { color: #6f6660; font-size: 11px; line-height: 1.65; }
 .experience-details b { display: inline-block; min-width: 34px; margin-right: 8px; color: #9a9089; font-weight: 500; }
-.detail-extra { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.detail-extra > div { padding: 13px 15px; border-radius: 11px; background: #f7f4f0; }
-.detail-extra p { margin: 7px 0 0; color: #6f6660; font-size: 11px; line-height: 1.7; }
+.detail-extra { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; align-content: start; gap: 18px; }
+.detail-extra > div { min-width:0; align-self:start; padding: 4px 0 4px 12px; border:0; border-left:2px solid #e6ece8; border-radius:0; background:transparent; }
+.detail-extra p { margin: 7px 0 0; color: #6f6660; font-size: 11px; line-height: 1.7; }.detail-advice-list{display:grid;gap:7px;margin:7px 0 0;padding:0;list-style:none}.detail-advice-list li{position:relative;padding-left:12px;color:#59665f;font-size:12px;line-height:1.65}.detail-advice-list li::before{content:"";position:absolute;left:0;top:.68em;width:4px;height:4px;border-radius:50%;background:#91ad9c}
 .related-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
 .related-grid :deep(.product-card) { display: grid; grid-template-columns: 180px minmax(0, 1fr); }
 .related-grid :deep(.product-card > .media-image),

@@ -131,19 +131,54 @@ class AgentOrchestrator:
         fallback_used: bool,
     ) -> None:
         provider = getattr(self.provider, "provider_name", "MOCK")
+        visitor_match = skill_name == "stayscape-visitor-matcher" and self.context.source_channel == "WEB_VISITOR"
+        logged_payload = payload
+        logged_raw = raw
+        logged_final = final_value.model_dump(mode="json") if final_value else None
+        logged_validation = validation
+        logged_error = error_message
+        logged_conversation = self.context.conversation_id or ""
+        if visitor_match:
+            # Visitor messages can contain child ages, allergies, contact details,
+            # and other personal context. Persist observability metadata only.
+            logged_payload = {
+                "candidate_count": len(payload.get("products") or []),
+                "adult_count": int(payload.get("adult_count") or 0),
+                "child_count": int(payload.get("child_count") or 0),
+                "has_child_ages": bool(payload.get("child_ages")),
+                "has_budget": bool(payload.get("budget")),
+                "has_target_date": bool(payload.get("target_date")),
+                "weather": str(payload.get("weather") or "UNKNOWN"),
+                "interest_count": len(payload.get("interests") or []) + len(payload.get("requested_places") or []),
+                "has_dietary_constraints": bool(payload.get("dietary_restrictions")),
+                "has_allergy_information": bool(payload.get("allergy_information")),
+            }
+            value = logged_final or {}
+            selected_ids = value.get("selected_product_ids") or []
+            logged_final = {
+                "selected_product_ids": [int(item) for item in selected_ids if str(item).isdigit()],
+                "reason_count": len(value.get("reasons") or {}),
+                "schedule_note_count": sum(len(rows or []) for rows in (value.get("schedule_notes") or {}).values()),
+                "has_safety_notes": bool(value.get("safety_notes")),
+                "has_allergy_warning": bool(value.get("allergy_warning")),
+            }
+            logged_raw = ""
+            logged_validation = {"valid": bool(validation.get("valid")), "error_count": len(validation.get("errors") or [])}
+            logged_error = None
+            logged_conversation = ""
         self.db.add(
             SkillCallLog(
                 trace_id=trace_id,
                 hotel_id=self.hotel_id,
                 skill_name=skill_name,
                 business_scene=scene,
-                request_json=payload,
-                raw_response=raw,
-                final_response=final_value.model_dump(mode="json") if final_value else None,
+                request_json=logged_payload,
+                raw_response=logged_raw,
+                final_response=logged_final,
                 call_status=status,
-                validation_result=validation,
+                validation_result=logged_validation,
                 error_code=error_code,
-                error_message=error_message,
+                error_message=logged_error,
                 duration_ms=duration_ms,
                 retry_count=retry_count,
                 provider=provider,
@@ -153,7 +188,7 @@ class AgentOrchestrator:
                 agent_id=getattr(self.provider, "agent_id", ""),
                 model=getattr(self.provider, "primary_model", getattr(self.provider, "model", "")),
                 skill_version=getattr(self.provider, "skill_version", ""),
-                conversation_id=self.context.conversation_id or "",
+                conversation_id=logged_conversation,
                 fallback_used=fallback_used,
             )
         )

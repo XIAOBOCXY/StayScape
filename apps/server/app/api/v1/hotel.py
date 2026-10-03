@@ -1991,8 +1991,12 @@ def product_adjustments(product_id: int, db: Session = Depends(get_db), user: Us
 @router.get("/changes")
 def changes(db: Session = Depends(get_db), user: User = Depends(get_hotel_user), limit: int = Query(default=50, ge=1, le=200)):
     hotel_id = hotel_id_for(db, user)
-    resource_ids = [item.id for item in list_partner_resources(db, hotel_id)]
-    items = list(db.scalars(select(ResourceChangeEvent).where(ResourceChangeEvent.hotel_id == hotel_id).order_by(ResourceChangeEvent.created_at.desc()).limit(limit)).all())
+    # Order reservations belong in the order view; they are not resource edits
+    # and created repeated room/experience rows in the operations feed.
+    items = list(db.scalars(select(ResourceChangeEvent).where(
+        ResourceChangeEvent.hotel_id == hotel_id,
+        ResourceChangeEvent.event_type != "VISITOR_INTENT_RESERVED",
+    ).order_by(ResourceChangeEvent.created_at.desc()).limit(limit)).all())
     return [{"id": item.id, "event_type": item.event_type, "resource_type": item.resource_type, "resource_id": item.resource_id, "old_value": item.old_value, "new_value": item.new_value, "reason": item.reason, "processed": item.processed, "processing_result": item.processing_result, "created_at": item.created_at} for item in items]
 
 

@@ -11,7 +11,7 @@ from .products import ProductRead
 class VisitorProductQuery(BaseModel):
     target_date: date | None = None
     target_crowd: str | None = None
-    weather: str = "RAIN"
+    weather: str = "UNKNOWN"
     budget: Decimal | None = Field(default=None, gt=0)
     interest: str | None = None
 
@@ -21,7 +21,7 @@ class VisitorQuestion(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     natural_language: str = Field(default="", max_length=1000)
     child_age: int | None = Field(default=None, ge=0, le=120)
-    weather: str = "RAIN"
+    weather: str = "UNKNOWN"
     conversation_id: str | None = Field(default=None, max_length=120)
 
 
@@ -32,7 +32,7 @@ class VisitorRecommendRequest(BaseModel):
     # second NLP pass overwrite a manual correction.
     structured_confirmed: bool = False
     target_date: date | None = None
-    weather: str = "RAIN"
+    weather: str = "UNKNOWN"
     target_crowd: str = "FAMILY"
     adult_count: int = Field(default=2, ge=1, le=20)
     child_count: int = Field(default=0, ge=0, le=20)

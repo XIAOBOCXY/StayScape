@@ -48,16 +48,7 @@ onMounted(() => {
 
 <template>
   <main class="product-list storefront-list">
-    <header class="product-list__head"><div><h1>杭州旅居商品</h1></div><span class="list-count">{{ resultLabel }}</span></header>
-    <section class="catalog-assistant" aria-label="AI 行程助手">
-      <span class="catalog-assistant__icon" aria-hidden="true">✳</span>
-      <div class="catalog-assistant__copy">
-        <small>STAYSCAPE · TRAVEL ASSISTANT</small>
-        <h2>还在挑选？让旅居助手帮你理清方向</h2>
-        <p>说说出行日期、同行人和预算，获取可订方案与推荐依据。</p>
-      </div>
-      <router-link to="/visitor/assistant">聊聊我的行程 <b aria-hidden="true">→</b></router-link>
-    </section>
+    <header class="product-list__head"><div><h1>旅居产品</h1><span class="list-count">{{ resultLabel }}</span></div><router-link class="assistant-entry" to="/visitor/assistant">问问旅居助手 <b aria-hidden="true">↗</b></router-link></header>
 <div class="list-topics"><span>快速筛选</span><button v-for="topic in topics" :key="topic" :class="{ active: form.interest === topic }" @click="form.interest = topic; load()">{{ topic }}</button><button v-if="hasFilters" class="topic-clear" type="button" @click="clear">清除筛选</button></div>
     <section class="product-filter"><label><span>日期</span><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" type="date" placeholder="选择入住日期" /></label><label class="filter-interest"><span>主题或地点</span><el-input v-model="form.interest" placeholder="如：博物馆、运河、亲子" clearable @keyup.enter="load" /></label><label><span>预算</span><el-input v-model="form.budget" placeholder="最高 ¥" inputmode="numeric" /></label><el-button type="primary" @click="load">查找商品</el-button><el-button v-if="hasFilters" plain @click="clear">清除筛选</el-button></section>
     <el-alert v-if="error" :title="error" type="error" show-icon />
@@ -71,7 +62,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.product-list{max-width:1180px;margin:0 auto;padding:8px 0 44px}.product-list__head{display:flex;align-items:end;justify-content:space-between;gap:18px;margin:8px 0 16px}.product-list__head span{color:var(--muted);font-size: 11.5px;letter-spacing:.1em}.product-list__head h1{margin:5px 0 0;font-size:clamp(22px,3vw,31px);letter-spacing:-.8px}.product-list__head a{padding:9px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-size:12px;text-decoration:none;white-space:nowrap}.product-filter{display:grid;grid-template-columns:150px minmax(180px,1fr) 120px auto;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-soft);margin-bottom:16px}.list-empty{padding:48px 18px;border:1px dashed var(--line);border-radius:12px;text-align:center}.list-empty h2{margin:0;font-size:18px}.list-empty p{color:var(--muted);font-size:12px}.list-empty .el-button{margin:4px}@media(max-width:700px){.product-list{padding-top:0}.product-list__head{align-items:start}.product-list__head a{margin-top:8px}.product-filter{grid-template-columns:1fr 1fr}.product-filter :deep(.el-date-editor),.product-filter :deep(.el-input){width:100%}.product-filter .el-button{grid-column:1/-1}.product-grid--wide{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
+.product-list{max-width:1180px;margin:0 auto;padding:8px 0 44px}.product-list__head{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:8px 0 16px}.product-list__head span{color:var(--muted);font-size:12px}.product-list__head h1{margin:0;font-size:clamp(22px,3vw,31px);letter-spacing:-.8px}.product-list__head>div{display:flex;align-items:baseline;gap:12px}.product-list__head .list-count{color:var(--muted);font-size:12px}.assistant-entry{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #dce6df;border-radius:999px;background:#fff;color:#345b4d;font-size:12px;text-decoration:none;white-space:nowrap}.assistant-entry b{color:#9a7547;font-size:14px}.product-list__head a{padding:9px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-size:12px;text-decoration:none;white-space:nowrap}.product-filter{display:grid;grid-template-columns:150px minmax(180px,1fr) 120px auto;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-soft);margin-bottom:16px}.list-empty{padding:48px 18px;border:1px dashed var(--line);border-radius:12px;text-align:center}.list-empty h2{margin:0;font-size:18px}.list-empty p{color:var(--muted);font-size:12px}.list-empty .el-button{margin:4px}@media(max-width:700px){.product-list{padding-top:0}.product-list__head{align-items:center}.product-list__head>div{align-items:flex-start;flex-direction:column;gap:3px}.assistant-entry{padding:7px 9px;font-size:11px}.product-filter{grid-template-columns:1fr 1fr}.product-filter :deep(.el-date-editor),.product-filter :deep(.el-input){width:100%}.product-filter .el-button{grid-column:1/-1}.product-grid--wide{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
+
+.storefront-list .product-list__head{align-items:center;min-height:50px;padding:10px 20px}
+.storefront-list .product-list__head>div{display:flex;align-items:center}
+.storefront-list .product-list__head .list-count{font-size:12px;color:#66756b}
+@media(max-width:700px){.storefront-list .product-list__head{padding:9px 14px}}
 </style>
 
 

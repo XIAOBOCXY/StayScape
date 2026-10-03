@@ -2,6 +2,7 @@ import json
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -31,6 +32,73 @@ from ...rules.weather_rule import is_weather_supported
 from ..websocket_manager import manager
 
 router = APIRouter(prefix="/visitor", tags=["visitor"])
+
+
+def curated_tourism_context(query: str, db: Session, *, poi_limit: int = 4) -> dict[str, Any]:
+    """Load source-labelled strategy references and relevant public POIs."""
+    root = Path("/opt/stayscape/skills/yusuchengjing-hotel-ops/data")
+    try:
+        planning = KnowledgeService(db).planning_context()
+        poi_data = json.loads((root / "tourism_knowledge.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "UNAVAILABLE", "notice": "文旅策划参考资料暂不可用"}
+    normalized = query.lower()
+    tokens_ = [token for token in re.split(r"[\s，。；、,.!?！？]+", normalized) if len(token) > 1]
+    intent_terms = ("西湖", "博物馆", "湿地", "运河", "良渚", "茶", "动漫", "宋城", "演艺", "植物园", "美术馆", "亲子", "户外", "自然", "文化", "非遗", "夜游")
+    ranked = []
+    for poi in poi_data.get("pois", []):
+        text = " ".join(str(poi.get(key, "")) for key in ("name", "category", "description", "district", "address")).lower()
+        name = str(poi.get("name", "")).lower()
+        score = sum(3 if token in name else 1 for token in tokens_ if token in text)
+        score += sum(2 for term in intent_terms if term in normalized and term.lower() in text)
+        if name and name in normalized:
+            score += 8
+        if score:
+            ranked.append((score, poi))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    places = [poi for _, poi in ranked[:poi_limit]]
+    source_rows: list[dict[str, str]] = []
+    for poi in places:
+        source_url = str(poi.get("source_url") or "")
+        if source_url.startswith("https://"):
+            source_rows.append({
+                "title": str(poi.get("name") or "目的地资料"),
+                "publisher": str(poi.get("source_name") or ""),
+                "url": source_url,
+                "verification_status": str(poi.get("verification_status") or "VERIFY_REQUIRED"),
+            })
+    for section_name, records in planning.get("sections", {}).items():
+        if section_name in {"workflow_rules", "project_baseline"} or not isinstance(records, list):
+            continue
+        for record in records:
+            source = record.get("source") if isinstance(record, dict) else None
+            if not isinstance(source, dict):
+                continue
+            relevant = any(term in normalized for term in intent_terms)
+            relevant = relevant or any(str(record.get(key) or "").lower() in normalized for key in ("name", "topic") if record.get(key))
+            if section_name == "local_context" and any(term in normalized for term in ("杭州", "西湖", "运河", "景区", "行程", "旅游", "文旅")):
+                relevant = True
+            if relevant and str(source.get("url") or "").startswith("https://"):
+                source_rows.append({
+                    "title": str(source.get("title") or record.get("topic") or record.get("name") or "文旅资料"),
+                    "publisher": str(source.get("publisher") or ""),
+                    "url": str(source["url"]),
+                    "verification_status": str(record.get("status") or "REFERENCE_ONLY"),
+                })
+    deduped: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for row in source_rows:
+        if row["url"] in seen_urls:
+            continue
+        seen_urls.add(row["url"])
+        deduped.append(row)
+    return {
+        "status": "REFERENCE_ONLY",
+        "notice": poi_data.get("notice", "公共目的地资料需按来源与核验状态使用"),
+        "planning_context": planning,
+        "relevant_public_places": places,
+        "evidence_sources": deduped[:5],
+    }
 
 
 @router.get("/media/cover")
@@ -219,6 +287,8 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     if request.target_date is None:
         if "明天" in text:
             updates["target_date"] = date.today() + timedelta(days=1)
+        elif "后天" in text:
+            updates["target_date"] = date.today() + timedelta(days=2)
         elif "今天" in text:
             updates["target_date"] = date.today()
         else:
@@ -299,6 +369,27 @@ def enrich_recommend_request(request: VisitorRecommendRequest) -> tuple[VisitorR
     effective = request.model_copy(update=updates)
     interpreted = interpreted_needs(effective, text)
     return effective, interpreted
+
+
+def explicit_calendar_date(text: str, reference_date: date | None = None) -> date | None:
+    """Parse the latest explicit date so a follow-up can replace an older date."""
+    pattern = re.compile(
+        r"(?<!\d)(?P<iso>20\d{2}-\d{1,2}-\d{1,2})(?!\d)"
+        r"|(?<!\d)(?:(?P<year>20\d{2})\s*年\s*)?(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*(?:日|号)"
+    )
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return None
+    match = matches[-1]
+    if match.group("iso"):
+        year, month, day = (int(value) for value in match.group("iso").split("-"))
+    else:
+        year = int(match.group("year")) if match.group("year") else (reference_date.year if reference_date else date.today().year)
+        month, day = int(match.group("month")), int(match.group("day"))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
 
 
 def follow_up_questions(request: VisitorRecommendRequest, interpreted: dict[str, object]) -> list[str]:
@@ -727,14 +818,15 @@ def matches_conditions(db: Session, product: TravelProduct, request: VisitorReco
     if not room or request.adult_count + request.child_count > room.max_guests:
         children_match = False
     for row, resource in product_partner_rows(db, product):
-        if not is_weather_supported(resource.weather_tags, request.weather):
+        if request.weather.upper() not in {"", "UNKNOWN"} and not is_weather_supported(resource.weather_tags, request.weather):
             weather_match = False
         if request.arrival_time and resource.start_time and resource.start_time < request.arrival_time:
             children_match = False
         if not crowd_supported(resource.suitable_crowds, product.target_crowd, request.child_ages, resource.minimum_age, resource.maximum_age):
             children_match = False
-    if request.child_count and len(request.child_ages) != request.child_count:
-        children_match = False
+    # Missing ages require a follow-up before confirming age-restricted
+    # experiences, but they do not make every otherwise suitable product an
+    # automatic no-match.  The assistant asks for the age in its next turn.
     searchable = f"{product.product_name} {product.theme} {product.marketing_content}"
     resource_categories: set[str] = set()
     for row, resource in product_partner_rows(db, product):
@@ -1363,12 +1455,13 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
     product = get_product(db, request.product_id) if request.product_id else None
     if product and (product.status not in {"ON_SALE", "LOW_STOCK"} or product.sale_quantity <= 0):
         product = None
-    interpreted_request, _ = enrich_recommend_request(VisitorRecommendRequest(natural_language=request.natural_language or request.question, weather=request.weather, target_crowd=product.target_crowd if product else "FAMILY"))
-    asks_for_alternatives = any(word in request.question for word in ("还有", "其他", "推荐", "别的", "换一个", "类似"))
+    conversation_text = (request.natural_language or request.question).strip()[-1000:]
+    interpreted_request, _ = enrich_recommend_request(VisitorRecommendRequest(natural_language=conversation_text, weather=request.weather, target_crowd="ALL"))
+    asks_for_alternatives = any(word in request.question for word in ("还有", "其他", "推荐", "别的", "换一个", "类似", "便宜点", "替代"))
     visible_products = list_products(db, public_only=True)
     payload = {
         "question": request.question,
-        "natural_language": request.natural_language or request.question,
+        "natural_language": conversation_text,
         "weather": request.weather,
         "target_crowd": interpreted_request.target_crowd,
         "negative_interests": interpreted_request.negative_interests,
@@ -1378,9 +1471,23 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
     }
     # 让回答能结合「要什么/不要什么」和知识库里的地点资料，而不是只做关键词匹配。
     try:
-        payload["knowledge"] = KnowledgeService(db).search(request.question, limit=4)
+        payload["knowledge"] = KnowledgeService(db).search(conversation_text, limit=4)
+        payload["tourism_reference_context"] = curated_tourism_context(conversation_text, db)
+        for record in payload["knowledge"]:
+            url = str(record.get("source_url") or "")
+            if url.startswith("https://"):
+                payload["tourism_reference_context"]["evidence_sources"].append({
+                    "title": str(record.get("name") or "文旅知识"),
+                    "publisher": str(record.get("source_name") or ""),
+                    "url": url,
+                    "verification_status": str(record.get("verification_status") or "VERIFY_REQUIRED"),
+                })
+        payload["tourism_reference_context"]["evidence_sources"] = list({
+            row["url"]: row for row in payload["tourism_reference_context"]["evidence_sources"]
+        }.values())[:5]
     except Exception:  # knowledge is optional context, never block the answer
         payload["knowledge"] = []
+        payload["tourism_reference_context"] = curated_tourism_context(conversation_text, db)
     payload["wants"] = display_preference_terms(
         [*interpreted_request.interests, *interpreted_request.requested_places]
     )
@@ -1420,6 +1527,9 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
             )
         payload["room_options"] = room_options
     result = AgentOrchestrator(db, hotel_id=product.hotel_id if product else None, source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id=request.conversation_id).match_visitor(payload)
+    # Visitor-match telemetry is redacted by the orchestrator; persist the
+    # diagnostic row independently of any later response serialization.
+    db.commit()
     raw_answer = public_travel_copy(
         getattr(result.value, "answer", ""),
         "告诉我同行人数、预算和想去的地方，我会为你挑选合适的杭州玩法。",
@@ -1434,17 +1544,19 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
     # museum or photo product would see an empty result just because the
     # opened product happens to cost less.  A free-text budget is still parsed
     # by enrich_recommend_request below.
+    context_date = product.target_date if product else None
+    explicit_target_date = explicit_calendar_date(conversation_text, context_date)
     effective = VisitorRecommendRequest(
-        natural_language=request.question,
+        natural_language=conversation_text,
         weather=request.weather,
         budget=Decimal("2000"),
-        target_date=product.target_date if product else None,
+        target_date=explicit_target_date or context_date,
         # The current package is context, not a hard audience filter.  A
         # visitor can ask for a couple, a family or friends from any detail.
         target_crowd="ALL",
     )
     effective, _ = enrich_recommend_request(effective)
-    budget_explicit = bool(re.search(r"(?:预算|花费|控制在|不超过|以内)[^0-9]{0,8}\d{3,5}", request.question))
+    budget_explicit = bool(re.search(r"(?:预算|花费|控制在|不超过|以内)[^0-9]{0,8}\d{3,5}", conversation_text))
     requested_terms = [*effective.interests, *effective.requested_places]
     display_terms = display_preference_terms(requested_terms)
     requested_categories = preference_categories(" ".join(str(term) for term in requested_terms))
@@ -1508,7 +1620,7 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
         scored,
         current_id=product.id if product else None,
         seed_text=seed_text,
-        limit=4,
+        limit=3,
     )
     weather_notice = False
     if requested_terms and not direct_count and weather_relaxed:
@@ -1516,12 +1628,12 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
             weather_relaxed,
             current_id=product.id if product else None,
             seed_text=f"{seed_text}:weather",
-            limit=4,
+            limit=3,
         )
         # Explicit matches affected by weather are more useful than unrelated
         # fallbacks, but retain strict related cards when there is room.
         seen = {item.id for item in relaxed_items}
-        suggestions_items = [*relaxed_items, *[item for item in suggestions_items if item.id not in seen]][:4]
+        suggestions_items = [*relaxed_items, *[item for item in suggestions_items if item.id not in seen]][:3]
         direct_count = relaxed_direct_count
         weather_notice = bool(relaxed_items)
     cache = {}
@@ -1560,35 +1672,26 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
             )
         if suggestions_items[0].product_name not in answer:
             answer = f"{answer.rstrip('。')}。具体可选：" + "；".join(highlights) + "。"
-    # 让卡片和回答里点名的产品保持一致：回答里出现过的产品排到最前，
-    # 访客点开卡片看到的就是刚刚读到的那个方案。
-    named = [item for item in visible_products if item.product_name and str(item.product_name) in answer]
-    if named:
-        ordered: list[dict[str, Any]] = []
-        seen_ids: set[int] = set()
-        seen_names: set[str] = set()
-        for item in named:
-            name = str(item.product_name)
-            if name in seen_names:
-                continue
-            seen_names.add(name)
-            ordered.append(visitor_payload(db, item, cache=cache))
-            seen_ids.add(item.id)
-            if len(ordered) >= 4:
-                break
-        for row in suggestions:
-            if row.get("id") not in seen_ids:
-                ordered.append(row)
-        # 同一套餐在不同日期会重名，卡片里只留一个。
-        deduped: list[dict[str, Any]] = []
-        seen_card_names: set[str] = set()
-        for row in ordered:
-            card_name = str(row.get("product_name") or "")
-            if card_name in seen_card_names:
-                continue
-            seen_card_names.add(card_name)
-            deduped.append(row)
-        suggestions = deduped[:4]
+    # 模型文字只能描述服务端通过硬条件筛选出的结果，不能将被筛掉的
+    # 商品重新带回游客卡片；同名不同日期的产品也必须按 ID 分开保留。
+    eligible_ids = {item.id for item in suggestions_items}
+    eligible_names = {str(item.product_name) for item in suggestions_items if item.product_name}
+    ineligible_names = {
+        str(item.product_name)
+        for item in visible_products
+        if item.product_name and item.id not in eligible_ids and str(item.product_name) not in eligible_names and str(item.product_name) in answer
+    }
+    if ineligible_names:
+        if requested_terms and direct_count:
+            answer = f"按你提到的“{'、'.join(display_terms)}”，我筛出了 {direct_count} 个直接匹配且符合当前条件的在售方案。"
+        elif requested_terms and suggestions:
+            answer = f"目前没有完全匹配“{'、'.join(display_terms)}”的方案，下面列出符合当前条件的相近选择。"
+        elif not suggestions:
+            answer = "当前没有找到同时符合你已提供条件的在售方案。可以调整日期或偏好后再试。"
+        else:
+            answer = "我按你提供的条件筛选了以下在售方案。"
+    if suggestions_items:
+        suggestions = suggestions[:3]
     return {
         "trace_id": result.trace_id,
         # 面向游客的正文一律经过中文枚举转换：模型偶尔会复述 FAMILY / RAIN 这类内部字段。
@@ -1621,10 +1724,17 @@ def consult(request: VisitorQuestion, db: Session = Depends(get_db)):
         },
         "product": visitor_payload(db, product) if product else None,
         "suggestions": suggestions,
+        "evidence_sources": payload.get("tourism_reference_context", {}).get("evidence_sources", []),
         # 换房型问题直接给出可点链接所需的数据（当前套餐 + 各房型 id/价格/余量）。
         "product_id": product.id if product else None,
         "room_options": payload.get("room_options") or [],
-        "follow_up_questions": ["同行人数和儿童年龄是多少？", "更想去西湖、运河、博物馆还是主题乐园？", "这次大约准备花多少？"],
+        "follow_up_questions": follow_up_questions(
+            effective.model_copy(update={
+                "budget": effective.budget if budget_explicit else None,
+                "target_date": effective.target_date if re.search(r"(?:\d{1,2}[月/.-]\d{1,2}|今天|明天|后天|周末|本周|下周|周[一二三四五六日天])", conversation_text) else None,
+            }),
+            interpreted_needs(effective, conversation_text),
+        )[:2],
         "fallback_used": result.fallback_used,
     }
 
@@ -1686,10 +1796,15 @@ def recommend(request: VisitorRecommendRequest, db: Session = Depends(get_db)):
     }
     hotel_ids = {item.hotel_id for item in valid_candidates}
     agent_result = AgentOrchestrator(db, hotel_id=next(iter(hotel_ids)) if len(hotel_ids) == 1 else None, source_channel="WEB_VISITOR", actor_role="VISITOR", conversation_id=request.conversation_id).match_visitor(payload)
+    db.commit()
     output = agent_result.value
     output_ids = set(output.selected_product_ids)
+    ranked_candidates = sorted(valid_candidates, key=lambda product: match_meta[product.id][3], reverse=True)
+    model_selected = [item for item in ranked_candidates if item.id in output_ids]
+    selected_ids = {item.id for item in model_selected}
+    result_candidates = [*model_selected, *[item for item in ranked_candidates if item.id not in selected_ids]][:3]
     results = []
-    for item in sorted(valid_candidates, key=lambda product: match_meta[product.id][3], reverse=True):
+    for item in result_candidates:
         children_match, weather_match, interest_match, score = match_meta[item.id]
         reason = public_travel_copy(
             output.reasons.get(str(item.id), item.recommendation_reason),

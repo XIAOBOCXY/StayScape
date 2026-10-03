@@ -27,9 +27,10 @@ type Chat = {
   follow_up_questions?: string[]
   product_id?: number | null
   room_options?: RoomOption[]
+  evidence_sources?: Array<{ title: string; publisher?: string; url: string; verification_status?: string }>
 }
 
-// 助手回答不止一段话：把「为什么推荐 / 时间怎么排 / 哪些改不了」结构化展示出来。
+// Keep practical reasons, schedule details, and source status attached to each answer.
 function nameFor(chat: Chat, id: string) {
   const found = (chat.suggestions || []).find((item) => String(item.id) === String(id))
   return found?.product_name || '推荐方案'
@@ -39,6 +40,13 @@ function nameFor(chat: Chat, id: string) {
 const ENUM_LABELS: Record<string, string> = {
   FAMILY: '亲子家庭', COUPLE: '两人同行', FRIENDS: '朋友同行', SOLO: '独自出行',
   LOCAL_WEEKEND: '本地周末客', ALL: '不限客群', RAIN: '有雨', SUNNY: '晴天', CLOUDY: '多云', SNOW: '有雪',
+}
+
+function sourceStatusLabel(status?: string) {
+  if (status === 'ACTIVE') return '已核验'
+  if (status === 'STALE') return '需复核'
+  if (status === 'VERIFY_REQUIRED') return '待核验'
+  return '策划参考'
 }
 
 function humanizeEnums(value: unknown) {
@@ -63,6 +71,16 @@ function limitRows(chat: Chat) {
   return Object.entries(chat.limited_adjustments || {})
     .map(([id, items]) => ({ name: nameFor(chat, id), text: humanizeEnums(Array.isArray(items) ? items.join('；') : items) }))
     .filter((row) => row.text)
+}
+function reasonFor(chat: Chat, id: number | string) {
+  return humanizeEnums(chat.reasons?.[String(id)] || '')
+}
+function scheduleFor(chat: Chat, id: number | string) {
+  return scheduleRows(chat).find((row) => row.key === String(id))?.items || []
+}
+function limitFor(chat: Chat, id: number | string) {
+  const value = chat.limited_adjustments?.[String(id)]
+  return humanizeEnums(Array.isArray(value) ? value.join('；') : value || '')
 }
 
 const question = ref('')
@@ -107,15 +125,21 @@ async function ask(text?: string) {
   const value = String(text ?? question.value).trim()
   if (!value || asking.value) return
   question.value = ''
+  const priorTurns = chats.value
+    .map((chat) => chat.user?.trim())
+    .filter((turn): turn is string => Boolean(turn))
+    .slice(-5)
   chats.value.push({ user: value })
   asking.value = true
   pendingStep.value = 0
   pendingTimer = window.setInterval(() => { pendingStep.value += 1 }, 2600)
   try {
+    const naturalLanguage = [...priorTurns, value].join('；').slice(-1000)
     const response = await visitorApi.consult({
       product_id: props.productId ?? undefined,
       question: value,
-      weather: props.weather || 'CLOUDY',
+      natural_language: naturalLanguage,
+      weather: props.weather || 'UNKNOWN',
       conversation_id: visitorConversationId(),
     })
     chats.value.push({
@@ -128,6 +152,7 @@ async function ask(text?: string) {
       follow_up_questions: (response.data.follow_up_questions as string[]) || [],
       product_id: (response.data.product_id as number) ?? props.productId ?? null,
       room_options: (response.data.room_options as RoomOption[]) || [],
+      evidence_sources: (response.data.evidence_sources as Chat['evidence_sources']) || [],
     })
   } catch (e) {
     chats.value.push({ answer: errorMessage(e) })
@@ -153,24 +178,13 @@ onMounted(loadIntro)
     <div ref="scroller" class="assistant-scroll">
       <div v-if="!chats.length" class="assistant-intro">
         <div class="assistant-intro__heading">
-          <span class="assistant-intro__mark" aria-hidden="true">S</span>
-          <div>
-            <span class="assistant-intro__eyebrow">STAYSCAPE · 杭州旅居顾问</span>
-            <h2>把想法，变成一趟合适的旅程</h2>
-          </div>
-        </div>
-        <p class="assistant-greeting">{{ greeting }}</p>
-        <div class="assistant-intro__basis">
-          <span class="assistant-intro__basis-icon" aria-hidden="true">✳</span>
-          <span><b>建议有据可查</b><small>参考当前可订套餐、房型余量与商品行程；不确定的信息会提醒你核实</small></span>
+          <h2>{{ greeting || '把想法，变成一趟合适的旅程' }}</h2>
         </div>
         <div class="assistant-starters">
-          <span class="assistant-starters__label">从一个问题开始</span>
           <button v-for="(item, index) in starters" :key="item" type="button" @click="ask(item)">
-            <i>{{ String(index + 1).padStart(2, '0') }}</i><span>{{ item }}</span><b aria-hidden="true">↗</b>
+            <span>{{ item }}</span><b aria-hidden="true">↗</b>
           </button>
         </div>
-        <p class="assistant-intro__hint">也可以直接输入日期、同行人数、预算或想去的地方</p>
       </div>
 
       <div v-if="chats.length" class="assistant-chat">
@@ -179,7 +193,6 @@ onMounted(loadIntro)
           <div v-else class="assistant-answer">
             <p v-for="(paragraph, i) in answerParagraphs(chat)" :key="i" class="assistant-paragraph">{{ paragraph }}</p>
             <div v-if="chat.room_options?.length" class="assistant-rooms">
-              <span class="assistant-rooms__label">可换房型 · 点一下直接切到该房型</span>
               <div class="assistant-rooms__list">
                 <router-link
                   v-for="room in chat.room_options"
@@ -195,31 +208,36 @@ onMounted(loadIntro)
               </div>
             </div>
             <div v-if="chat.suggestions?.length" class="assistant-cards">
-              <div v-for="item in chat.suggestions" :key="item.id" class="assistant-card">
+              <article v-for="item in chat.suggestions" :key="item.id" class="assistant-product-recommendation">
                 <ProductCard :product="item" public-view compact />
-              </div>
+                <div v-if="reasonFor(chat, item.id) || scheduleFor(chat, item.id).length || limitFor(chat, item.id)" class="assistant-product-advice">
+                  <p v-if="reasonFor(chat, item.id)"><b>为什么适合</b>{{ reasonFor(chat, item.id) }}</p>
+                  <div v-if="scheduleFor(chat, item.id).length"><b>行程安排</b><span v-for="(entry, i) in scheduleFor(chat, item.id)" :key="`${item.id}-${i}`">{{ entry.time ? `${entry.time} ` : '' }}{{ entry.content }}</span></div>
+                  <p v-if="limitFor(chat, item.id)"><b>需要留意</b>{{ limitFor(chat, item.id) }}</p>
+                </div>
+              </article>
             </div>
-            <div v-if="reasonRows(chat).length" class="assistant-block">
-              <b>为什么推荐</b>
-              <ul>
-                <li v-for="row in reasonRows(chat)" :key="`reason-${row.name}`"><strong>{{ row.name }}</strong>{{ row.text }}</li>
-              </ul>
+            <div v-if="!chat.suggestions?.length && reasonRows(chat).length" class="assistant-block">
+              <ul><li v-for="row in reasonRows(chat)" :key="`reason-${row.name}`"><strong>{{ row.name }}</strong>{{ row.text }}</li></ul>
             </div>
-            <div v-if="scheduleRows(chat).length" class="assistant-block">
-              <b>时间怎么安排</b>
-              <ul>
-                <li v-for="row in scheduleRows(chat)" :key="`schedule-${row.key}`">
-                  <strong>{{ row.name }}</strong>
-                  <span v-for="(item, i) in row.items" :key="`slot-${row.key}-${i}`">{{ item.time ? `${item.time} ` : '' }}{{ item.content }}</span>
-                </li>
-              </ul>
+            <div v-if="!chat.suggestions?.length && scheduleRows(chat).length" class="assistant-block">
+              <ul><li v-for="row in scheduleRows(chat)" :key="`schedule-${row.key}`"><strong>{{ row.name }}</strong><span v-for="(entry, i) in row.items" :key="`slot-${row.key}-${i}`">{{ entry.time ? `${entry.time} ` : '' }}{{ entry.content }}</span></li></ul>
             </div>
-            <div v-if="limitRows(chat).length || chat.safety_notes" class="assistant-block assistant-block--note">
-              <b>注意事项</b>
+            <div v-if="(!chat.suggestions?.length && limitRows(chat).length) || chat.safety_notes" class="assistant-block assistant-block--note">
               <ul>
                 <li v-for="row in limitRows(chat)" :key="`limit-${row.name}`"><strong>{{ row.name }}</strong>{{ row.text }}</li>
-                <li v-if="chat.safety_notes"><strong>出行提示</strong>{{ humanizeEnums(chat.safety_notes) }}</li>
+                <li v-if="chat.safety_notes">{{ humanizeEnums(chat.safety_notes) }}</li>
               </ul>
+            </div>
+            <div v-if="chat.evidence_sources?.length" class="assistant-evidence">
+              <a
+                v-for="source in chat.evidence_sources"
+                :key="source.url"
+                :href="source.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="source.title + '，' + sourceStatusLabel(source.verification_status)"
+              >{{ source.title }}<span>{{ sourceStatusLabel(source.verification_status) }}</span></a>
             </div>
             <div v-if="chat.follow_up_questions?.length" class="assistant-followups">
               <button v-for="item in chat.follow_up_questions" :key="item" type="button" @click="ask(item)">{{ item }}</button>
@@ -238,42 +256,36 @@ onMounted(loadIntro)
 </template>
 
 <style scoped>
-.assistant { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; }
-.assistant-scroll { flex: 1 1 auto; width: 100%; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; scrollbar-width: none; }
+.assistant { display: flex; flex-direction: column; width: 100%; max-width: 100%; min-width: 0; height: 100%; min-height: 0; box-sizing: border-box; }
+.assistant-scroll { flex: 1 1 auto; width: 100%; max-width: 100%; min-width: 0; min-height: 0; box-sizing: border-box; overflow-y: auto; padding: 4px 2px 12px; scrollbar-width: none; }
 .assistant-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.assistant-intro { display: grid; gap: 18px; width: min(100%, 760px); margin: clamp(24px, 8vh, 86px) auto 36px; padding: clamp(22px, 4vw, 42px); border: 1px solid #e9e3d7; border-radius: 22px; background: radial-gradient(ellipse at 100% 0, rgba(224, 236, 222, .72), transparent 42%), linear-gradient(145deg, #fffefa 0%, #f8f5ed 100%); box-shadow: 0 22px 65px rgba(35, 58, 48, .08); }
+.assistant-intro { display: grid; gap: 20px; width: min(100%, 760px); margin: clamp(24px, 8vh, 86px) auto 36px; padding: clamp(22px, 4vw, 42px); border: 1px solid #e9e3d7; border-radius: 22px; background: radial-gradient(ellipse at 100% 0, rgba(224, 236, 222, .72), transparent 42%), linear-gradient(145deg, #fffefa 0%, #f8f5ed 100%); box-shadow: 0 22px 65px rgba(35, 58, 48, .08); }
 .assistant-intro__heading { display: flex; align-items: center; gap: 15px; }
 .assistant-intro__mark { display: grid; place-items: center; width: 48px; height: 48px; flex: 0 0 auto; border-radius: 16px; background: #173f37; color: #ecd39e; font: 500 27px/1 Georgia, serif; box-shadow: 0 8px 18px rgba(23, 63, 55, .16); }
-.assistant-intro__eyebrow { display: block; color: #6a8276; font-size: 10px; font-weight: 700; letter-spacing: .13em; }
-.assistant-intro__heading h2 { margin: 6px 0 0; color: #203b32; font: 500 clamp(22px, 3vw, 30px)/1.25 Georgia, 'Songti SC', serif; letter-spacing: -.4px; }
-.assistant-greeting { max-width: 610px; margin: 0; color: #65736b; font-size: 13px; line-height: 1.8; }
-.assistant-intro__basis { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border: 1px solid rgba(44, 94, 72, .12); border-radius: 12px; background: rgba(255,255,255,.66); }
-.assistant-intro__basis-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 50%; background: #e8f1e8; color: #3c7456; font-size: 15px; }
-.assistant-intro__basis b,.assistant-intro__basis small { display: block; }
-.assistant-intro__basis b { color: #345341; font-size: 11.5px; }
-.assistant-intro__basis small { margin-top: 3px; color: #78847d; font-size: 10.5px; line-height: 1.55; }
+
+.assistant-intro__heading h2 { margin: 0; color: #203b32; font: 500 clamp(24px, 3vw, 32px)/1.35 Georgia, 'Songti SC', serif; letter-spacing: -.4px; }
+
 .assistant-starters { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
-.assistant-starters__label { grid-column: 1 / -1; margin-bottom: 1px; color: #8a938c; font-size: 10.5px; letter-spacing: .04em; }
-.assistant-starters button { display: grid; grid-template-columns: 25px minmax(0,1fr) 14px; align-items: center; gap: 9px; min-height: 52px; padding: 9px 11px; border: 1px solid #e9e4da; border-radius: 11px; background: rgba(255,255,255,.8); color: #41584b; text-align: left; font-size: 11.5px; line-height: 1.5; cursor: pointer; transition: border-color .18s, background .18s, transform .18s; }
+
+.assistant-starters button { display: grid; grid-template-columns: minmax(0,1fr) 14px; align-items: center; gap: 9px; min-height: 52px; padding: 9px 11px; border: 1px solid #e9e4da; border-radius: 11px; background: rgba(255,255,255,.8); color: #41584b; text-align: left; font-size: 11.5px; line-height: 1.5; cursor: pointer; transition: border-color .18s, background .18s, transform .18s; }
 .assistant-starters button:hover { transform: translateY(-1px); border-color: #a9c5b2; background: #fff; }
-.assistant-starters button i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #f0f3ec; color: #6f8876; font: 10px var(--font-mono); font-style: normal; }
+
 .assistant-starters button b { color: #a9b5ab; font-size: 13px; font-weight: 500; }
-.assistant-intro__hint { margin: -7px 0 0; color: #8a938c; font-size: 10.5px; }
+
 @media (max-width: 600px) {
   .assistant-intro { gap: 15px; margin: 20px auto 26px; padding: 21px 17px; border-radius: 17px; }
   .assistant-intro__mark { width: 42px; height: 42px; border-radius: 14px; font-size: 24px; }
   .assistant-starters { grid-template-columns: 1fr; }
   .assistant-starters button { min-height: 46px; }
 }
-.assistant-chat { display: grid; gap: 14px; width: 100%; }
+.assistant-chat { display: grid; gap: 14px; width: min(100%, 920px); min-width: 0; margin-inline: auto; box-sizing: border-box; }
 .assistant-bubble { max-width: 82%; padding: 10px 13px; border-radius: 14px 14px 4px 14px; background: #eaf4ef; color: #23483d; font-size: 13px; line-height: 1.7; justify-self: end; }
-.assistant-answer { width: 100%; max-width: 100%; color: #33403b; font-size: 14px; line-height: 1.8; }
-.assistant-answer--pending { color: var(--muted); font-size: 13px; }
+.assistant-answer { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; color: #33403b; font-size: 14px; line-height: 1.8; }
+.assistant-answer--pending { width: 100%; min-width: 0; box-sizing: border-box; color: var(--muted); font-size: 13px; }
 .assistant-paragraph { margin: 0 0 8px; }
 .assistant-paragraph:last-child { margin-bottom: 0; }
 .assistant-cards { display: grid; gap: 10px; margin-top: 12px; }
 .assistant-rooms { margin-top: 12px; }
-.assistant-rooms__label { display: block; margin-bottom: 7px; color: #9a8f87; font-size: 11px; }
 .assistant-rooms__list { display: flex; flex-wrap: wrap; gap: 8px; }
 .assistant-room { display: grid; gap: 2px; min-width: 132px; padding: 9px 12px; border: 1px solid #e7ded6; border-radius: 12px; background: #fff; color: #33302e; text-decoration: none; transition: border-color .18s, box-shadow .18s; }
 .assistant-room:hover { border-color: #ff6a00; box-shadow: 0 6px 16px rgba(213, 104, 53, .12); }
@@ -309,7 +321,6 @@ onMounted(loadIntro)
 .assistant-cards :deep(.product-card--compact > .product-card__media > .media-image) { height: 100%; min-height: 104px; aspect-ratio: auto; }
 .assistant-cards :deep(.product-card--compact .product-card__body) { display: grid; align-content: center; gap: 4px; padding: 9px 11px; }
 .assistant-cards :deep(.product-card--compact h3) { margin: 0; font-size: 13px; line-height: 1.35; white-space: normal; }
-.assistant-cards :deep(.product-card--compact .product-card__hook) { min-height: 0; -webkit-line-clamp: 2; font-size: 11px; line-height: 1.5; }
 .assistant-cards :deep(.product-card--compact .product-card__bottom) { padding-top: 6px; }
 .assistant-cards :deep(.product-card--compact .product-card__bottom strong) { font-size: 15px; }
 
@@ -321,4 +332,21 @@ onMounted(loadIntro)
   .assistant-cards :deep(.product-card--compact > .product-card__media),
   .assistant-cards :deep(.product-card--compact > .product-card__media > .media-image) { min-height: 92px; }
 }
+.assistant-product-recommendation { display:grid; gap:8px; min-width:0; }
+.assistant-product-advice { display:grid; gap:6px; padding:3px 2px 6px 10px; border-left:2px solid #dbe8df; color:#4b5d53; font-size:12px; line-height:1.65; }
+.assistant-product-advice p,.assistant-product-advice div { display:grid; grid-template-columns:82px minmax(0,1fr); gap:8px; margin:0; }
+.assistant-product-advice div > span { grid-column:2; }
+.assistant-product-advice b { color:#315746; font-weight:650; }
+.assistant-cards :deep(.product-card--compact) { width:100%; min-width:0; box-sizing:border-box; }
+.assistant-block { border:0; border-left:2px solid #e5e9e5; border-radius:0; background:transparent; padding:4px 0 4px 10px; }
+
+.assistant-intro{width:min(100%,920px);box-sizing:border-box;margin:clamp(30px,10vh,110px) auto 28px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;gap:19px}
+.assistant-intro__heading h2{font:500 clamp(19px,2.3vw,24px)/1.5 var(--font-sans);letter-spacing:0;color:#284238}
+.assistant-starters{gap:9px}
+.assistant-starters button{min-height:44px;padding:9px 12px;border-color:#e2e8e3;border-radius:9px;background:#fff;font-size:12px;box-shadow:none}
+.assistant-chat{display:flex;flex-direction:column;align-items:stretch;width:100%;max-width:920px}
+.assistant-bubble{align-self:flex-end;justify-self:auto}
+.assistant-answer{flex:0 0 auto;width:100%;min-width:0;box-sizing:border-box}
+.assistant-answer--pending{min-height:24px}
+@media(max-width:600px){.assistant-intro{margin:24px auto;padding:0}.assistant-intro__heading h2{font-size:19px}}
 </style>

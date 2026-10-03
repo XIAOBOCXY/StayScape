@@ -51,6 +51,57 @@ _NOTE_TAIL = re.compile(
 )
 
 
+def _weekday_closure(place: dict[str, Any], visit_date: date | None) -> bool:
+    """Return whether the recorded weekly closure applies (or cannot be resolved)."""
+    opening = str(place.get("opening_hours") or "")
+    closed = re.findall(r"(?:每周|逢)?周([一二三四五六日天])\s*(?:闭馆|休馆|闭园|休息|不开放|不营业|暂停开放)", opening)
+    if not closed:
+        return False
+    if visit_date is None:
+        return True
+    weekdays = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+    return visit_date.weekday() in {weekdays[item] for item in closed}
+
+
+def _opening_covers(place: dict[str, Any], start: str, duration_minutes: int, visit_date: date | None = None) -> bool:
+    """Require verified opening hours to cover the full proposed visit interval."""
+    if str(place.get("verification_status") or "VERIFY_REQUIRED") != "ACTIVE":
+        return False
+    if _weekday_closure(place, visit_date):
+        return False
+    opening = str(place.get("opening_hours") or "")
+    if re.search(r"24\s*小时|全天(?:开放|营业)", opening):
+        return True
+    start_minute = _clock_minutes(start)
+    if start_minute is None:
+        return False
+    last_entry = re.search(r"(?<!\d)(\d{1,2})[:：](\d{2})\s*(?:停止入馆|停止入场|停止检票|停止入园)", opening)
+    if last_entry and start_minute > int(last_entry.group(1)) * 60 + int(last_entry.group(2)):
+        return False
+    times = re.findall(r"(?<!\d)(\d{1,2})[:：](\d{2})(?!\d)", opening)
+    end_minute = start_minute + max(0, int(duration_minutes))
+    for index in range(0, len(times) - 1, 2):
+        opens = int(times[index][0]) * 60 + int(times[index][1])
+        closes = int(times[index + 1][0]) * 60 + int(times[index + 1][1])
+        if closes < opens:
+            closes += 24 * 60
+        if opens <= start_minute and closes >= end_minute:
+            return True
+    return False
+
+
+def _evening_accessible(place: dict[str, Any], start: str = "19:00", end: str = "20:30", visit_date: date | None = None) -> bool:
+    """Only place a public stop in the evening when verified facts cover the date and slot."""
+    start_minute = _clock_minutes(start)
+    end_minute = _clock_minutes(end)
+    if start_minute is None or end_minute is None:
+        return False
+    duration = end_minute - start_minute
+    if duration <= 0:
+        duration += 24 * 60
+    return _opening_covers(place, start, duration, visit_date)
+
+
 def _concrete_note(value: object) -> str:
     """把文旅库字段压成一句可执行的事实，没有事实就返回空串。"""
 
@@ -432,6 +483,28 @@ def route_proximity(from_address: object, to_address: object) -> dict[str, Any]:
     }
 
 
+def _transfer_minutes(from_address: object, to_address: object) -> int:
+    source, target = str(from_address or '').strip(), str(to_address or '').strip()
+    if not source or not target:
+        return 30
+    if source == target:
+        return 0
+    return int(route_proximity(source, target).get('buffer_minutes') or 30)
+
+
+def _item_window(item: dict[str, Any]) -> tuple[str | None, str | None]:
+    start = item.get('start_time')
+    end = item.get('end_time')
+    if not start or not end:
+        parts = str(item.get('time') or '').split('–')
+        if len(parts) == 2:
+            start, end = parts
+        elif len(parts) == 1:
+            start = parts[0]
+    start_text, end_text = str(start or '')[:5], str(end or '')[:5]
+    return (start_text or None, end_text or None)
+
+
 def _public_route_places(crowd_code: str, weather: str, hotel_address: str, resource_addresses: list[str], route_preference: str) -> list[dict[str, Any]]:
     """Rank public places as optional route ideas; they never become package resources."""
 
@@ -548,16 +621,33 @@ def build_day_plan(
         route_preference,
     )
 
-    def public_entry(place: dict[str, Any], time_text: str, slot: str, role: str) -> dict[str, Any]:
+    def public_entry(place: dict[str, Any], time_text: str, slot: str, role: str, visit_date: date | None = None) -> dict[str, Any]:
         duration = int(place.get("suggested_duration_minutes") or 90)
+        status = str(place.get("verification_status") or "VERIFY_REQUIRED")
+        verified = status == "ACTIVE"
+        opening_mismatch = False
+        start_text = time_text.split("–")[0] if verified else ""
+        if verified and start_text and not _opening_covers(place, start_text, duration, visit_date):
+            opening_mismatch = True
+            start_text = ""
+            slot = "ANY"
+            role = "开放时段不匹配，仅作为备选地点"
+        start_minute = _clock_minutes(start_text)
+        end_minute = start_minute + duration if start_minute is not None else None
+        end_text = f"{end_minute // 60:02d}:{end_minute % 60:02d}" if end_minute is not None else ""
+        scheduled_text = f"{start_text}–{end_text}" if end_text else "开放时段不匹配" if opening_mismatch else "开放时间待核验"
+        if not verified:
+            slot = "ANY"
+            role = "开放时间与停留时长核验后再安排"
         open_note = _concrete_note(place.get("opening_hours"))
         booking_note = _concrete_note(place.get("reservation_notice"))
-        status = str(place.get("verification_status") or "VERIFY_REQUIRED")
         verification = "公共路线建议，不包含门票、预约或交通费用。"
         return {
             "slot": slot,
             "slot_label": _SLOT_LABELS[slot],
-            "time": time_text,
+            "time": scheduled_text,
+            "start_time": start_text,
+            "end_time": end_text,
             "title": str(place.get("name") or "公共景点"),
             "description": str(place.get("description") or "") + " " + verification,
             "duration_minutes": duration,
@@ -600,10 +690,43 @@ def build_day_plan(
     timed_core = [item for item in entries if item["slot"] != "ALL_DAY"]
     used_public_places: set[str] = set()
 
+    def fits_window(candidate: dict[str, Any]) -> bool:
+        start, end = _item_window(candidate)
+        if not start or not end:
+            return True
+        window = {"start_time": start, "end_time": end}
+        existing_items = [*entries, *first_items]
+        for existing in existing_items:
+            existing_start, existing_end = _item_window(existing)
+            if existing_start and existing_end and _overlaps(window, {"start_time": existing_start, "end_time": existing_end}):
+                return False
+        return True
+
     def next_public(preferred_intensity: str | None = None) -> dict[str, Any] | None:
         available = [place for place in public_places if str(place.get("name") or "") not in used_public_places]
         if preferred_intensity:
             available.sort(key=lambda place: (_route_intensity(place.get("name"), place.get("category"), int(place.get("suggested_duration_minutes") or 0)) != preferred_intensity, public_places.index(place)))
+        if not available:
+            return None
+        place = available[0]
+        used_public_places.add(str(place.get("name") or ""))
+        return place
+
+    def next_evening_public() -> dict[str, Any] | None:
+        available = [place for place in public_places
+                     if str(place.get("name") or "") not in used_public_places
+                     and int(place.get("suggested_duration_minutes") or 90) <= 120
+            and _evening_accessible(
+                place,
+                end=(lambda minutes: f"{minutes // 60:02d}:{minutes % 60:02d}")(
+                    19 * 60 + int(place.get("suggested_duration_minutes") or 90)
+                ),
+                visit_date=start_date,
+            )]
+        available.sort(key=lambda place: (
+            _route_intensity(place.get("name"), place.get("category"), int(place.get("suggested_duration_minutes") or 0)) != "轻",
+            public_places.index(place),
+        ))
         if not available:
             return None
         place = available[0]
@@ -616,15 +739,19 @@ def build_day_plan(
     if not all_day and not morning_core:
         morning_place = next_public("轻" if weather == "RAIN" else None)
         if morning_place:
-            first_items.append(public_entry(morning_place, "09:30–11:30", "MORNING", "入住日前半日路线"))
-    if not any(_overlaps({"start_time": "12:00", "end_time": "13:00"}, item) for item in timed_core):
+            candidate = public_entry(morning_place, "09:30–11:30", "MORNING", "入住日前半日路线", start_date)
+            # Keep the morning stop inside the reserved morning window. Longer
+            # visits are not squeezed into a short fixed slot.
+            if (candidate["slot"] == "ANY" or int(candidate["duration_minutes"] or 0) <= 120) and fits_window(candidate):
+                first_items.append(candidate)
+    if not any(_overlaps({"start_time": "12:00", "end_time": "13:00"}, item) for item in [*timed_core, *first_items]):
         first_items.append(_stay_entry("午餐与转场", "安排午餐，并预留前往下一站的交通时间；餐费不属于套餐。", time_text="12:00–13:00", kind="FREE", slot="AFTERNOON"))
     first_items.extend(entries)
     afternoon_core = next((item for item in entries if item["slot"] == "AFTERNOON"), None)
     if not all_day and not afternoon_core:
         afternoon_place = next_public(preferred_afternoon)
         if afternoon_place:
-            afternoon = public_entry(afternoon_place, "13:30–15:00", "AFTERNOON", "午餐后城市体验")
+            afternoon = public_entry(afternoon_place, "13:30–17:00", "AFTERNOON", "午餐后城市体验", start_date)
             if morning_activity:
                 if compact_route:
                     afternoon["description"] += f" 上午的{morning_activity['title']}后继续安排本段，整日节奏偏紧凑，适合主打高强度城市游。"
@@ -632,12 +759,16 @@ def build_day_plan(
                     afternoon["description"] += f" 上午{morning_activity['title']}活动量较大，下午转为相对轻松的安排，给体力留出恢复时间。"
                 else:
                     afternoon["description"] += f" 与上午{morning_activity['title']}形成有动有静的体验节奏。"
-            first_items.append(afternoon)
+            if (afternoon["slot"] == "ANY" or int(afternoon["duration_minutes"] or 0) <= 210) and fits_window(afternoon):
+                first_items.append(afternoon)
         else:
-            first_items.append({
+            local_walk = {
                 **_stay_entry("下午酒店周边漫游", "午餐后在酒店附近选择步行可达的街区或公共空间，安排轻松活动并预留入住时间。", time_text="13:30–15:00", kind="FREE", slot="AFTERNOON", address=hotel_address),
                 "route_only": True,
-            })
+                "start_time": "13:30", "end_time": "15:00",
+            }
+            if fits_window(local_walk):
+                first_items.append(local_walk)
     elif morning_activity and afternoon_core:
         afternoon_intensity = _route_intensity(afternoon_core.get("title"), afternoon_core.get("kind"), afternoon_core.get("duration_minutes"))
         if compact_route and morning_intensity == "高" and afternoon_intensity == "高":
@@ -646,17 +777,17 @@ def build_day_plan(
             afternoon_core["description"] += f" 上午{morning_activity['title']}活动量较大，下午安排{afternoon_core['title']}放慢节奏，给体力留出恢复时间。"
         elif morning_intensity == "高" and afternoon_intensity == "高":
             afternoon_core["description"] += f" 上午{morning_activity['title']}后接着安排{afternoon_core['title']}，当天活动较密集，适合主打紧凑型城市游。"
-    latest_overlap_end = max(
+    latest_activity_end = max(
         (
             _clock_minutes(item.get("end_time"))
-            for item in timed_core
-            if _clock_minutes(item.get("start_time")) is not None
-            and _clock_minutes(item.get("start_time")) < 15 * 60
-            and (_clock_minutes(item.get("end_time")) or 0) > 15 * 60
+            for item in [*timed_core, *first_items]
+            if item.get("slot") != "NIGHT"
+            and item.get("kind") in {"PARTNER_RESOURCE", "PUBLIC_REFERENCE"}
+            and _clock_minutes(item.get("end_time")) is not None
         ),
         default=0,
     )
-    checkin_minute = max(15 * 60, latest_overlap_end)
+    checkin_minute = max(15 * 60, latest_activity_end)
     checkin_time = f"{checkin_minute // 60:02d}:{checkin_minute % 60:02d} 后"
     first_items.append(
         _stay_entry(
@@ -668,12 +799,13 @@ def build_day_plan(
     )
     night_core = next((item for item in entries if item["slot"] == "NIGHT"), None)
     if not night_core:
-        night_place = next_public("轻")
+        night_place = next_evening_public()
         if night_place:
-            night = public_entry(night_place, "19:00–20:30", "NIGHT", "晚间可选轻松体验")
+            night = public_entry(night_place, "19:00–20:30", "NIGHT", "晚间可选轻松体验", start_date)
             night["title"] = f"晚间可选：{night['title']}"
             night["description"] += " 适合作为当天的轻松收尾，也可以直接回酒店休息。"
-            first_items.append(night)
+            if fits_window(night):
+                first_items.append(night)
     feature_item = next((item for item in room_features if any(word in str(item.get("resource_name")) for word in ("影音", "会员", "电影", "投影"))), None)
     if feature_item is not None:
         first_items.append(_stay_entry(f"回房使用{feature_item.get('resource_name')}", "这是房型特色，按确认权益使用，不占白天活动时间。", time_text="21:30", kind="ROOM_FEATURE", slot="NIGHT", address=hotel_address))
@@ -687,6 +819,42 @@ def build_day_plan(
         )
         item["address"] = str((neighbours[0] if neighbours else {}).get("address") or hotel_address)
 
+    def add_transfer_slots(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        scheduled = sorted(
+            (item for item in items if item.get("kind") in {"PARTNER_RESOURCE", "PUBLIC_REFERENCE"} and _item_window(item)[0] and _item_window(item)[1]),
+            key=lambda item: _clock_minutes(_item_window(item)[0]) or 0,
+        )
+        transfers: list[dict[str, Any]] = []
+        for previous, following in zip(scheduled, scheduled[1:]):
+            previous_end = _clock_minutes(_item_window(previous)[1])
+            next_start = _clock_minutes(_item_window(following)[0])
+            if previous_end is None or next_start is None:
+                continue
+            buffer = _transfer_minutes(previous.get("address"), following.get("address"))
+            if buffer <= 0:
+                continue
+            available = next_start - previous_end
+            if available < buffer:
+                warning = f"地点转场至少建议预留 {buffer} 分钟，当前场次间隔 {max(0, available)} 分钟；请调整场次或确认交通安排。"
+                following["schedule_conflict"] = True
+                following["recommended_buffer_minutes"] = buffer
+                following["notes"] = "；".join(filter(None, [str(following.get("notes") or ""), warning]))
+                continue
+            start_minute = next_start - buffer
+            start_text = f"{start_minute // 60:02d}:{start_minute % 60:02d}"
+            end_text = f"{next_start // 60:02d}:{next_start % 60:02d}"
+            transfers.append({
+                "slot": "ANY", "slot_label": "转场", "time": f"{start_text}–{end_text}",
+                "start_time": start_text, "end_time": end_text,
+                "title": f"前往{following.get('title') or '下一体验'}",
+                "description": "按相邻地点预留交通时间；具体路线请出发前导航确认。",
+                "duration_minutes": buffer, "duration_text": _duration_text(buffer),
+                "notes": "", "address": str(following.get("address") or ""),
+                "kind": "TRANSFER", "included": False, "route_only": True,
+            })
+        return sorted([*items, *transfers], key=lambda item: _clock_minutes(_item_window(item)[0]) or 0)
+
+    first_items = add_transfer_slots(first_items)
     days: list[dict[str, Any]] = [
         {
             "day_index": 1,
@@ -705,12 +873,14 @@ def build_day_plan(
             _stay_entry("早餐与出发准备", "整理随身物品后从酒店出发；套餐包含的餐饮列在费用包含中。", time_text="08:00–09:00", kind="FREE", slot="MORNING", address=hotel_address)
         ]
         if place_offset < len(public_places):
-            middle_items.append(public_entry(public_places[place_offset], "09:30–11:30", "MORNING", "同区公共路线参考"))
+            middle_date = start_date + timedelta(days=index - 1) if start_date else None
+            middle_items.append(public_entry(public_places[place_offset], "09:30–11:30", "MORNING", "同区公共路线参考", middle_date))
             used_public_places.add(str(public_places[place_offset].get("name") or ""))
         if place_offset + 1 < len(public_places):
-            middle_items.append(public_entry(public_places[place_offset + 1], "14:00–16:00", "AFTERNOON", "下午公共路线参考"))
+            middle_items.append(public_entry(public_places[place_offset + 1], "14:00–16:00", "AFTERNOON", "下午公共路线参考", middle_date))
             used_public_places.add(str(public_places[place_offset + 1].get("name") or ""))
         middle_items.append(_stay_entry("返回酒店 · 继续住一晚", f"本产品包含的住宿为{room_name}；当晚按酒店规则使用房间。", time_text="21:00", slot="NIGHT", address=hotel_address))
+        middle_items = add_transfer_slots(middle_items)
         days.append({
             "day_index": index,
             "label": f"第 {index} 天",
@@ -727,7 +897,8 @@ def build_day_plan(
         _stay_entry("早餐与整理行李", "早餐后整理行李，按计划办理退房。套餐包含的餐饮列在费用包含中。", time_text="08:00–09:00", kind="FREE", slot="MORNING", address=hotel_address),
     ]
     if place_offset < len(public_places):
-        last_items.append(public_entry(public_places[place_offset], "09:00–10:30", "MORNING", "退房前上午路线参考"))
+        departure_date = start_date + timedelta(days=nights) if start_date else None
+        last_items.append(public_entry(public_places[place_offset], "09:00–10:30", "MORNING", "退房前上午路线参考", departure_date))
         used_public_places.add(str(public_places[place_offset].get("name") or ""))
     last_items.append(
         _stay_entry(
@@ -741,7 +912,7 @@ def build_day_plan(
     )
     last_items.append(_stay_entry("午餐与转场", "用餐并预留前往下午地点的交通时间；餐费不属于套餐权益。", time_text="12:00–13:00", kind="FREE", slot="AFTERNOON"))
     if place_offset + 1 < len(public_places):
-        last_items.append(public_entry(public_places[place_offset + 1], "13:30–15:30", "AFTERNOON", "退房后下午路线参考"))
+        last_items.append(public_entry(public_places[place_offset + 1], "13:30–15:30", "AFTERNOON", "退房后下午路线参考", departure_date))
         used_public_places.add(str(public_places[place_offset + 1].get("name") or ""))
     last_items.append(_stay_entry("返回酒店取行李", "下午行程结束后回酒店前台取回行李，再按返程安排出发。", time_text="15:30", kind="BAGGAGE", address=hotel_address, included=luggage_included))
     for index, item in enumerate(last_items):
@@ -752,6 +923,7 @@ def build_day_plan(
             key=lambda candidate: abs(timed_minutes(candidate, index) - timed_minutes(item, index)),
         )
         item["address"] = str((neighbours[0] if neighbours else {}).get("address") or hotel_address)
+    last_items = add_transfer_slots(last_items)
     days.append({
         "day_index": last_index,
         "label": f"第 {last_index} 天",
@@ -821,6 +993,8 @@ def build_route_plan(day_plan: list[dict[str, Any]], stay: dict[str, Any]) -> li
         stops: list[dict[str, Any]] = []
         day_items = list(day.get("items", []))
         for item_index, item in enumerate(day_items):
+            if str(item.get("kind") or "") == "TRANSFER":
+                continue
             name = str(item.get("title") or "")
             kind = str(item.get("kind") or "")
             address = str(item.get("address") or "")

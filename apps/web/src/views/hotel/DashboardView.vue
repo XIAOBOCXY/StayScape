@@ -6,7 +6,6 @@ import { errorMessage } from '../../api/client'
 import { useAuthStore } from '../../stores/auth'
 import MetricCard from '../../components/MetricCard.vue'
 import ProductCard from '../../components/ProductCard.vue'
-import StatusTag from '../../components/StatusTag.vue'
 import type { Dashboard, TravelProduct } from '../../types'
 
 const loading = ref(true)
@@ -22,7 +21,6 @@ const productPoolEl = ref<HTMLElement | null>(null)
 let productLoadSequence = 0
 let productObserver: IntersectionObserver | undefined
 let loadSequence = 0
-const presetChanges = [{id:'p1',event_type:'游客确认购买',resource_type:'露台观影与夜市漫步套餐',resource_id:'',processed:true,created_at:'2026-09-28T10:20:00'}, {id:'p2',event_type:'资源名额调整',resource_type:'双人陶艺体验',resource_id:'',processed:true,created_at:'2026-09-27T16:40:00'}, {id:'p3',event_type:'产品上架',resource_type:'运河夜游约会套餐',resource_id:'',processed:true,created_at:'2026-09-26T09:15:00'}]
 const revenueChartEl = ref<HTMLElement | null>(null)
 const listingChartEl = ref<HTMLElement | null>(null)
 let revenueChart: echarts.ECharts | undefined
@@ -43,17 +41,6 @@ function restoreCachedDashboard() {
 }
 const offSaleProductCount = computed(() => Math.max(0, Number(dashboard.value?.product_count || 0) - Number(dashboard.value?.on_sale_product_count || 0)))
 const currency = (value: string | number | undefined) => `¥${Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`
-function changeLabel(value: unknown) {
-  const text = String(value || '')
-  return ({
-    PARTNER_RESOURCE_STATUS_CHANGED: '合作体验状态变化',
-    PARTNER_RESOURCE_CAPACITY_CHANGED: '体验名额变化',
-    ROOM_INVENTORY_CHANGED: '房量变化',
-    HOTEL_SERVICE_QUANTITY_CHANGED: '酒店服务名额变化',
-    PRODUCT_PUBLISHED: '产品上架',
-  } as Record<string, string>)[text] || text || '资源变化'
-}
-
 async function renderCharts(requestId: number) {
   if (!dashboard.value) return
   const echarts = await import('echarts')
@@ -212,8 +199,6 @@ onBeforeUnmount(() => { productObserver?.disconnect(); socket?.close(); revenueC
       <div v-else class="panel empty-state">还没有主题产品，先从一间临期客房开始组包。</div>
     </section>
 
-    <div class="section-title"><h2>最近动态</h2><span>资源变化会触发产品重算</span></div>
-    <div class="panel table-wrap"><table class="data-table"><thead><tr><th>事件</th><th>资源</th><th>处理结果</th><th>时间</th></tr></thead><tbody><tr v-for="change in (dashboard.recent_changes.length ? dashboard.recent_changes : presetChanges)" :key="String(change.id)"><td>{{ changeLabel(change.event_type) }}</td><td>{{ change.resource_type }}</td><td><StatusTag :status="change.processed ? 'AVAILABLE' : 'DRAFT'" /></td><td class="muted">{{ String(change.created_at).replace('T', ' ').slice(0, 16) }}</td></tr><tr v-if="!(dashboard.recent_changes.length ? dashboard.recent_changes : presetChanges).length"><td colspan="4" class="empty-state">暂无动态调整记录</td></tr></tbody></table></div>
   </template>
   <div v-else-if="loading" class="dashboard-loading" aria-busy="true" aria-label="正在读取经营数据">
     <div class="metric-grid metric-grid--sales">
@@ -241,5 +226,8 @@ onBeforeUnmount(() => { productObserver?.disconnect(); socket?.close(); revenueC
 </template>
 
 <style scoped>
-.dashboard-loading{display:block}.dashboard-skeleton-card,.dashboard-skeleton-chart,.dashboard-skeleton-table{background:linear-gradient(110deg,#f4f5f3 8%,#fafbf9 18%,#f4f5f3 33%);background-size:200% 100%;animation:dashboard-shimmer 1.2s linear infinite}.dashboard-skeleton-card{min-height:100px;padding:16px}.dashboard-skeleton-card i,.dashboard-skeleton-card b,.dashboard-skeleton-card span,.dashboard-skeleton-chart i,.dashboard-skeleton-chart b,.dashboard-skeleton-chart span,.dashboard-skeleton-table i,.dashboard-skeleton-table span{display:block;border-radius:5px;background:rgba(115,126,119,.12)}.dashboard-skeleton-card i{width:34%;height:12px}.dashboard-skeleton-card b{width:58%;height:24px;margin-top:14px}.dashboard-skeleton-card span{width:76%;height:10px;margin-top:10px}.dashboard-skeleton-chart{height:300px;padding:16px}.dashboard-skeleton-chart i{width:28%;height:12px}.dashboard-skeleton-chart b{width:46%;height:17px;margin-top:10px}.dashboard-skeleton-chart span{height:205px;margin-top:18px;background:repeating-linear-gradient(to bottom,rgba(115,126,119,.10) 0 1px,transparent 1px 48px)}.dashboard-skeleton-table{height:165px;padding:16px}.dashboard-skeleton-table i{width:25%;height:16px;margin-bottom:22px}.dashboard-skeleton-table span{height:24px;margin-top:10px}@keyframes dashboard-shimmer{to{background-position-x:-200%}}.header-actions{display:flex;align-items:center;gap:10px}.metric-link{cursor:pointer;transition:transform .2s}.metric-link:hover{transform:translateY(-3px)}.metric-grid--sales{margin-bottom:12px}.metric-grid--operations{margin-top:12px}.dashboard-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:18px 0}.chart-panel{padding:14px 15px}.chart-panel header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.chart-panel header span{display:block;color:var(--muted);font-size:10px;letter-spacing:.08em}.chart-panel h2{margin:5px 0 0;font-size:15px}.chart-panel header small{margin-top:4px;color:var(--muted);font-size:10px;text-align:right}.dashboard-chart{width:100%;height:248px;margin-top:4px}.dashboard-product-pool__hint{min-height:52px;padding:12px}.resource-snapshot-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.resource-snapshot{border:1px solid var(--line);border-radius:12px;background:#fff;padding:16px;text-align:left;color:var(--ink);cursor:pointer;box-shadow:var(--shadow);transition:.2s}.resource-snapshot:hover{border-color:#7bb8a8;box-shadow:0 15px 35px rgba(30,72,64,.12);transform:translateY(-2px)}.resource-snapshot p{margin:11px 0}.resource-snapshot__hint{display:block;margin-top:14px;color:var(--teal);font-size:10px;letter-spacing:.1em}.data-table td.empty-state{height:100px;text-align:center}@media(max-width:900px){.dashboard-charts,.resource-snapshot-grid{grid-template-columns:1fr}}@media(max-width:600px){.header-actions{margin-top:12px}.page-head{display:block}.dashboard-chart{height:220px}.resource-snapshot-grid{grid-template-columns:1fr}}
+.dashboard-loading{display:block}.dashboard-skeleton-card,.dashboard-skeleton-chart,.dashboard-skeleton-table{background:linear-gradient(110deg,#f4f5f3 8%,#fafbf9 18%,#f4f5f3 33%);background-size:200% 100%;animation:dashboard-shimmer 1.2s linear infinite}.dashboard-skeleton-card{min-height:100px;padding:16px}.dashboard-skeleton-card i,.dashboard-skeleton-card b,.dashboard-skeleton-card span,.dashboard-skeleton-chart i,.dashboard-skeleton-chart b,.dashboard-skeleton-chart span,.dashboard-skeleton-table i,.dashboard-skeleton-table span{display:block;border-radius:5px;background:rgba(115,126,119,.12)}.dashboard-skeleton-card i{width:34%;height:12px}.dashboard-skeleton-card b{width:58%;height:24px;margin-top:14px}.dashboard-skeleton-card span{width:76%;height:10px;margin-top:10px}.dashboard-skeleton-chart{height:300px;padding:16px}.dashboard-skeleton-chart i{width:28%;height:12px}.dashboard-skeleton-chart b{width:46%;height:17px;margin-top:10px}.dashboard-skeleton-chart span{height:205px;margin-top:18px;background:repeating-linear-gradient(to bottom,rgba(115,126,119,.10) 0 1px,transparent 1px 48px)}.dashboard-skeleton-table{height:165px;padding:16px}.dashboard-skeleton-table i{width:25%;height:16px;margin-bottom:22px}.dashboard-skeleton-table span{height:24px;margin-top:10px}@keyframes dashboard-shimmer{to{background-position-x:-200%}}.header-actions{display:flex;align-items:center;gap:10px}.metric-link{cursor:pointer;transition:transform .2s}.metric-link:hover{transform:translateY(-3px)}.metric-grid--sales{margin-bottom:12px}.metric-grid--operations{margin-top:12px}.dashboard-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:18px 0}.chart-panel{padding:14px 15px}.chart-panel header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.chart-panel header span{display:block;color:var(--muted);font-size:10px;letter-spacing:.08em}.chart-panel h2{margin:5px 0 0;font-size:15px}.chart-panel header small{margin-top:4px;color:var(--muted);font-size:10px;text-align:right}.dashboard-chart{width:100%;height:248px;min-width:0;margin-top:4px}.dashboard-product-pool{min-width:0}.dashboard-product-pool :deep(.product-grid){grid-template-columns:repeat(auto-fit,minmax(min(100%,390px),1fr))!important;align-items:stretch;gap:14px}.dashboard-product-pool :deep(.product-card){height:100%;min-width:0;grid-template-columns:140px minmax(0,1fr)!important;min-height:205px}.dashboard-product-pool :deep(.product-card__media img){width:100%;height:100%;object-fit:cover}.dashboard-charts>*{min-width:0}.dashboard-product-pool__hint{min-height:52px;padding:12px}.resource-snapshot-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.resource-snapshot{border:1px solid var(--line);border-radius:12px;background:#fff;padding:16px;text-align:left;color:var(--ink);cursor:pointer;box-shadow:var(--shadow);transition:.2s}.resource-snapshot:hover{border-color:#7bb8a8;box-shadow:0 15px 35px rgba(30,72,64,.12);transform:translateY(-2px)}.resource-snapshot p{margin:11px 0}.resource-snapshot__hint{display:block;margin-top:14px;color:var(--teal);font-size:10px;letter-spacing:.1em}.data-table td.empty-state{height:100px;text-align:center}@media(max-width:900px){.dashboard-charts,.resource-snapshot-grid{grid-template-columns:1fr}}@media(max-width:700px){.metric-grid--sales,.metric-grid--operations{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.header-actions{margin-top:12px}.page-head{display:block}.dashboard-chart{height:220px}.resource-snapshot-grid{grid-template-columns:1fr}}
+.dashboard-product-pool :deep(.product-card > .product-card__media){height:100%!important;min-height:100%!important;max-height:none!important}
+.dashboard-product-pool :deep(.product-card > .product-card__media > .media-image){height:100%!important;min-height:100%!important;max-height:none!important}
+@media(max-width:760px){.dashboard-product-pool :deep(.product-grid){grid-template-columns:1fr!important}.dashboard-product-pool :deep(.product-card){grid-template-columns:112px minmax(0,1fr)!important;min-height:160px}}
 </style>

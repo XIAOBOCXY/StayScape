@@ -169,6 +169,8 @@ export interface DayItem {
   opening_hours?: string
   reservation_notice?: string
   route_role?: string
+  schedule_conflict?: boolean
+  recommended_buffer_minutes?: number | null
 }
 
 export interface DayPlan {

@@ -70,6 +70,7 @@ services:
       SEED_DEMO_ON_STARTUP: ${SEED_DEMO_ON_STARTUP:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
     volumes:
+      - ./skills:/opt/stayscape/skills:ro
       # Generated images remain on the server and are ignored by Git.
       - ./runtime/generated-media:/app/generated_media
     depends_on:

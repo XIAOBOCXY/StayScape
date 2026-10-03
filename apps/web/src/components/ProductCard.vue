@@ -5,7 +5,6 @@ import StatusTag from './StatusTag.vue'
 import MediaImage from './MediaImage.vue'
 import type { TravelProduct } from '../types'
 import { experienceLabel, heroMedia, mediaForProduct, mediaForResource } from '../utils/productMedia'
-import { publicTravelCopy } from '../utils/publicTravelCopy'
 import { useCountdown } from '../utils/countdown'
 
 const props = defineProps<{ product: TravelProduct; publicView?: boolean; compact?: boolean; horizontal?: boolean }>()
@@ -45,7 +44,6 @@ function onCardTouchEnd(event: TouchEvent) {
   const total = heroList.value.length
   heroIndex.value = (heroIndex.value + (dx < 0 ? 1 : -1) + total) % total
 }
-const crowdLabel = computed(() => ({ FAMILY: '亲子', COUPLE: '两人', FRIENDS: '朋友', SOLO: '独自', LOCAL_WEEKEND: '本地周末' }[props.product.target_crowd] || '杭州周末'))
 // Families read "2大1小" instead of "3 人套餐"; other crowds keep 人数.
 const partySize = computed(() => Number(props.product.party_size || ({ FAMILY: 3, COUPLE: 2, FRIENDS: 4, SOLO: 1 }[props.product.target_crowd] || 2)))
 const partyLabel = computed(() => {
@@ -70,7 +68,6 @@ function slotLabel(resource: TravelProduct['resources'][number]) {
   if (minutes < 18 * 60) return '下午'
   return '晚上'
 }
-const experienceNames = computed(() => experienceResources.value.map((item) => item.resource_name).filter(Boolean))
 const locationLabel = computed(() => experienceResources.value.find((item) => item.address)?.address || '酒店内服务')
 const dateLabel = computed(() => {
   const value = String(props.product.target_date || '')
@@ -84,15 +81,6 @@ const checkOutLabel = computed(() => {
   const value = String(props.product.stay?.check_out || '')
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
   return match ? `${Number(match[2])}月${Number(match[3])}日退房` : ''
-})
-const hook = computed(() => {
-  const name = props.product.product_name || ''
-  const raw = publicTravelCopy(props.product.marketing_content || props.product.marketing_title, '')
-  const cleaned = raw.replace(name, '').replace(/^[\s·｜|—–:：，,。]+/, '').trim()
-  // Cards stay scannable: the full day-by-day copy lives on the detail page.
-  if (cleaned.length >= 6) return cleaned.length > 74 ? `${cleaned.slice(0, 74).trimEnd()}…` : cleaned
-  const first = experienceNames.value.slice(0, 2).join('、') || '在地体验'
-  return `${first} · ${locationLabel.value}`
 })
 function open() {
   if (Date.now() - swipeGuard.value < 350) return
@@ -114,12 +102,10 @@ function onKeydown(event: KeyboardEvent) {
       </template>
     </div>
     <div class="product-card__body">
-      <div class="product-card__top">
-        <span class="product-card__eyebrow">{{ product.theme }} · {{ crowdLabel }}</span>
-        <StatusTag v-if="!publicView" :status="product.status" />
+      <div v-if="!publicView" class="product-card__top">
+        <StatusTag :status="product.status" />
       </div>
       <h3>{{ product.product_name }}</h3>
-      <p v-if="hook" class="product-card__hook">{{ hook }}</p>
       <div class="product-card__facts">
         <span>{{ stayLabel }}</span><span>{{ dateLabel }}入住</span><span v-if="checkOutLabel">{{ checkOutLabel }}</span><span>{{ locationLabel }}</span>
       </div>

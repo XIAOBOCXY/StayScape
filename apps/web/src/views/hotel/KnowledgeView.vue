@@ -8,13 +8,11 @@ type KnowledgeRecord = Record<string, any>
 
 const items = ref<KnowledgeRecord[]>([])
 const categories = ref<Array<{ value: string; label: string }>>([])
-const disclosure = ref('')
 const loading = ref(false)
 const keyword = ref('')
 const category = ref('')
 const selected = ref<KnowledgeRecord | null>(null)
 const refreshing = ref(false)
-const refreshNote = ref('')
 
 const statusLabel = computed(() => (status: string) => ({
   ACTIVE: '已核验',
@@ -36,7 +34,6 @@ async function load() {
     const response = await hotelApi.knowledge({ q: keyword.value || undefined, category: category.value || undefined, limit: 120 })
     items.value = response.data.items || []
     categories.value = (response.data.categories || []) as unknown as Array<{ value: string; label: string }>
-    disclosure.value = response.data.disclosure || ''
   } catch (error) { ElMessage.error(errorMessage(error)) }
   finally { loading.value = false }
 }
@@ -48,8 +45,7 @@ async function refreshSources() {
   try {
     const response = await hotelApi.refreshKnowledge()
     const data = response.data
-    refreshNote.value = '已检查 ' + data.checked + ' 条来源链接，其中 ' + data.reachable_count + ' 条可访问；这不代表事实已核验。'
-    ElMessage.success('来源链接检查完成')
+    ElMessage.success(`已检查 ${data.checked} 条来源`)
     await load()
   } catch (error) { ElMessage.error(errorMessage(error)) }
   finally { refreshing.value = false }
@@ -93,29 +89,33 @@ onMounted(load)
       </el-select>
       <el-button type="primary" @click="load">查询</el-button>
       <el-button plain @click="reset">重置</el-button>
-      <small>{{ disclosure }}</small>
-      <small v-if="refreshNote" class="refresh-note">{{ refreshNote }}</small>
     </section>
 
-    <section class="knowledge-layout">
+    <section class="knowledge-layout" :class="{ 'has-selection': selected }">
       <div class="panel knowledge-table">
-        <el-table v-loading="loading" :data="items" height="560" @row-click="(row: KnowledgeRecord) => selected = row">
-          <el-table-column label="地点 / 类别" min-width="210">
-            <template #default="{ row }"><strong>{{ row.name }}</strong><small class="table-subline">{{ row.category_label }} · {{ row.area }}</small></template>
-          </el-table-column>
-          <el-table-column label="建议停留" width="110"><template #default="{ row }">{{ durationText(row.suggested_duration_minutes) }}</template></el-table-column>
-          <el-table-column label="开放时间" min-width="170"><template #default="{ row }">{{ row.opening_hours || '未收录' }}</template></el-table-column>
-          <el-table-column label="来源" min-width="150"><template #default="{ row }">{{ row.source_name }}</template></el-table-column>
-          <el-table-column label="人工核验" width="110"><template #default="{ row }"><el-tag :type="statusType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-          <el-table-column label="核验日期" width="110"><template #default="{ row }">{{ row.verified_at ? String(row.verified_at).slice(0, 10) : '未核验' }}</template></el-table-column>
-        </el-table>
+        <div v-loading="loading" class="knowledge-list">
+          <button
+            v-for="row in items"
+            :key="row.id"
+            type="button"
+            class="knowledge-row"
+            :class="{ selected: selected?.id === row.id }"
+            :aria-pressed="selected?.id === row.id"
+            @click="selected = row"
+          >
+            <span class="knowledge-row__heading"><strong>{{ row.name }}</strong><el-tag :type="statusType(row.status)" effect="light">{{ statusLabel(row.status) }}</el-tag></span>
+            <span class="knowledge-row__meta">{{ row.category_label }} · {{ row.area }} <i>·</i> {{ durationText(row.suggested_duration_minutes) }}</span>
+            <span class="knowledge-row__opening">{{ row.opening_hours || '开放时间未收录' }}</span>
+            <span class="knowledge-row__source">来源：{{ row.source_name || '未注明' }}</span>
+          </button>
+        </div>
         <div v-if="!loading && !items.length" class="empty-state">没有匹配的知识记录，换一个关键词试试。</div>
       </div>
 
-      <aside class="panel knowledge-detail">
+      <aside v-if="selected" class="panel knowledge-detail">
         <template v-if="selected">
           <div class="eyebrow">{{ selected.category_label }} · {{ selected.area }}</div>
-          <h2>{{ selected.name }}</h2>
+          <div class="knowledge-detail__title"><h2>{{ selected.name }}</h2><el-tag :type="statusType(selected.status)" effect="light">{{ statusLabel(selected.status) }}</el-tag></div>
           <div class="detail-tags">
             <span>{{ selected.indoor_outdoor_label }}</span>
             <span>适合 {{ selected.suitable_crowds_label }}</span>
@@ -130,29 +130,35 @@ onMounted(load)
             <dt>天气适配</dt><dd>{{ selected.weather_adaptations_label || selected.weather_adaptations || '未标注' }}</dd>
             <dt>原文</dt><dd class="verbatim">{{ selected.description || '未收录' }}</dd>
             <dt>来源</dt><dd>{{ selected.source_name }}<a v-if="selected.source_url" :href="selected.source_url" target="_blank" rel="noreferrer">打开来源</a></dd>
-            <dt>核验</dt><dd>{{ statusLabel(selected.status) }}<template v-if="selected.source_age_days !== null"> · 已过 {{ selected.source_age_days }} 天（复核窗口 {{ selected.review_window_days }} 天）</template></dd>
+            <dt>核验记录</dt><dd>{{ selected.verified_at ? String(selected.verified_at).slice(0, 10) : '尚未核验' }}</dd>
           </dl>
-          <p class="detail-note">链接可访问不代表事实准确。{{ selected.source_checked_at ? '最近检查：' + String(selected.source_checked_at).slice(0, 16).replace('T', ' ') + '；' + (selected.source_reachable ? '来源可访问' : '来源暂不可访问') + '。' : '尚未检查来源链接。' }}</p>
           <el-button v-if="selected.status !== 'ACTIVE'" type="primary" plain :disabled="!selected.source_url" @click="verifySelected">对照来源并记录核验</el-button>
         </template>
-        <div v-else class="empty-state">从左侧选择一条记录查看公开资料原文与来源。</div>
       </aside>
     </section>
   </div>
 </template>
 
 <style scoped>
-.knowledge-page { display: grid; gap: 14px; }
+.knowledge-page { display: grid; gap: 12px; min-width: 0; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
-.knowledge-filter { display: grid; grid-template-columns: minmax(220px, 1.4fr) 180px auto auto; gap: 10px; align-items: center; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
-.knowledge-filter small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; line-height: 1.6; }
-.knowledge-filter .refresh-note { color: var(--teal); }
-.knowledge-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: 12px; align-items: start; }
-.knowledge-table { padding: 8px 12px 12px; }
-.knowledge-table :deep(.el-table__row) { cursor: pointer; }
-.table-subline { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
-.knowledge-detail { padding: 18px; }
-.knowledge-detail h2 { margin: 7px 0 10px; font-size: 20px; }
+.knowledge-filter { display: grid; min-width: 0; grid-template-columns: minmax(220px, 1.4fr) 180px auto auto; gap: 10px; align-items: center; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.knowledge-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
+.knowledge-layout.has-selection { grid-template-columns: minmax(0, 1.7fr) minmax(300px, .9fr); }
+.knowledge-table { min-width: 0; padding: 8px 12px 12px; }
+.knowledge-list { display: grid; max-height: 720px; overflow: auto; }
+.knowledge-row { display: grid; gap: 5px; width: 100%; min-width: 0; padding: 12px 10px; border: 0; border-bottom: 1px solid #edf0ed; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.knowledge-row:hover,.knowledge-row.selected { background: #f5f8f5; }
+.knowledge-row.selected { box-shadow: inset 3px 0 #507461; }
+.knowledge-row__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.knowledge-row__heading strong { min-width: 0; font-size: 14px; line-height: 1.45; }
+.knowledge-row__heading :deep(.el-tag) { flex: 0 0 auto; }
+.knowledge-row__meta,.knowledge-row__opening,.knowledge-row__source { overflow: hidden; color: #68736c; font-size: 12px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-row__meta i { margin: 0 3px; color: #a4ada6; font-style: normal; }
+.knowledge-row__source { color: #818a83; font-size: 11.5px; }
+.knowledge-detail { min-width: 0; padding: 16px; }
+.knowledge-detail__title { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.knowledge-detail h2 { min-width:0; margin: 7px 0 10px; font-size: 19px; }
 .detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
 .detail-tags span { padding: 4px 8px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: 10px; }
 .knowledge-detail dl { margin: 0; }
@@ -160,10 +166,10 @@ onMounted(load)
 .knowledge-detail dd { margin: 5px 0 0; color: var(--ink); font-size: 12px; line-height: 1.7; }
 .knowledge-detail dd a { margin-left: 8px; color: var(--teal); font-size: 11px; }
 .knowledge-detail .verbatim { padding: 10px 12px; border-left: 2px solid var(--teal); background: var(--panel-soft); font-size: 12px; }
-.detail-note { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.65; }
 .empty-state { padding: 26px; color: var(--muted); font-size: 12px; text-align: center; }
 @media (max-width: 1080px) {
-  .knowledge-layout { grid-template-columns: 1fr; }
+  .knowledge-layout, .knowledge-layout.has-selection { grid-template-columns: minmax(0, 1fr); }
+  .knowledge-list { max-height: 480px; }
   .knowledge-filter { grid-template-columns: 1fr 1fr; }
 }
 </style>

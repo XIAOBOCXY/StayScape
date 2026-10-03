@@ -24,9 +24,29 @@ from .operations_insight_service import OperationsInsightService
 from .poster_service import poster_asset
 from .wan_image_service import WanImageService
 from .weather_service import WeatherService
+from .public_copy import route_proximity
 
 
 DEFAULT_QUANTITIES = {"BREAKFAST": 3, "LATE_CHECKOUT": 1}
+
+
+def _partner_transfer_issue(resources: list[PartnerResource]) -> str | None:
+    scheduled = sorted(
+        (item for item in resources if item.start_time and item.end_time),
+        key=lambda item: item.start_time,
+    )
+    for previous, following in zip(scheduled, scheduled[1:]):
+        if not previous.address or not following.address or previous.address.strip() == following.address.strip():
+            continue
+        gap = int((following.start_time.hour * 60 + following.start_time.minute) - (previous.end_time.hour * 60 + previous.end_time.minute))
+        if gap < 0:
+            continue  # The interval validator reports a direct overlap with more detail.
+        required = int(route_proximity(previous.address, following.address).get("buffer_minutes") or 30)
+        if gap < required:
+            return f"{previous.resource_name}结束后到{following.resource_name}开始仅有 {gap} 分钟；按地点建议至少预留 {required} 分钟转场，请调整场次或拆分产品。"
+    return None
+
+
 NON_EXCLUSIVE_SERVICE_TYPES = {"BREAKFAST", "PARKING", "LUGGAGE_STORAGE", "LATE_CHECKOUT"}
 
 MARKETING_STYLE_GUIDES: dict[str, dict[str, str]] = {
@@ -303,6 +323,7 @@ class ProductService:
             "weather_forecast": self.intelligence_context.get("weather"),
             "operations_insights": operations_insights,
             "travel_knowledge": self.intelligence_context.get("knowledge", []),
+            "tourism_planning_context": self.intelligence_context.get("tourism_planning_context", {}),
         }
 
     def _marketing_assets(self, assets, *, product_name: str, theme: str, target_crowd: str, weather: str, target_date: object, price: Decimal | str, room: RoomInventory, resources: list[ProductResource], variant_index: int = 0, copy_style: str = "SEEDING", generated_image: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -430,6 +451,9 @@ class ProductService:
             capacity_inputs.append(CapacityInput(partner.resource_name, partner.remaining_capacity, q))
             unit_cost += partner.settlement_price * q
             schedule_slots.append((partner.start_time, partner.end_time, partner.resource_name))
+        transfer_issue = _partner_transfer_issue(selected_partners)
+        if transfer_issue:
+            raise AppError("TRAVEL_BUFFER_INSUFFICIENT", transfer_issue, field="resource_selections", retryable=True)
         if len(resource_rows) < 2:
             raise AppError("VALIDATION_ERROR", "套餐至少需要客房和一项酒店服务或文旅体验", field="resource_selections")
         validation = validate_package(capacity_inputs=capacity_inputs, unit_cost=unit_cost, room_minimum_price=room.minimum_price, minimum_gross_margin=request.minimum_gross_margin, visitor_budget=request.visitor_budget, preferred_price=request.preferred_price, warnings=warnings)
@@ -485,7 +509,13 @@ class ProductService:
         insights = OperationsInsightService(self.db, self.hotel_id).snapshot(target_date=request.target_date)
         knowledge_query = " ".join(part for part in (natural_language, request.theme, request.target_crowd) if part)
         knowledge = KnowledgeService(self.db).search(knowledge_query, target_crowd=request.target_crowd, weather=scenario)
-        context = {"weather": weather, "insights": insights, "knowledge": knowledge}
+        planning_context = KnowledgeService(self.db).planning_context()
+        context = {
+            "weather": weather,
+            "insights": insights,
+            "knowledge": knowledge,
+            "tourism_planning_context": planning_context,
+        }
         self.intelligence_context = context
         return resolved, context
 
@@ -602,6 +632,7 @@ class ProductService:
         invalid_reason = None
         partner_row = None
         schedule_slots: list[tuple[time | None, time | None, str]] = []
+        scheduled_partners: list[PartnerResource] = []
         for row in rows:
             if row.resource_type == "ROOM":
                 continue
@@ -658,6 +689,9 @@ class ProductService:
                 capacity_inputs.append(CapacityInput(partner.resource_name, partner.remaining_capacity, row.quantity_per_package))
                 unit_cost += partner.settlement_price * row.quantity_per_package
                 schedule_slots.append((partner.start_time, partner.end_time, partner.resource_name))
+                scheduled_partners.append(partner)
+        if not invalid_reason:
+            invalid_reason = _partner_transfer_issue(scheduled_partners)
         if invalid_reason:
             product.sale_quantity = 0
             product.status = "PAUSED"

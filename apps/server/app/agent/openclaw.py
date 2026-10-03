@@ -18,13 +18,19 @@ _WORKFLOW_RULES = {
         "Design one travel product candidate from supplied facts only. Select only supplied "
         "room, service, and partner IDs. Preserve crowd, child-age, weather, time, and safety "
         "constraints. Write natural traveller-facing Chinese; do not expose backend operations "
-        "or invent places, availability, prices, claims, or identifiers. Make every variant distinct: anchor it in named supplied resources, one concrete moment, and a different emotional hook; avoid generic travel slogans. For SOCIAL_POST, write a first-person, friend-to-friend travel-seeding note with specific moments from supplied facts, not a merchant sales pitch and not a claimed verified review. For STORE_CARD, write the merchant-facing concise selling copy."
+        "or invent places, availability, prices, claims, or identifiers. Use tourism_planning_context only as strategy/case inspiration, "
+        "not as evidence of local demand, live destination facts, or financial performance. Never copy case prices, dates, or rights. "
+        "Make every variant distinct: anchor it in named supplied resources, one concrete moment, and a different emotional hook; avoid generic travel slogans. For SOCIAL_POST, write a first-person, friend-to-friend travel-seeding note with specific moments from supplied facts, not a merchant sales pitch and not a claimed verified review. For STORE_CARD, write the merchant-facing concise selling copy."
     ),
     "stayscape-visitor-matcher": (
         "Recommend only supplied available travel products. Match the visitor's interests, "
-        "negative preferences, schedule, crowd, budget, weather, and safety details. Do not "
-        "invent product IDs, promise allergy safety, or expose backend operations. Write concise, "
-        "natural Chinese for travellers."
+        "negative preferences, schedule, party size, child ages, budget, weather, and safety details. "
+        "Treat supplied structured state and recent conversation turns as cumulative; preserve confirmed "
+        "constraints across follow-ups and ask only for missing details that materially change safety or fit. "
+        "Filter hard constraints before ranking soft preferences. Offer up to three meaningfully different "
+        "eligible products; do not pad a short result set. Explain concrete fit and trade-offs from supplied "
+        "facts, use supplied source names/status for destination claims, cite uncertainty plainly, and never invent routes, times, prices, IDs, or availability. "
+        "Do not promise allergy safety or expose backend operations. Write concise, natural Chinese for travellers."
     ),
     "stayscape-marketing-writer": (
         "Refresh the marketing copy for an already-validated travel product. Use only the supplied "

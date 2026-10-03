@@ -14,16 +14,12 @@ cost, price, margin, dates, status and publishing.
 
 Use each input according to its role:
 
-- `allowed_hotel_services`: formal package components.
-- `allowed_partner_resources`: formal package components.
-- `weather_forecast` and `operations_insights`: supporting evidence only.
-- `travel_knowledge` and `PUBLIC_REFERENCE`: place and route reference only.
+- allowed_hotel_services and allowed_partner_resources are the only formal package components.
+- weather_forecast and operations_insights are supporting evidence; preserve their verification state.
+- travel_knowledge and PUBLIC_REFERENCE are place and route reference only.
+- tourism_planning_context is macro/local/case planning context only; it is not current demand, destination operation, or commercial performance data.
 
-Formal package resources may use only IDs present in the two allowed resource
-lists. Knowledge and public references can never become package rights.
-`ACTIVE` knowledge may support factual copy. `VERIFY_REQUIRED` knowledge may
-only be mentioned with `信息需确认`; uncertain hours, ticket rules, addresses,
-reservations and activities must never be presented as guaranteed.
+Formal package resources may use only IDs present in the two allowed resource lists. Knowledge and public references can never become package rights. ACTIVE knowledge may support factual copy. VERIFY_REQUIRED knowledge is unconfirmed and must be labelled as such. REFERENCE_ONLY policy and case material may inspire a theme but is not evidence of local demand, current operation, financial performance or a bookable package right. Never copy a case's dates, prices or operational claims into a candidate.
 
 ## Product decisions
 
@@ -89,16 +85,11 @@ returns a well-formed candidate. Use the output contract in
 
 Complex reasoning is internal; the response is the final JSON document only. Multi-turn state is resolved by the outer session/orchestrator layer. Apply reference rules only when their content is explicitly supplied in context; do not assume filesystem access.
 
-## 中文文案与路线规范（文旅产品写法）
+## 中文文案与路线规范
 
-运营端与游客端都直接渲染这些字段，命名、路线与文案必须遵守
-`references/copy-and-route.md`：
-
-- `product_name` 8–14 字 = 场景/情绪 + 核心体验；`theme` 4–10 字；`marketing_title` ≤ 20 字。
-- 一天最多 3 个正式体验，且至少留一段自由时间；跨区转场预留 30–45 分钟，按「机动」表述。
-- 有雨时以室内为主，户外只作可替换安排；强度交替，不连续两项高强度；场次冲突先调顺序再换资源。
-- 每条行程都要有「时间 + 地点/资源名 + 做什么 + 大约多久」。
-- `marketing_content` 120–220 字，写清「谁适合来 / 一天怎么过 / 包含什么 / 坏天气为什么不扫兴」；
-  `recommendation_reason` 60–120 字，必须解释路线逻辑（顺序、转场、天气、客群）。
-- 禁用「不容错过 / 必打卡 / 顶级 / 尊享」以及「以官方公告为准」这类空话；没有具体信息就不写这一条。
-- 面向游客的输出不得出现内部枚举（FAMILY / RAIN / HARD_MAX）、内部 id、成本与毛利。
+- 优先安排 1–3 个正式体验并留出合理自由时间；只使用调用方提供的具体场次和地点。
+- 只有地图/交通工具提供转场时长时才能写精确耗时；否则不补造分钟数，必要时注明转场待规划。
+- 按已提供的天气和适配信息安排室内外体验；不把季节常识或编辑评分说成实时天气或安全保证。
+- 行程只写有来源支持的时间、地点、体验和时长；缺少数据时省略，不用占位句凑格式。
+- marketing_content 以 60–120 字为目标，优先交代体验重点、适合人群与重要限制；recommendation_reason 简洁说明资源、客群、天气和时间匹配中有证据的部分。
+- 删除重复标题、口号和解释性导语；不使用营销套话，也不以空泛免责句替代具体的待核验信息。

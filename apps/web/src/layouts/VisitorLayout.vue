@@ -38,9 +38,13 @@ const isChat = computed(() => route.path.startsWith('/visitor/assistant'))
 .visitor-shell--chat .visitor-main,
 .visitor-shell--chat .visitor-main--editorial {
   flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   padding: 10px 14px 14px;
   overflow: hidden;
 }

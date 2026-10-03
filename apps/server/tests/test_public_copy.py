@@ -25,3 +25,71 @@ def test_late_checkout_is_not_scheduled_on_arrival_day():
 
     assert all(item["title"] != "延迟退房" for item in days[0]["items"])
     assert days[-1]["items"][-1]["title"] == "返回酒店取行李"
+
+
+def test_three_hour_experience_excludes_overlapping_suggested_stops():
+    from app.services.public_copy import build_day_plan
+
+    day = build_day_plan(
+        [{
+            "resource_type": "PARTNER_RESOURCE",
+            "resource_name": "良渚博物馆深度导览",
+            "start_time": "11:00:00",
+            "end_time": "14:00:00",
+            "address": "杭州市余杭区良渚街道良渚博物院正门",
+        }],
+        {"nights": 1, "hotel_address": "杭州市余杭区良渚街道良渚博物院正门"},
+    )[0]
+    for item in day["items"]:
+        if item.get("kind") != "PUBLIC_REFERENCE":
+            continue
+        assert item["time"] not in {"09:30–11:30", "13:30–15:00"}
+
+
+def test_distinct_experiences_show_transfer_time_or_flag_tight_gap():
+    from app.services.public_copy import build_day_plan
+
+    resources = [
+        {"resource_type": "PARTNER_RESOURCE", "resource_name": "茶文化体验", "start_time": "13:00:00", "end_time": "16:00:00", "address": "杭州市西湖区龙井村茶园入口"},
+        {"resource_type": "PARTNER_RESOURCE", "resource_name": "手作体验", "start_time": "16:30:00", "end_time": "17:30:00", "address": "杭州市西湖区龙井路手作馆正门"},
+    ]
+    day = build_day_plan(resources, {"nights": 1, "hotel_address": "杭州市西湖区龙井村茶园入口"})[0]
+    transfer = next(item for item in day["items"] if item.get("kind") == "TRANSFER")
+    assert transfer["time"] == "16:05–16:30"
+    assert transfer["duration_minutes"] == 25
+
+    resources[1]["start_time"] = "16:10:00"
+    day = build_day_plan(resources, {"nights": 1, "hotel_address": "杭州市西湖区龙井村茶园入口"})[0]
+    next_experience = next(item for item in day["items"] if item["title"] == "手作体验")
+    assert next_experience["schedule_conflict"] is True
+    assert "至少建议预留 25 分钟" in next_experience["notes"]
+
+
+def test_new_product_resource_selection_rejects_too_short_inter_area_transfer():
+    from datetime import time
+    from types import SimpleNamespace
+
+    from app.services.product_service import _partner_transfer_issue
+
+    resources = [
+        SimpleNamespace(resource_name="茶文化体验", start_time=time(13, 0), end_time=time(16, 0), address="杭州市西湖区龙井村茶园入口"),
+        SimpleNamespace(resource_name="手作体验", start_time=time(16, 10), end_time=time(17, 30), address="杭州市西湖区龙井路手作馆正门"),
+    ]
+    issue = _partner_transfer_issue(resources)
+    assert issue is not None
+    assert "至少预留 25 分钟转场" in issue
+
+
+def test_evening_route_requires_confirmed_opening_through_the_slot():
+    from datetime import date
+    from app.services.public_copy import _evening_accessible
+
+    assert not _evening_accessible({"name": "杭州博物馆", "category": "MUSEUM", "opening_hours": "09:00-17:00"})
+    assert not _evening_accessible({"name": "浙江省博物馆", "category": "MUSEUM", "opening_hours": "请以官方公告为准"})
+    assert not _evening_accessible({"name": "夜游运河", "category": "CRUISE", "opening_hours": "18:00-22:00", "verification_status": "VERIFY_REQUIRED"})
+    assert _evening_accessible({"name": "夜游运河", "category": "CRUISE", "opening_hours": "18:00-22:00", "verification_status": "ACTIVE"})
+    assert not _evening_accessible({"name": "全天开放园区", "category": "PARK", "opening_hours": "全天开放", "verification_status": "VERIFY_REQUIRED"})
+    assert _evening_accessible({"name": "全天开放园区", "category": "PARK", "opening_hours": "全天开放", "verification_status": "ACTIVE"})
+    monday = {"name": "城市博物馆", "category": "MUSEUM", "opening_hours": "09:00-21:00，周一闭馆", "verification_status": "ACTIVE"}
+    assert not _evening_accessible(monday, visit_date=date(2026, 10, 5))
+    assert _evening_accessible(monday, visit_date=date(2026, 10, 6))

@@ -165,6 +165,8 @@ class DayItem(BaseModel):
     opening_hours: str = ""
     reservation_notice: str = ""
     route_role: str = ""
+    schedule_conflict: bool = False
+    recommended_buffer_minutes: int | None = None
 
 
 class DayPlan(BaseModel):

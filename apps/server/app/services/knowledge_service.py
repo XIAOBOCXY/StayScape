@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -528,6 +530,14 @@ _QUERY_ALIASES: dict[str, tuple[str, ...]] = {
 class KnowledgeService:
     def __init__(self, db: Session) -> None:
         self.db = db
+
+    @staticmethod
+    def planning_context() -> dict[str, Any]:
+        source = Path("/opt/stayscape/skills/yusuchengjing-hotel-ops/data/tourism_context.json")
+        try:
+            return json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"status": "UNAVAILABLE", "sections": {}}
 
     def seed_curated_hangzhou(self) -> int:
         """Sync curated content without claiming operator review.

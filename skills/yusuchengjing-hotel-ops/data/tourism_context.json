@@ -1,0 +1,196 @@
+{
+  "schema_version": "1.0",
+  "title": "StayScape 文旅策划与运营知识",
+  "city": "杭州",
+  "usage_notice": "策划参考资料。宏观与案例信息用于分析，不是实时票务或运营承诺；景点开放、价格、交通和库存须以当前官方来源或系统实时数据为准。",
+  "updated_at": "2026-10-01",
+  "sections": {
+    "macro_context": [
+      {
+        "id": "macro.smart-tourism-2025",
+        "topic": "智慧旅游与服务数字化",
+        "summary": "国家层面持续推动旅游服务数字化、智慧化和服务体验升级。策划应把技术落到行前咨询、行中服务、运营协同和可衡量的服务质量上，不以展示技术代替业务价值。",
+        "source": {
+          "title": "2025年全国旅游发展指数（数字化部分）",
+          "publisher": "国家数据局",
+          "url": "https://www.nda.gov.cn/sjj/ywpd/sjzg/0922/20250514130259078500516_pc.html",
+          "published": "2025-05-14"
+        },
+        "status": "REFERENCE_ONLY"
+      },
+      {
+        "id": "macro.smart-tourism-action",
+        "topic": "智慧旅游行动方向",
+        "summary": "围绕智慧旅游产品、服务、管理、营销与基础设施协同设计；应用前先明确服务对象、数据边界与线下承接能力。",
+        "source": {
+          "title": "智慧旅游创新发展行动计划",
+          "publisher": "平顶山市人民政府转载",
+          "url": "https://www.weidong.gov.cn/contents/62026/27382.html",
+          "published": "2024"
+        },
+        "status": "REFERENCE_ONLY"
+      },
+      {
+        "id": "macro.service-consumption",
+        "topic": "服务消费与入境旅游",
+        "summary": "政策关注服务消费扩容、旅游服务品质和入境便利化；落地规划需以项目所在地区最新政策原文及统计口径复核。",
+        "source": {
+          "title": "政府工作报告（2025年）",
+          "publisher": "国务院公报",
+          "url": "https://www.gov.cn/gongbao/2025/issue_11946/material/gwygb202509.pdf",
+          "published": "2025"
+        },
+        "status": "REFERENCE_ONLY"
+      }
+    ],
+    "local_context": [
+      {
+        "id": "local.hangzhou-tourism",
+        "topic": "杭州文旅资源",
+        "summary": "杭州旅游资源覆盖湖山景观、博物馆与遗址、运河和街区、演艺及乡村休闲。跨区组合需要结合游客停留时长、交通方式、预约条件和天气，不用单一“市中心出发”假设套用所有路线。",
+        "source": {
+          "title": "杭州市2023年旅游经济运行情况",
+          "publisher": "杭州市人民政府",
+          "url": "https://www.hangzhou.gov.cn/art/2024/7/3/art_812262_59099516.html",
+          "published": "2024-07-03"
+        },
+        "status": "REFERENCE_ONLY"
+      },
+      {
+        "id": "local.audience",
+        "topic": "客群与偏好",
+        "summary": "本项目当前没有可公开验证的游客偏好统计。使用者需主动给出同行人数、年龄、兴趣、体力、预算和出行日期；不得仅凭年龄、地域或家庭身份推断消费能力及兴趣。",
+        "source": null,
+        "status": "PROJECT_GAP"
+      }
+    ],
+    "benchmark_cases": [
+      {
+        "id": "case.wuzhen",
+        "name": "乌镇景区",
+        "analysis": "可复用的规划观察：把历史街区保护、游览动线、住宿餐饮及文化体验作为整体运营问题；区分不同片区定位与承载节奏。应用前须按官方最新运营与保护资料核实。",
+        "source": {
+          "title": "乌镇景区介绍",
+          "publisher": "乌镇旅游官方网站",
+          "url": "https://www.wuzhen.com.cn/web/introduction?id=2"
+        },
+        "status": "REFERENCE_ONLY",
+        "commercial_data": "未发现可直接作为项目收益预测的公开、同口径单位经济数据"
+      },
+      {
+        "id": "case.wucun",
+        "name": "乌镇乌村",
+        "analysis": "公开案例呈现住宿、餐饮和多类乡村体验打包的度假产品思路。可用于拆解产品组合和停留时长设计；案例披露数据不可直接外推为本地营收。",
+        "source": {
+          "title": "乌村：打造休闲农业与乡村旅游融合发展新模式",
+          "publisher": "国家发展改革委",
+          "url": "https://www.ndrc.gov.cn/fggz/nyncjj/xczx/202209/t20220916_1335605.html",
+          "published": "2022-09-16"
+        },
+        "status": "REFERENCE_ONLY",
+        "commercial_data": "引用前注明案例年份、统计口径及样本边界"
+      },
+      {
+        "id": "case.nianhuawan",
+        "name": "拈花湾",
+        "analysis": "公开资料可观察主题空间、演艺活动、文化体验与住宿的联动。适合分析体验节奏、主题一致性及夜间消费承接；项目当前运营内容需以经营方公告复核。",
+        "source": {
+          "title": "拈花湾文旅官网",
+          "publisher": "拈花湾文旅",
+          "url": "https://www.nianhuawanwenlv.com/"
+        },
+        "status": "REFERENCE_ONLY",
+        "commercial_data": "没有足够同口径公开数据支持利润率或回收期推算"
+      }
+    ],
+    "project_baseline": [
+      {
+        "topic": "景区与体验基础信息",
+        "required_fields": [
+          "官方名称及运营主体",
+          "地址与地图坐标",
+          "开放日期与时段",
+          "票价、优惠与退改",
+          "预约和入园规则",
+          "体验时长及适龄范围",
+          "无障碍与天气限制",
+          "官方来源及最后核验时间"
+        ],
+        "authority": "景区/场馆官方渠道或经核验的合作方接口",
+        "status": "REQUIRED_BEFORE_PUBLISH"
+      },
+      {
+        "topic": "交通与路线",
+        "required_fields": [
+          "起终点",
+          "出行方式",
+          "地图服务来源",
+          "计算时间戳",
+          "路况/天气适用条件"
+        ],
+        "authority": "实时地图或交通数据工具",
+        "status": "REQUIRED_BEFORE_EXACT_ROUTE"
+      },
+      {
+        "topic": "酒店与可售产品",
+        "required_fields": [
+          "有效日期",
+          "房型库存",
+          "价格与税费口径",
+          "包含服务和资源",
+          "容量与儿童规则",
+          "取消条款",
+          "库存更新时间"
+        ],
+        "authority": "StayScape 当前酒店及合作方交易数据",
+        "status": "RUNTIME_SOURCE_ONLY"
+      },
+      {
+        "topic": "客群画像",
+        "required_fields": [
+          "明确授权的聚合数据",
+          "样本区间和样本量",
+          "采集与同意方式",
+          "偏差与限制"
+        ],
+        "authority": "经治理的项目分析数据",
+        "status": "PROJECT_GAP"
+      }
+    ],
+    "workflow_rules": [
+      "先确认任务类型与用户目标，再提取日期、人数年龄、预算、兴趣、天气和硬性拒绝项。",
+      "保留多轮对话中已确认条件；信息缺失时只追问影响安全、售卖资格或方案排序的关键项。",
+      "先校验可售状态、日期、容量、儿童规则、禁忌与硬预算，再对合格项排序；不得为凑数放宽约束。",
+      "只从当前交易数据读取价格、库存和可预订服务；只从有效来源读取景点事实。资料缺失或过期时写明待确认。",
+      "给建议时说明可核实依据、来源和适用边界；没有地图服务就不输出精确距离与耗时。",
+      "规划输出优先给一个最符合条件的主方案及真实存在的替代项；明确时间、交通、体力或预算取舍。",
+      "记录数据来源、发布日期/核验日期、状态和责任人；定期复核政策、景区规则、价格、开放时间和票务链接。"
+    ],
+    "research_basis": [
+      {
+        "id": "research.travelagent",
+        "topic": "TravelAgent 旅行规划智能体研究",
+        "summary": "论文把工具使用、偏好推荐、路线规划和记忆作为旅行代理关键能力模块。可用于拆分系统职责；用户偏好仍应来自对话或授权数据，目的地事实须独立核验。",
+        "source": {
+          "title": "TravelAgent: An AI Assistant for Travel Planning",
+          "publisher": "arXiv",
+          "url": "https://arxiv.org/abs/2409.08069",
+          "published": "2024-09-12"
+        },
+        "status": "REFERENCE_ONLY"
+      },
+      {
+        "id": "research.travelplanner",
+        "topic": "TravelPlanner 约束式规划评测",
+        "summary": "论文基准包含旅行规划中的多约束组合与工具调用任务，提示系统用确定性检查验证资源、预算、时间与规则冲突；研究评测结果不应当作本产品准确率。",
+        "source": {
+          "title": "TravelPlanner: A Benchmark for Real-World Planning with Language Agents",
+          "publisher": "arXiv",
+          "url": "https://arxiv.org/abs/2402.01622",
+          "published": "2024-02-02"
+        },
+        "status": "REFERENCE_ONLY"
+      }
+    ]
+  }
+}

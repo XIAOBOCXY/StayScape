@@ -193,9 +193,9 @@ function routeForDay(dayIndex: number) {
 }
 
 const stages = [
-  { id: 1, label: '经营分析', hint: '查看并询问经营数据' },
-  { id: 2, label: '产品方案', hint: '比较方向 · 调整当前方案' },
-  { id: 3, label: '预览与发布', hint: '确认候选 · 检查游客端成品' },
+  { id: 1, label: '经营分析' },
+  { id: 2, label: '产品方案' },
+  { id: 3, label: '预览与发布' },
 ]
 const availableStage = computed(() => {
   // 生成候选后直接进入「预览与发布」：不再单独占用一个确认步骤。
@@ -1277,6 +1277,28 @@ async function autoStart() {
   finally { submitting.value = false }
 }
 
+let foldHoverTimer: ReturnType<typeof setTimeout> | undefined
+function openFoldOnHover(event: MouseEvent) {
+  const fold = event.currentTarget as HTMLDetailsElement
+  if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches || fold.open) return
+  if (foldHoverTimer) clearTimeout(foldHoverTimer)
+  foldHoverTimer = setTimeout(() => {
+    if (!fold.open) {
+      fold.dataset.hoverOpened = 'true'
+      fold.open = true
+    }
+  }, 180)
+}
+function closeFoldOnHover(event: MouseEvent) {
+  const fold = event.currentTarget as HTMLDetailsElement
+  if (foldHoverTimer) clearTimeout(foldHoverTimer)
+  foldHoverTimer = undefined
+  if (fold.dataset.hoverOpened === 'true') {
+    fold.open = false
+    delete fold.dataset.hoverOpened
+  }
+}
+
 onMounted(async () => { selectedStage.value = 1; await load() })
 </script>
 
@@ -1293,7 +1315,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
         <li v-for="s in stages" :key="s.id" :class="{ active: stageIndex === s.id, done: stageIndex > s.id, available: s.id <= availableStage }">
           <button type="button" :disabled="s.id > availableStage" @click="selectStage(s.id)">
             <i>{{ stageIndex > s.id ? '✓' : s.id }}</i>
-            <div><b>{{ s.label }}</b><small>{{ s.hint }}</small></div>
+            <div><b>{{ s.label }}</b></div>
           </button>
         </li>
       </ol>
@@ -1335,15 +1357,15 @@ onMounted(async () => { selectedStage.value = 1; await load() })
     <div v-if="loadError" class="panel empty-state">经营数据暂时无法读取：{{ loadError }} <el-button type="primary" @click="load">重新加载</el-button></div>
 
     <!-- ③ 经营分析：数据、判断与产品影响留在各自证据页签中 -->
-    <section v-if="stageIndex === 1" class="panel stage-panel">
-      <div class="stage-panel__head"><h2>经营数据分析</h2><span class="muted">查看经营依据，也可以直接询问数据</span></div>
+    <section v-if="stageIndex === 1" class="panel stage-panel stage-panel--analysis">
+      <div class="stage-panel__head"><h2>经营分析</h2></div>
       <div v-if="analysisMessages.length" class="analysis-chat" aria-live="polite">
         <article v-for="(message, index) in analysisMessages" :key="`${message.created_at}-${index}`" class="analysis-message" :class="`analysis-message--${message.role}`">
           <b>{{ message.role === 'user' ? '你的问题' : '经营分析' }}</b>
           <p>{{ message.content }}</p>
         </article>
       </div>
-      <details ref="evidenceFold" class="evidence-fold">
+      <details ref="evidenceFold" class="evidence-fold" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover">
         <summary>经营数据明细</summary>
         <div class="evidence-tabs">
           <button type="button" :class="{ active: panel === 'inventory' }" @click="selectEvidence('inventory')">房态数据</button>
@@ -1540,7 +1562,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             </div>
           </div>
 
-          <details v-if="primarySpec.itinerary_days?.length" class="advanced-fold itinerary-fold">
+          <details v-if="primarySpec.itinerary_days?.length" class="advanced-fold itinerary-fold" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover">
             <summary>查看完整行程与转场（{{ primarySpec.itinerary_days.length }} 天）</summary>
             <div class="itinerary-days">
             <article v-for="day in primarySpec.itinerary_days" :key="day.day_index" class="itinerary-day">
@@ -1558,10 +1580,10 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                     <span v-if="item.duration_text">{{ item.duration_text }}</span>
                     <span v-if="item.area">{{ item.area }}</span>
                   </p>
-                  <p v-if="item.notes" class="itinerary-entry__verify">{{ item.notes }}</p>
+                  <p v-if="item.notes" class="itinerary-entry__verify" :class="{ 'itinerary-entry__verify--warning': item.schedule_conflict }">{{ item.notes }}</p>
                 </div>
               </div>
-              <details v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-fold">
+              <details v-if="routeForDay(day.day_index)?.legs?.length" class="route-transfer-fold" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover">
                 <summary>查看转场与核验</summary>
                 <div class="route-transfer-list">
                   <p v-for="leg in (routeForDay(day.day_index)?.legs || [])" :key="leg.from_stop + leg.to_stop">
@@ -1574,7 +1596,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
             </div>
           </details>
 
-          <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more">
+          <details v-if="primarySpec.cost_breakdown?.length || primarySpec.blocks?.length" class="reason-fold decision-more" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover">
             <summary>价格与收益</summary>
             <div class="key-evidence">
               <div><span>单位成本</span><b>¥{{ primarySpec.cost }}</b></div>
@@ -1627,7 +1649,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 
           <div v-if="activeAdjust === 'service'" class="adjust-panel"><div class="adjust-panel__head"><b>选择要增加的体验或酒店权益</b><span class="muted">按客群、场次、天气、余量和路线匹配度排序；绿色优先推荐，红色表示不建议优先。</span></div><div v-if="availableAddResources.length" class="alt-grid"><article v-for="item in availableAddResources" :key="`${item.kind}-${item.id || item.name}`" class="alt-card" :class="recommendationClass(item)"><div class="resource-card__head"><span class="section-kicker">{{ item.kind }}<template v-if="item.fit_label"> · {{ item.fit_label }}</template></span><span class="recommendation-badge" :class="recommendationClass(item)">{{ recommendationLabel(item) }}</span></div><h3>{{ item.name }}</h3><p class="muted">可售 {{ item.sets ?? item.available_quantity ?? '—' }} 套<template v-if="item.window"> · {{ item.window }}</template> · 单人成本 ¥{{ item.settlement_price ?? item.unit_cost ?? '—' }}</p><p v-if="item.address" class="resource-fit-note">地点：{{ item.address }}</p><p v-if="item.fit_reason" class="resource-fit-note">{{ item.fit_reason }}</p><el-button size="small" plain :disabled="item.addable === false" @click="ask(item.kind === '体验' ? `增加体验：${item.name}` : `增加酒店服务：${item.name}`)">{{ item.is_selected ? '已加入' : item.addable === false ? '暂不可加入' : `增加这项${item.kind}` }}</el-button></article></div><p v-else class="muted">当前日期没有已启用组包的合作体验或酒店权益。请在合作资源池添加资源并允许组包，再刷新方案。</p></div>
 
-          <details class="reason-fold"><summary>展开推荐依据与风险</summary><div class="detail-tabs"><button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">经营价值</button><button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button><button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险与限制</button><button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button></div><div class="detail-body"><template v-if="detailTab === 'basis'"><p v-for="item in (primarySpec.reason_sections || [])" :key="item.label"><b>{{ item.label }}：</b>{{ item.text }}</p><p v-if="!primarySpec.reason_sections?.length">{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p></template><template v-else-if="detailTab === 'value'"><p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p></template><template v-else-if="detailTab === 'risk'"><p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p></template><template v-else><p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p></template></div></details>
+          <details class="reason-fold" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover"><summary>展开推荐依据与风险</summary><div class="detail-tabs"><button type="button" :class="{ active: detailTab === 'basis' }" @click="detailTab = 'basis'">经营价值</button><button type="button" :class="{ active: detailTab === 'value' }" @click="detailTab = 'value'">收益与容量</button><button type="button" :class="{ active: detailTab === 'risk' }" @click="detailTab = 'risk'">风险与限制</button><button type="button" :class="{ active: detailTab === 'compare' }" @click="detailTab = 'compare'">方案比较</button></div><div class="detail-body"><template v-if="detailTab === 'basis'"><p v-for="item in (primarySpec.reason_sections || [])" :key="item.label"><b>{{ item.label }}：</b>{{ item.text }}</p><p v-if="!primarySpec.reason_sections?.length">{{ logicByTitle['推荐逻辑'] || '按当前房态、近 14 天成交与合作资源容量综合判断。' }}</p></template><template v-else-if="detailTab === 'value'"><p>{{ logicByTitle['酒店经营价值'] || '按建议售价与最大可售量计算收益。' }}</p></template><template v-else-if="detailTab === 'risk'"><p>{{ logicByTitle['风险与约束'] || '容量、场次与天气变化会触发自动复检。' }}</p></template><template v-else><p>{{ primarySpec.not_chosen || '本轮没有其它更高优先级的组合。' }}</p></template></div></details>
         </article>
       </div>
     </section>
@@ -1648,11 +1670,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
               <h3>{{ card.name }}</h3>
               <b>¥{{ card.price }}</b>
             </header>
-            <span class="candidate-relation">{{ card.relation }}</span>
             <p class="muted">{{ card.date }} · {{ card.crowd_label }} · {{ card.party }} 人<template v-if="card.quantity !== ''"> · 可售 {{ card.quantity }} 套</template></p>
-            <p v-if="card.experiences.length" class="candidate-card__exp">正式体验：{{ card.experiences.join('、') }}</p>
-            <p v-if="card.services.length" class="candidate-card__exp">酒店权益：{{ card.services.join('、') }}</p>
-            <p class="candidate-card__figures">成本 ¥{{ card.cost }} · 最低合法价 ¥{{ card.floor_price }}<template v-if="card.margin_label"> · 毛利率 {{ card.margin_label }}</template></p>
             <div class="badge-row">
               <span>✓ 库存通过</span>
               <span>✓ 资源通过</span>
@@ -1666,7 +1684,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
               <el-button size="small" plain @click="editVisitorCopy(card)">{{ Number(copyDraft?.id) === Number(card.product_id) ? '收起文案编辑' : '微调游客文案' }}</el-button>
             </div>
             <iframe v-if="previewCardKey === card.key" class="visitor-preview-frame" :src="visitorPreviewUrl(card)" title="游客端商品完整预览" loading="lazy" scrolling="auto" @load="resizeVisitorPreview" />
-            <details class="batch-apply-fold">
+            <details class="batch-apply-fold" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover">
               <summary>批量应用到其他日期与房型</summary>
               <p class="muted">只创建房量、人数和同名资源都满足条件的草稿；不满足的目标会列出原因。</p>
               <el-select v-model="batchRoomIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择日期与房型" class="batch-room-select">
@@ -1685,7 +1703,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                 <el-input v-model="copyDraft.product[field.key]" :type="field.multiline ? 'textarea' : 'text'" :rows="field.multiline ? 3 : 1" />
                 <el-button size="small" plain :loading="copyRewriting" @click="rewriteMainCopy(field.key)">AI生成替换文字</el-button>
               </article>
-              <details class="copy-subsection"><summary>体验名称与介绍</summary>
+              <details class="copy-subsection" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover"><summary>体验名称与介绍</summary>
                 <article v-for="resource in copyDraft.resources" :key="`${resource.resource_type}:${resource.resource_id}`" class="copy-field">
                   <label>体验名称 · {{ resource.address || '酒店地址' }}</label>
                   <el-input v-model="resource.resource_name" />
@@ -1695,7 +1713,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                   <el-button size="small" plain :loading="copyRewriting" @click="rewriteResourceCopy(resource)">AI生成替换文字</el-button>
                 </article>
               </details>
-              <details v-if="copyDraft.assets?.length" class="copy-subsection"><summary>营销素材</summary>
+              <details v-if="copyDraft.assets?.length" class="copy-subsection" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover"><summary>营销素材</summary>
                 <article v-for="asset in copyDraft.assets" :key="asset.asset_type" class="copy-field">
                   <label>{{ asset.platform || asset.asset_type }} · 标题</label>
                   <el-input v-model="asset.title" />
@@ -1705,7 +1723,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                   <el-button size="small" plain :loading="copyRewriting" @click="rewriteAssetCopy(asset, 'marketing_asset_content')">AI生成替换文字</el-button>
                 </article>
               </details>
-              <details v-if="copyDraft.details" class="copy-subsection"><summary>商品详情文案</summary>
+              <details v-if="copyDraft.details" class="copy-subsection" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover"><summary>商品详情文案</summary>
                 <article v-for="(text, index) in copyDraft.details.intro" :key="`intro-${index}`" class="copy-field">
                   <label>商品详情介绍</label>
                   <el-input v-model="copyDraft.details.intro[index]" type="textarea" :rows="2" />
@@ -1730,7 +1748,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
                   <el-button size="small" plain :loading="copyRewriting" @click="rewriteDetailCopy(copyDraft.details.tips, String(index), '出行提示')">AI生成替换文字</el-button>
                 </article>
               </details>
-              <details class="copy-subsection"><summary>每日行程文案</summary>
+              <details class="copy-subsection" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover"><summary>每日行程文案</summary>
                 <article v-for="day in copyDraft.days" :key="day.day_index" class="copy-day">
                   <b>{{ day.label }} · {{ day.date }}</b>
                   <div class="copy-field">
@@ -1753,7 +1771,7 @@ onMounted(async () => { selectedStage.value = 1; await load() })
               <p class="muted">文字调整只影响游客端内容，不修改房态、资源、地址、价格或产品包含权益。</p>
               <div class="copy-editor__actions"><el-button type="primary" :loading="copySaving" @click="saveVisitorCopy">保存并刷新预览</el-button><el-button plain @click="copyDraft = null">取消</el-button></div>
             </section>
-            <details class="reason-fold">
+            <details class="reason-fold" @mouseenter="openFoldOnHover" @mouseleave="closeFoldOnHover">
               <summary>查看推荐依据</summary>
               <ul class="reason-list">
                 <li v-for="row in candidateEvidenceRows(card.raw)" :key="row.label"><b>{{ row.label }}：</b>{{ row.text }}</li>
@@ -1849,4 +1867,3 @@ onMounted(async () => { selectedStage.value = 1; await load() })
 </template>
 
 <style scoped src="./aiOperations.css"></style>
-
