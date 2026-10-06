@@ -105,7 +105,7 @@ export const visitorApi = {
   products: (params?: Record<string, unknown>) => api.get<TravelProduct[]>('/visitor/products', { params }),
   product: (id: number, nights = 1, roomInventoryId?: number | null) => api.get<TravelProduct>(`/visitor/products/${id}`, { params: roomInventoryId ? { nights, room_inventory_id: roomInventoryId } : { nights } }),
   productDates: (id: number) => api.get<{ theme: string; dates: Array<{ id: number; target_date: string; weekday: string; sale_quantity: number; status: string; price: string; room_type: string }> }>(`/visitor/products/${id}/dates`),
-  productRooms: (id: number) => api.get<{ product_id: number; date: string; rooms: Array<{ room_inventory_id: number; room_type: string; max_guests: number; features: string; price: string; price_delta: string; sale_quantity: number; available: boolean; is_current: boolean }> }>(`/visitor/products/${id}/rooms`),
+  productRooms: (id: number) => api.get<{ product_id: number; date: string; rooms: Array<{ room_inventory_id: number; room_type: string; max_guests: number; features: string; image_url?: string; price: string; price_delta: string; sale_quantity: number; available: boolean; is_current: boolean }> }>(`/visitor/products/${id}/rooms`),
   productAlternatives: (id: number) => api.get<{ date: string; current_room_type: string; room_types: Array<Record<string, any>>; same_room_packages: Array<Record<string, any>> }>(`/visitor/products/${id}/alternatives`),
   consult: (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/visitor/consult', payload),
   assistantIntro: (productId?: number | null) => api.get<{ greeting: string; suggestions: string[] }>('/visitor/assistant/intro', { params: productId ? { product_id: productId } : undefined }),

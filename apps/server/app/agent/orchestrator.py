@@ -241,7 +241,7 @@ class AgentOrchestrator:
             error_message = str(exc)
 
         duration_ms = int((time.perf_counter() - started) * 1000)
-        if final_value is None and self._live_without_fallback:
+        if final_value is None and self._live_without_fallback and skill_name != "stayscape-visitor-matcher":
             self._log(
                 trace_id=trace_id, skill_name=skill_name, scene=scene, payload=payload, raw=raw,
                 final_value=None, status=status, validation=validation, error_code=error_code,

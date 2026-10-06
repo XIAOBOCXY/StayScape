@@ -1,40 +1,109 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["product_name", "theme", "target_crowd", "room_inventory_id", "hotel_service_ids", "partner_resource_ids", "resource_quantities", "marketing_title", "marketing_content", "creative_angle", "poster_style", "recommendation_reason", "risk_message"],
+  "required": [
+    "product_name",
+    "theme",
+    "target_crowd",
+    "room_inventory_id",
+    "hotel_service_ids",
+    "partner_resource_ids",
+    "resource_quantities",
+    "marketing_title",
+    "marketing_content",
+    "creative_angle",
+    "recommendation_reason",
+    "risk_message"
+  ],
   "properties": {
-    "product_name": {"type": "string", "minLength": 1},
-    "theme": {"type": "string"},
-    "target_crowd": {"type": "string"},
-    "room_inventory_id": {"type": "integer", "minimum": 1},
-    "hotel_service_ids": {"type": "array", "items": {"type": "integer"}},
-    "partner_resource_ids": {"type": "array", "items": {"type": "integer"}},
-    "resource_quantities": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
-    "marketing_title": {"type": "string"},
-    "marketing_content": {"type": "string"},
-    "creative_angle": {"type": "string"},
-    "poster_style": {"type": "string"},
+    "product_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "theme": {
+      "type": "string"
+    },
+    "target_crowd": {
+      "type": "string"
+    },
+    "room_inventory_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "hotel_service_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
+    "partner_resource_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
+    "resource_quantities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "marketing_title": {
+      "type": "string"
+    },
+    "marketing_content": {
+      "type": "string"
+    },
+    "creative_angle": {
+      "type": "string"
+    },
     "marketing_assets": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["asset_type", "platform", "title", "content"],
+        "required": [
+          "asset_type",
+          "platform",
+          "title",
+          "content"
+        ],
         "properties": {
-          "asset_type": {"enum": ["POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT", "STORE_CARD"]},
-          "platform": {"type": "string"},
-          "title": {"type": "string"},
-          "content": {"type": "string"},
-          "visual_brief": {"type": "string"},
-          "call_to_action": {"type": "string"},
-          "poster_svg": {"type": "string"},
-          "creative_angle": {"type": "string"},
-          "poster_style": {"type": "string"}
+          "asset_type": {
+            "enum": [
+              "SOCIAL_POST",
+              "SHORT_VIDEO_SCRIPT",
+              "STORE_CARD"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "call_to_action": {
+            "type": "string"
+          },
+          "visual_brief": {
+            "type": "string"
+          },
+          "creative_angle": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       }
     },
-    "recommendation_reason": {"type": "string"},
-    "risk_message": {"type": "string"}
+    "recommendation_reason": {
+      "type": "string"
+    },
+    "risk_message": {
+      "type": "string"
+    }
   },
   "additionalProperties": false
 }

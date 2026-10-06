@@ -79,8 +79,8 @@ CURATED_HANGZHOU_KNOWLEDGE: tuple[dict[str, Any], ...] = (
         "suggested_duration_minutes": 120,
         "opening_hours": "开放式景区；具体场点开放、交通管理与预约要求以当天官方公告为准。",
         "weather_adaptations": "SUNNY,CLOUDY",
-        "reservation_notice": "旺季、长假和大客流时段可能有分时段交通管理或预约安排。",
-        "description": "适合湖畔步行、城市摄影和慢节奏公共空间体验。",
+        "reservation_notice": '旺季或长假可能有交通组织安排；公共步行不需单独购票，游船、登岛及收费场馆按各自规则办理。',
+        "description": '沿湖岸公共步道慢行，可按体力选择湖滨、柳浪闻莺一带观景；晨间适合散步拍照，日落前后适合看湖光变化。公共步行路线不含游船、登岛和个别收费场馆。',
         "source_name": "杭州市人民政府公报 / 西湖景区管理通告",
         "source_url": "https://zfgb.hangzhou.gov.cn/11/105220253/t117220253054/518894.shtml",
         "verification_status": "VERIFY_REQUIRED",
@@ -337,8 +337,8 @@ CURATED_HANGZHOU_KNOWLEDGE: tuple[dict[str, Any], ...] = (
         "suggested_duration_minutes": 120,
         "opening_hours": "开放式公共空间，具体场点与水上项目以管理公告为准。",
         "weather_adaptations": "SUNNY,CLOUDY",
-        "reservation_notice": "交通、水上项目与沿线场馆安排请以当日公告为准。",
-        "description": "适合运河散步、城市摄影和低强度公共空间路线。",
+        "reservation_notice": '公共岸线步行可自由安排；水上项目、场馆及沿线商户活动按各自规则办理。',
+        "description": '沿京杭大运河杭州段的公共岸线步行，观察桥梁、河道与沿岸街区；可把小河直街、拱宸桥片区作为慢游方向，白天看街巷、傍晚看水岸灯影。乘船和沿线场馆另计。',
         "source_name": "杭州运河集团",
         "source_url": "https://www.hzcanal.com/",
         "verification_status": "VERIFY_REQUIRED",
@@ -354,8 +354,8 @@ CURATED_HANGZHOU_KNOWLEDGE: tuple[dict[str, Any], ...] = (
         "suggested_duration_minutes": 90,
         "opening_hours": "开放式街区，商户与展点营业安排以现场为准。",
         "weather_adaptations": "SUNNY,CLOUDY",
-        "reservation_notice": "公共街区不是套餐权益；个别商户活动需自行确认。",
-        "description": "适合运河周边慢行、街区观察和小体量城市漫游。",
+        "reservation_notice": '公共街巷可自由步行；商户、展点和体验活动按各自规则办理。',
+        "description": '走过青石巷、河埠与运河边旧建筑，适合边看街巷细节边拍照，可与拱宸桥片区串成一段慢游。公共街巷步行轻松，店铺消费和个别展点另计。',
         "source_name": "杭州市文化广电旅游局",
         "source_url": "https://wgly.hangzhou.gov.cn/",
         "verification_status": "VERIFY_REQUIRED",
@@ -371,8 +371,8 @@ CURATED_HANGZHOU_KNOWLEDGE: tuple[dict[str, Any], ...] = (
         "suggested_duration_minutes": 90,
         "opening_hours": "开放式街区，商户营业以现场为准。",
         "weather_adaptations": "SUNNY,CLOUDY",
-        "reservation_notice": "客流和交通管理安排请以当日公告为准。",
-        "description": "适合餐后散步、城市夜景和公共空间路线。",
+        "reservation_notice": '公共步行空间可自由游览；客流或交通组织以现场公告为准，商户消费另计。',
+        "description": '串联湖滨商业街景与西湖水岸观景，适合餐后散步、拍照或接续湖岸路线；傍晚到夜间更适合慢走看城市灯光。餐饮、购物和游船为自选消费。',
         "source_name": "杭州市上城区人民政府",
         "source_url": "https://www.hzsc.gov.cn/",
         "verification_status": "VERIFY_REQUIRED",
@@ -388,8 +388,8 @@ CURATED_HANGZHOU_KNOWLEDGE: tuple[dict[str, Any], ...] = (
         "suggested_duration_minutes": 120,
         "opening_hours": "开放式街区，商户和展点营业以现场为准。",
         "weather_adaptations": "SUNNY,CLOUDY",
-        "reservation_notice": "公共街区参观不等同于酒店已包含权益。",
-        "description": "适合城市历史、街巷慢游和手作店铺观察。",
+        "reservation_notice": '公共街巷可自由步行；店铺、展馆与体验项目按现场规则消费。',
+        "description": '沿河坊街与南宋御街一带慢行，可看到老字号、传统街巷与杭州旧城商业文化；午后适合慢逛，夜间街景更热闹。公共街巷步行不另收费，店铺、展馆和手作体验按现场价格自理。',
         "source_name": "杭州市上城区人民政府",
         "source_url": "https://www.hzsc.gov.cn/",
         "verification_status": "VERIFY_REQUIRED",
@@ -458,8 +458,8 @@ CURATED_HANGZHOU_KNOWLEDGE: tuple[dict[str, Any], ...] = (
         "suggested_duration_minutes": 90,
         "opening_hours": "开放式公共空间，管理安排以当日公告为准。",
         "weather_adaptations": "SUNNY,CLOUDY",
-        "reservation_notice": "不作为住宿产品的自动包含权益。",
-        "description": "适合江景、城市夜间散步和摄影路线。",
+        "reservation_notice": '公共空间可自由步行；沿线演出、展馆及商业项目以现场安排为准。',
+        "description": '沿钱江新城城市阳台看钱塘江水岸和城市天际线；日落前后适合拍照，夜间可感受江岸灯光与现代城市界面。公共空间漫步不需单独购票，演出、展馆及商业项目另计。',
         "source_name": "杭州市上城区人民政府",
         "source_url": "https://www.hzsc.gov.cn/",
         "verification_status": "VERIFY_REQUIRED",
@@ -779,13 +779,26 @@ class KnowledgeService:
         return self.to_context(item)
 
     def search(self, query: str = "", *, target_crowd: str = "", weather: str = "", limit: int = 8) -> list[dict[str, Any]]:
-        items = list(
+        required_fields = {
+            "name", "category", "area", "address", "indoor_outdoor",
+            "suitable_crowds", "minimum_age", "maximum_age",
+            "suggested_duration_minutes", "opening_hours", "weather_adaptations",
+            "reservation_notice", "description", "source_name", "source_url",
+        }
+        candidates = list(
             self.db.scalars(
                 select(TravelKnowledge)
                 .where(TravelKnowledge.status == "ACTIVE")
                 .order_by(TravelKnowledge.name)
             ).all()
         )
+        # A bulk status label is not evidence that any fact was checked. Only
+        # records with a complete field-level review may reach AI planning.
+        items = [
+            item for item in candidates
+            if self._record_status(item) == "ACTIVE"
+            and required_fields.issubset(set(item.verified_fields or []))
+        ]
         normalized_query = query.lower().strip()
         words = [word.lower() for word in query.replace("，", " ").replace("、", " ").split() if word.strip()]
 

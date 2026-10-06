@@ -12,6 +12,7 @@ class VisitorProductQuery(BaseModel):
     target_date: date | None = None
     target_crowd: str | None = None
     weather: str = "UNKNOWN"
+    budget_min: Decimal | None = Field(default=None, gt=0)
     budget: Decimal | None = Field(default=None, gt=0)
     interest: str | None = None
 
@@ -19,14 +20,14 @@ class VisitorProductQuery(BaseModel):
 class VisitorQuestion(BaseModel):
     product_id: int | None = None
     question: str = Field(min_length=1, max_length=500)
-    natural_language: str = Field(default="", max_length=1000)
+    natural_language: str = Field(default="", max_length=5000)
     child_age: int | None = Field(default=None, ge=0, le=120)
     weather: str = "UNKNOWN"
     conversation_id: str | None = Field(default=None, max_length=120)
 
 
 class VisitorRecommendRequest(BaseModel):
-    natural_language: str = Field(default="", max_length=1000)
+    natural_language: str = Field(default="", max_length=5000)
     # True means the visitor has reviewed the structured card.  In that mode
     # the API must treat the explicit fields as authoritative and never let a
     # second NLP pass overwrite a manual correction.
@@ -83,7 +84,7 @@ class VisitorRecommendResponse(BaseModel):
 
 
 class VisitorIntentCreate(BaseModel):
-    natural_language: str = Field(default="", max_length=1000)
+    natural_language: str = Field(default="", max_length=5000)
     structured_confirmed: bool = False
     product_id: int
     room_inventory_id: int | None = Field(default=None, ge=1)

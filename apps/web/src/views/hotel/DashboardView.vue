@@ -5,7 +5,7 @@ import { hotelApi } from '../../api'
 import { errorMessage } from '../../api/client'
 import { useAuthStore } from '../../stores/auth'
 import MetricCard from '../../components/MetricCard.vue'
-import ProductCard from '../../components/ProductCard.vue'
+import DashboardProductCard from '../../components/DashboardProductCard.vue'
 import type { Dashboard, TravelProduct } from '../../types'
 
 const loading = ref(true)
@@ -16,6 +16,15 @@ const productLoading = ref(false)
 const productError = ref('')
 const dashboard = ref<Dashboard | null>(null)
 const products = ref<TravelProduct[]>([])
+function productPriority(product: TravelProduct) {
+  const status = String(product.status || '').toUpperCase()
+  const quantity = Number(product.sale_quantity || 0)
+  if (quantity > 0 && (status === 'LOW_STOCK' || (status === 'ON_SALE' && quantity <= 2))) return 0
+  if (quantity > 0 && ['ON_SALE', 'AVAILABLE'].includes(status)) return 1
+  if (['PAUSED', 'SUSPENDED'].includes(status)) return 2
+  return 3
+}
+const prioritizedProducts = computed(() => [...products.value].sort((a, b) => productPriority(a) - productPriority(b)))
 const productLoaded = ref(false)
 const productPoolEl = ref<HTMLElement | null>(null)
 let productLoadSequence = 0
@@ -191,11 +200,11 @@ onBeforeUnmount(() => { productObserver?.disconnect(); socket?.close(); revenueC
     </div>
 
     <section ref="productPoolEl" class="dashboard-product-pool">
-      <div class="section-title"><h2>当前产品池</h2><span>{{ productLoaded ? ('预览最近 ' + products.length + ' 个') : '进入此区域时加载' }} · 共 {{ dashboard.product_count }} 个产品</span><el-button link type="primary" @click="$router.push('/hotel/products')">查看全部 →</el-button></div>
+      <div class="section-title"><div class="dashboard-product-pool__heading"><h2>当前产品</h2><span>共 {{ dashboard.product_count }} 个</span></div><el-button link type="primary" @click="$router.push('/hotel/products')">查看全部</el-button></div>
       <div v-if="productLoading" class="panel empty-state">正在读取产品预览…</div>
       <div v-else-if="productError" class="panel empty-state">产品预览暂时无法读取，经营数据仍可查看。{{ productError }} <el-button plain @click="loadProducts">重试</el-button></div>
       <div v-else-if="!productLoaded" class="panel empty-state dashboard-product-pool__hint">产品摘要会在滚动到此区域时加载。</div>
-      <div v-else-if="products.length" class="product-grid"><ProductCard v-for="product in products" :key="product.id" :product="product" /></div>
+      <div v-else-if="products.length" class="product-grid"><DashboardProductCard v-for="product in prioritizedProducts" :key="product.id" :product="product" /></div>
       <div v-else class="panel empty-state">还没有主题产品，先从一间临期客房开始组包。</div>
     </section>
 
@@ -230,4 +239,17 @@ onBeforeUnmount(() => { productObserver?.disconnect(); socket?.close(); revenueC
 .dashboard-product-pool :deep(.product-card > .product-card__media){height:100%!important;min-height:100%!important;max-height:none!important}
 .dashboard-product-pool :deep(.product-card > .product-card__media > .media-image){height:100%!important;min-height:100%!important;max-height:none!important}
 @media(max-width:760px){.dashboard-product-pool :deep(.product-grid){grid-template-columns:1fr!important}.dashboard-product-pool :deep(.product-card){grid-template-columns:112px minmax(0,1fr)!important;min-height:160px}}
+</style>
+
+<style scoped>
+.dashboard-product-pool { margin-top: 34px; }
+.dashboard-product-pool .section-title { min-height: 28px; align-items: center; margin-bottom: 18px; }
+.dashboard-product-pool__heading { display: flex; min-width: 0; align-items: baseline; gap: 12px; }
+.dashboard-product-pool__heading h2 { margin: 0; font-size: 18px; font-weight: 650; }
+.dashboard-product-pool__heading > span { color: #737873; font-size: 13px; }
+.dashboard-product-pool .section-title > :deep(.el-button) { margin-left: auto; font-size: 13px; }
+.dashboard-product-pool :deep(.product-grid) { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; align-items: stretch; gap: 16px; margin-top: 0; }
+@media (max-width: 1180px) { .dashboard-product-pool :deep(.product-grid) { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; } }
+@media (max-width: 820px) { .dashboard-product-pool :deep(.product-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
+@media (max-width: 520px) { .dashboard-product-pool :deep(.product-grid) { grid-template-columns: minmax(0, 1fr) !important; } .dashboard-product-pool__heading { gap: 8px; } }
 </style>

@@ -1,43 +1,52 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { visitorApi } from '../../api'
 import { errorMessage } from '../../api/client'
 import ProductCard from '../../components/ProductCard.vue'
 import type { TravelProduct } from '../../types'
-import { useRoute } from 'vue-router'
 
 const route = useRoute()
 const items = ref<TravelProduct[]>([])
 const loading = ref(false)
 const loadingMore = ref(false)
-const pageSize = 12
 const hasMore = ref(false)
 const error = ref('')
-const form = reactive({ target_date: '', budget: '', interest: '' })
-const topics = ['博物馆', '亲子', '夜游', '美食', '旅拍', '运动']
-const resultLabel = computed(() => loading.value ? '正在查找' : items.value.length + (hasMore.value ? '+' : '') + ' 组商品')
-const hasFilters = computed(() => Boolean(form.target_date || form.budget || form.interest))
+const pageSize = 12
+const form = reactive({ target_date: '', interest: '' })
+const budgetBand = ref('all')
+const topics = ['博物馆', '亲子', '夜游', '美食', '旅拍', '运动', '西湖', '钱江新城', '陶艺', '甜品']
+const hasFilters = () => Boolean(form.target_date || form.interest || budgetBand.value !== 'all')
+
+function budgetParams() {
+  if (budgetBand.value === 'under500') return { budget: 500 }
+  if (budgetBand.value === '500to800') return { budget_min: 500, budget: 800 }
+  if (budgetBand.value === 'over800') return { budget_min: 800 }
+  return {}
+}
 
 async function load(reset = true) {
   if (reset) { loading.value = true; error.value = '' }
   else loadingMore.value = true
   try {
-    const offset = reset ? 0 : items.value.length
     const response = await visitorApi.products({
       target_date: form.target_date || undefined,
-      budget: form.budget || undefined,
       interest: form.interest || undefined,
+      ...budgetParams(),
       compact: true,
       limit: pageSize,
-      offset,
+      offset: reset ? 0 : items.value.length,
     })
     items.value = reset ? response.data : [...items.value, ...response.data]
     hasMore.value = response.data.length === pageSize
   } catch (e) { error.value = errorMessage(e) }
   finally { if (reset) loading.value = false; else loadingMore.value = false }
 }
-function loadMore() { void load(false) }
-function clear() { form.target_date = ''; form.budget = ''; form.interest = ''; load() }
+
+function selectTopic(topic: string) {
+  form.interest = form.interest === topic ? '' : topic
+}
+function clear() { form.target_date = ''; form.interest = ''; budgetBand.value = 'all'; void load() }
 
 onMounted(() => {
   const interest = route.query.interest
@@ -48,146 +57,71 @@ onMounted(() => {
 
 <template>
   <main class="product-list storefront-list">
-    <header class="product-list__head"><div><h1>旅居产品</h1><span class="list-count">{{ resultLabel }}</span></div><router-link class="assistant-entry" to="/visitor/assistant">问问旅居助手 <b aria-hidden="true">↗</b></router-link></header>
-<div class="list-topics"><span>快速筛选</span><button v-for="topic in topics" :key="topic" :class="{ active: form.interest === topic }" @click="form.interest = topic; load()">{{ topic }}</button><button v-if="hasFilters" class="topic-clear" type="button" @click="clear">清除筛选</button></div>
-    <section class="product-filter"><label><span>日期</span><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" type="date" placeholder="选择入住日期" /></label><label class="filter-interest"><span>主题或地点</span><el-input v-model="form.interest" placeholder="如：博物馆、运河、亲子" clearable @keyup.enter="load" /></label><label><span>预算</span><el-input v-model="form.budget" placeholder="最高 ¥" inputmode="numeric" /></label><el-button type="primary" @click="load">查找商品</el-button><el-button v-if="hasFilters" plain @click="clear">清除筛选</el-button></section>
+    <section class="product-filter" aria-label="查找旅居套餐">
+      <el-date-picker
+        v-model="form.target_date"
+        class="filter-date"
+        value-format="YYYY-MM-DD"
+        type="date"
+        placeholder="入住日期"
+        aria-label="入住日期"
+      />
+      <div class="topic-picker" role="group" aria-label="主题或地点">
+        <button type="button" :class="{ active: !form.interest }" :aria-pressed="!form.interest" @click="selectTopic('')">全部</button>
+        <button v-for="topic in topics" :key="topic" type="button" :class="{ active: form.interest === topic }" :aria-pressed="form.interest === topic" @click="selectTopic(topic)">{{ topic }}</button>
+      </div>
+      <el-select v-model="budgetBand" class="filter-budget" aria-label="预算范围">
+        <el-option label="预算不限" value="all" />
+        <el-option label="500 元以内" value="under500" />
+        <el-option label="500–800 元" value="500to800" />
+        <el-option label="800 元以上" value="over800" />
+      </el-select>
+      <div class="filter-actions">
+        <button v-if="hasFilters()" class="filter-reset" type="button" @click="clear">清除筛选</button>
+        <el-button type="primary" @click="load()">查找套餐</el-button>
+      </div>
+    </section>
     <el-alert v-if="error" :title="error" type="error" show-icon />
-    <div v-if="loading" class="home-loading"><span /> 正在加载商品…</div>
+    <div v-if="loading" class="home-loading"><span /> 正在加载套餐…</div>
     <div v-else-if="items.length" class="product-grid product-grid--editorial product-grid--wide"><ProductCard v-for="product in items" :key="product.id" :product="product" public-view /></div>
-    <div v-if="hasMore && !loading && items.length" class="catalog-load-more"><el-button plain :loading="loadingMore" @click="loadMore">继续加载</el-button></div>
-    <!-- 空状态只跟「有没有商品」有关，之前误挂在「继续加载」的 v-else 上，
-         导致有商品时底部也会出现「暂时没有匹配的商品」。 -->
-    <div v-if="!loading && !items.length" class="list-empty"><h2>暂时没有匹配的商品</h2><p>换一个日期、主题或预算再试。</p><div><el-button plain @click="clear">清除筛选</el-button></div></div>
+    <div v-if="hasMore && !loading && items.length" class="catalog-load-more"><el-button plain :loading="loadingMore" @click="load(false)">继续加载</el-button></div>
+    <div v-if="!loading && !items.length" class="list-empty"><h2>暂时没有匹配的套餐</h2><p>换一个日期、主题或预算范围再试。</p><div><el-button plain @click="clear">清除筛选</el-button></div></div>
   </main>
 </template>
 
 <style scoped>
-.product-list{max-width:1180px;margin:0 auto;padding:8px 0 44px}.product-list__head{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:8px 0 16px}.product-list__head span{color:var(--muted);font-size:12px}.product-list__head h1{margin:0;font-size:clamp(22px,3vw,31px);letter-spacing:-.8px}.product-list__head>div{display:flex;align-items:baseline;gap:12px}.product-list__head .list-count{color:var(--muted);font-size:12px}.assistant-entry{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #dce6df;border-radius:999px;background:#fff;color:#345b4d;font-size:12px;text-decoration:none;white-space:nowrap}.assistant-entry b{color:#9a7547;font-size:14px}.product-list__head a{padding:9px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-size:12px;text-decoration:none;white-space:nowrap}.product-filter{display:grid;grid-template-columns:150px minmax(180px,1fr) 120px auto;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-soft);margin-bottom:16px}.list-empty{padding:48px 18px;border:1px dashed var(--line);border-radius:12px;text-align:center}.list-empty h2{margin:0;font-size:18px}.list-empty p{color:var(--muted);font-size:12px}.list-empty .el-button{margin:4px}@media(max-width:700px){.product-list{padding-top:0}.product-list__head{align-items:center}.product-list__head>div{align-items:flex-start;flex-direction:column;gap:3px}.assistant-entry{padding:7px 9px;font-size:11px}.product-filter{grid-template-columns:1fr 1fr}.product-filter :deep(.el-date-editor),.product-filter :deep(.el-input){width:100%}.product-filter .el-button{grid-column:1/-1}.product-grid--wide{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
-
-.storefront-list .product-list__head{align-items:center;min-height:50px;padding:10px 20px}
-.storefront-list .product-list__head>div{display:flex;align-items:center}
-.storefront-list .product-list__head .list-count{font-size:12px;color:#66756b}
-@media(max-width:700px){.storefront-list .product-list__head{padding:9px 14px}}
-</style>
-
-
-<style scoped>
-/* Product listing keeps the storefront tone: a quiet filter row and image-led cards. */
-.product-list {
-  width: min(960px, 100%);
-  max-width: 960px;
-  box-sizing: border-box;
-  margin: 0 auto;
-  padding: 0 0 44px;
+.storefront-list { width: 100%; max-width: 1200px; box-sizing: border-box; margin: 0 auto; padding: 0 0 54px; color: #252a27; }
+.product-filter { display: grid; grid-template-columns: 168px minmax(0, 1fr) 148px auto; align-items: center; gap: 12px; margin: 0 0 8px; padding: 0 0 10px; border: 0; background: transparent; }
+.product-filter :deep(.filter-date), .product-filter :deep(.filter-budget) { width: 100%; min-width: 0; }
+.product-filter :deep(.el-input__wrapper), .product-filter :deep(.el-date-editor.el-input__wrapper), .product-filter :deep(.el-select__wrapper) { min-height: 38px; border-radius: 9px; background: #fff; box-shadow: 0 0 0 1px #e4e7e3 inset; }
+.topic-picker { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 38px; overflow-x: auto; padding: 0 0 1px; scrollbar-width: none; white-space: nowrap; }
+.topic-picker::-webkit-scrollbar { display: none; }
+.topic-picker button { flex: 0 0 auto; height: 31px; padding: 0 10px; border: 1px solid #e4e8e3; border-radius: 999px; background: #fff; color: #5f6b62; font-size: 12px; cursor: pointer; transition: background-color .16s ease, border-color .16s ease, color .16s ease; }
+.topic-picker button:hover, .topic-picker button.active { border-color: #b9d2c2; background: #eff6f1; color: #32644a; }
+.filter-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 38px; white-space: nowrap; }
+.product-filter :deep(.el-button) { height: 38px; min-height: 38px; padding: 0 15px; border-radius: 9px; }
+.filter-reset { height: 38px; padding: 0 13px; border: 1px solid #d9e0da; border-radius: 9px; background: #fff; color: #52635a; font-size: 13px; cursor: pointer; transition: border-color .16s ease, background-color .16s ease; }
+.filter-reset:hover { border-color: #a8c5b3; background: #f8fbf8; color: #365f4a; }
+.storefront-list > .product-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin: 14px 0 20px; }
+.catalog-load-more { display: flex; justify-content: center; padding: 8px 20px 26px; }
+.list-empty { margin: 18px 0; padding: 52px 18px; border: 0; border-radius: 0; background: transparent; text-align: center; }
+.list-empty h2 { margin: 0; font-size: 18px; }
+.list-empty p { color: #7f8982; font-size: 13px; }
+@media (max-width: 1050px) { .storefront-list > .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; } .product-filter { grid-template-columns: 152px minmax(0, 1fr) 140px auto; gap: 9px; } }
+@media (max-width: 780px) {
+  .storefront-list > .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .product-filter { grid-template-columns: minmax(130px, .78fr) minmax(0, 1.45fr); gap: 9px 12px; padding-bottom: 12px; }
+  .filter-date { grid-column: 1; grid-row: 1; }
+  .topic-picker { grid-column: 2; grid-row: 1; }
+  .filter-budget { grid-column: 1; grid-row: 2; }
+  .filter-actions { grid-column: 2; grid-row: 2; }
 }
-.product-list__head { margin: 10px 0 18px; }
-.product-list__head span { color: #999; letter-spacing: .02em; }
-.product-list__head h1 { color: #222; font-size: 26px; font-weight: 700; }
-.product-filter {
-  display: grid;
-  grid-template-columns: 150px minmax(220px, 1fr) 120px auto;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 18px;
-  padding: 10px 0 14px;
-  border: 0;
-  border-bottom: 1px solid #eee9e4;
-  border-radius: 0;
-  background: #fff;
-}
-.product-filter :deep(.el-input__wrapper),
-.product-filter :deep(.el-date-editor.el-input__wrapper) {
-  border-radius: 6px;
-  background: #fafafa;
-  box-shadow: 0 0 0 1px #e8e3de inset;
-}
-.product-filter :deep(.el-button--primary) {
-  border: 0;
-  border-radius: 18px;
-  background: #ff6a00;
-  border-color: #ff6a00;
-}
-.list-empty {
-  padding: 52px 18px;
-  border: 0;
-  border-top: 1px solid #eee9e4;
-  border-radius: 0;
-  background: #fff;
-}
-@media (max-width: 700px) {
-  .product-list { padding: 0 0 34px; }
-  .product-list__head h1 { font-size: 22px; }
-  .product-filter { grid-template-columns: 1fr 1fr; padding-bottom: 12px; }
-  .product-filter .el-button { grid-column: 1 / -1; }
-}
-</style>
-
-
-<style scoped>
-/* Storefront catalogue: filters read like a travel-commerce search bar. */
-.catalog-load-more{display:flex;justify-content:center;padding:8px 20px 26px}.storefront-list { width: min(1280px, 100%); max-width: 1280px; margin: 0 auto; padding: 0 0 54px; background: #fff; color: #252525; }
-.storefront-list .product-list__head { align-items: flex-end; margin: 0; padding: 20px 20px 18px; border-bottom: 1px solid #eee9e4; }
-.storefront-list .product-list__head small { color: #ff6a00; font-size: 11.5px; letter-spacing: .12em; }
-.storefront-list .product-list__head h1 { margin: 8px 0 6px; color: #222; font-size: clamp(23px, 4vw, 32px); font-weight: 750; letter-spacing: -.7px; }
-.storefront-list .product-list__head p { margin: 0; color: #888; font-size: 12px; line-height: 1.65; }
-.storefront-list .list-count { flex: 0 0 auto; color: #999; font-family: var(--font-mono); font-size: 11px; }
-.storefront-list .list-topics { display: flex; align-items: center; gap: 16px; overflow-x: auto; padding: 14px 20px; border-bottom: 8px solid #f5f5f5; }
-.storefront-list .list-topics > span { flex: 0 0 auto; color: #999; font-size: 11px; }
-.storefront-list .list-topics button { flex: 0 0 auto; padding: 0 0 3px; border: 0; border-bottom: 1px solid transparent; background: none; color: #555; font-size: 11px; cursor: pointer; }
-.storefront-list .list-topics button:hover, .storefront-list .list-topics button.active { border-bottom-color: #ff6a00; color: #ff6a00; }
-.storefront-list .list-topics button.topic-clear { margin-left: auto; color: #999; }
-.storefront-list .product-filter { grid-template-columns: 150px minmax(220px, 1fr) 120px auto; align-items: end; gap: 10px; margin: 0; padding: 18px 20px 20px; border: 0; border-bottom: 1px solid #eee9e4; border-radius: 0; background: #fff; }
-.storefront-list .product-filter label { display: grid; gap: 5px; min-width: 0; }
-.storefront-list .product-filter label > span { color: #999; font-size: 11.5px; }
-.storefront-list .product-filter :deep(.el-date-editor), .storefront-list .product-filter :deep(.el-input) { width: 100%; }
-.storefront-list .product-filter :deep(.el-input__wrapper), .storefront-list .product-filter :deep(.el-date-editor.el-input__wrapper) { min-height: 34px; border-radius: 4px; background: #fafafa; box-shadow: 0 0 0 1px #e5dfda inset; }
-.storefront-list .product-filter :deep(.el-button--primary) { height: 34px; border: 0; border-radius: 4px; background: #ff6a00; }
-.storefront-list > .el-alert { margin: 14px 20px 0; }
-.storefront-list > .product-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 20px; }
-.storefront-list .list-empty { margin: 20px; padding: 52px 18px; border: 0; border-top: 1px solid #eee9e4; border-radius: 0; background: #fff; }
-@media (max-width: 1000px) {
-  .storefront-list > .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (max-width: 820px) {
-  .storefront-list > .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 700px) {
-  .storefront-list .product-list__head { align-items: flex-start; padding: 16px 14px; }
-  .storefront-list .product-list__head h1 { font-size: 24px; }
-  .storefront-list .product-list__head p { font-size: 11px; }
-  .storefront-list .list-count { padding-top: 4px; }
-  .storefront-list .list-topics { padding: 12px 14px; gap: 14px; }
-  .storefront-list .product-filter { grid-template-columns: 1fr 1fr; padding: 14px; }
-  .storefront-list .product-filter .filter-interest { grid-column: 1 / -1; }
-  .storefront-list .product-filter > .el-button { grid-column: 1 / -1; width: 100%; }
-  .storefront-list .list-empty { margin: 14px; }
-}
-@media (max-width: 620px) {
-  .storefront-list > .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 12px; gap: 8px; }
-  .storefront-list > .product-grid .product-card--editorial h3 { margin: 6px 0 3px; font-size: 13px; }
-  .storefront-list > .product-grid .product-card__hook { min-height: 0; font-size: 11.5px; line-height: 1.5; -webkit-line-clamp: 2; }
-  .storefront-list > .product-grid .product-card__facts { gap: 3px 7px; margin-top: 7px; font-size: 11px; }
-  .storefront-list > .product-grid .product-card__body { padding: 9px 10px 10px; }
-  .storefront-list > .product-grid .product-card__bottom strong { font-size: 15px; }
-}
-@media (max-width: 420px) {
-  .storefront-list > .product-grid { margin: 10px; gap: 7px; }
-  .storefront-list > .product-grid .product-card--editorial h3 { font-size: 12px; }
-  .storefront-list > .product-grid .product-card__hook { font-size: 11px; }
-}
-.storefront-list .catalog-assistant { display: grid; grid-template-columns: 40px minmax(0,1fr) auto; align-items: center; gap: 14px; margin: 16px 20px 0; padding: 15px 17px; border: 1px solid #dce8dd; border-radius: 13px; background: linear-gradient(110deg,#f2f6ee,#fbf8ef 70%,#f7f4ea); }
-.catalog-assistant__icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: #21473d; color: #e9d39e; font-size: 18px; }
-.catalog-assistant__copy small { color: #71867a; font-size: 9px; letter-spacing: .12em; }
-.catalog-assistant__copy h2 { margin: 4px 0 3px; color: #2e4038; font: 500 16px/1.35 Georgia,'Songti SC',serif; }
-.catalog-assistant__copy p { margin: 0; color: #7d867f; font-size: 10.5px; line-height: 1.5; }
-.catalog-assistant > a { padding: 10px 13px; border-radius: 6px; background: #24483e; color: white; font-size: 10.5px; white-space: nowrap; transition: background .18s, transform .18s; }
-.catalog-assistant > a:hover { transform: translateY(-1px); background: #346152; }
-.catalog-assistant > a b { margin-left: 6px; color: #e7ce91; }
-@media (max-width: 700px) {
-  .storefront-list .catalog-assistant { grid-template-columns: 34px minmax(0,1fr); gap: 10px; margin: 12px 14px 0; padding: 12px; }
-  .catalog-assistant__icon { width: 32px; height: 32px; border-radius: 10px; font-size: 15px; }
-  .catalog-assistant__copy h2 { font-size: 14px; }
-  .catalog-assistant__copy p { font-size: 10px; }
-  .catalog-assistant > a { grid-column: 2; justify-self: start; padding: 8px 10px; }
+@media (max-width: 520px) {
+  .storefront-list > .product-grid { grid-template-columns: 1fr; gap: 12px; margin: 12px 0 18px; }
+  .product-filter { grid-template-columns: minmax(118px, .78fr) minmax(0, 1.4fr); gap: 8px 9px; }
+  .topic-picker { gap: 5px; }
+  .topic-picker button { height: 29px; padding: 0 8px; font-size: 11.5px; }
+  .filter-actions { gap: 5px; }
+  .product-filter :deep(.el-button) { height: 36px; min-height: 36px; padding: 0 10px; font-size: 12px; }
 }
 </style>

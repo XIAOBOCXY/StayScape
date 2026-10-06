@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -21,8 +21,6 @@ from ..schemas.products import GenerateProductRequest
 from .inventory_service import ACTIVE_PRODUCT_STATUSES, ensure_publish_capacity, reconcile_published_capacity
 from .knowledge_service import KnowledgeService
 from .operations_insight_service import OperationsInsightService
-from .poster_service import poster_asset
-from .wan_image_service import WanImageService
 from .weather_service import WeatherService
 from .public_copy import route_proximity
 
@@ -30,30 +28,83 @@ from .public_copy import route_proximity
 DEFAULT_QUANTITIES = {"BREAKFAST": 3, "LATE_CHECKOUT": 1}
 
 
+def _trip_last_date(request: GenerateProductRequest) -> date:
+    return request.target_date + timedelta(days=max(1, int(getattr(request, "nights", 1) or 1)))
+
+
+def _is_dining_resource(resource: PartnerResource) -> bool:
+    text = f"{resource.category or ''} {resource.resource_name or ''}".upper()
+    if any(word in text for word in ("手作", "制作", "陶艺", "课堂", "烘焙", "工作坊")):
+        return False
+    return any(word in text for word in ("DINING", "RESTAURANT", "餐饮", "餐厅", "用餐", "午餐", "晚餐", "杭帮菜", "美食", "FOOD"))
+
+
+def _partner_daypart(resource: PartnerResource) -> tuple[str, int]:
+    start = resource.start_time
+    if start is None:
+        return "UNSCHEDULED", 1
+    minute = start.hour * 60 + start.minute
+    if 11 * 60 + 30 <= minute < 13 * 60 + 30:
+        return "MIDDAY", 1
+    if _is_dining_resource(resource):
+        if 17 * 60 <= minute < 20 * 60:
+            return "DINNER", 1
+        return "MEAL_OTHER", 0
+    if minute < 11 * 60 + 30:
+        return "MORNING", 2
+    if minute < 17 * 60 + 30:
+        return "AFTERNOON", 3
+    return "EVENING", 1
+
+
+def _partner_covers_window(resource: PartnerResource, window: str) -> bool:
+    """Return whether a real, timed partner session overlaps a required daypart."""
+    if resource.start_time is None or resource.end_time is None:
+        return False
+    start = resource.start_time.hour * 60 + resource.start_time.minute
+    end = resource.end_time.hour * 60 + resource.end_time.minute
+    if window == "MORNING":
+        return start < 11 * 60 + 30 and end > 8 * 60
+    if window == "AFTERNOON":
+        return start < 17 * 60 + 30 and end > 13 * 60 + 30
+    return False
+
+
+def _partner_is_meal(resource: PartnerResource) -> bool:
+    if not _is_dining_resource(resource) or resource.start_time is None:
+        return False
+    part, _ = _partner_daypart(resource)
+    return part in {"MIDDAY", "DINNER"}
+
+
 def _partner_transfer_issue(resources: list[PartnerResource]) -> str | None:
-    scheduled = sorted(
-        (item for item in resources if item.start_time and item.end_time),
-        key=lambda item: item.start_time,
-    )
-    for previous, following in zip(scheduled, scheduled[1:]):
-        if not previous.address or not following.address or previous.address.strip() == following.address.strip():
-            continue
-        gap = int((following.start_time.hour * 60 + following.start_time.minute) - (previous.end_time.hour * 60 + previous.end_time.minute))
-        if gap < 0:
-            continue  # The interval validator reports a direct overlap with more detail.
-        required = int(route_proximity(previous.address, following.address).get("buffer_minutes") or 30)
-        if gap < required:
-            return f"{previous.resource_name}结束后到{following.resource_name}开始仅有 {gap} 分钟；按地点建议至少预留 {required} 分钟转场，请调整场次或拆分产品。"
+    by_date: dict[date, list[PartnerResource]] = {}
+    for item in resources:
+        by_date.setdefault(item.available_date, []).append(item)
+    for day_resources in by_date.values():
+        scheduled = sorted(
+            (item for item in day_resources if item.start_time and item.end_time),
+            key=lambda item: item.start_time,
+        )
+        for previous, following in zip(scheduled, scheduled[1:]):
+            if not previous.address or not following.address or previous.address.strip() == following.address.strip():
+                continue
+            gap = int((following.start_time.hour * 60 + following.start_time.minute) - (previous.end_time.hour * 60 + previous.end_time.minute))
+            if gap < 0:
+                continue
+            required = int(route_proximity(previous.address, following.address).get("buffer_minutes") or 30)
+            if gap < required:
+                return f"{previous.resource_name}结束后到{following.resource_name}开始仅有 {gap} 分钟；按地点建议至少预留 {required} 分钟转场，请调整场次或拆分产品。"
     return None
 
 
 NON_EXCLUSIVE_SERVICE_TYPES = {"BREAKFAST", "PARKING", "LUGGAGE_STORAGE", "LATE_CHECKOUT"}
 
 MARKETING_STYLE_GUIDES: dict[str, dict[str, str]] = {
-    "ARTISTIC": {"label": "文艺叙事", "direction": "用有画面感的旅行随笔写法，从具体时刻开场，写光线、声音和动作；克制、温柔，不硬推销。", "visual": "低饱和、留白、晨昏光线与细节特写，像一本杭州周末小刊物"},
-    "PROMOTIONAL": {"label": "直接推荐", "direction": "先说适合谁和怎么玩，再给出真实包含内容与预约提醒；可以利落分点，但不得虚构折扣、限量、评价或价格。", "visual": "明快、干净、突出体验动作和周末出发感"},
-    "EMPATHETIC": {"label": "情绪共鸣", "direction": "从旅行者想放松、想陪伴或想换节奏的心情切入；语气像懂你的朋友，温暖但不煽情。", "visual": "柔和自然光、松弛的陪伴感与安静细节"},
-    "SEEDING": {"label": "轻松种草", "direction": "用朋友分享周末发现的口吻：首句有钩子，接着写2到3个值得去的具体理由与可感知的细节；短句友好。", "visual": "有生活感、色彩轻快、像真实旅行相册，预留海报文字安全区"},
+    "ARTISTIC": {"label": "文艺叙事", "direction": "用有画面感的旅行随笔写法，从具体时刻开场，写光线、声音和动作；克制、温柔，不硬推销。"},
+    "PROMOTIONAL": {"label": "直接推荐", "direction": "先说适合谁和怎么玩，再给出真实包含内容与预约提醒；可以利落分点，但不得虚构折扣、限量、评价或价格。"},
+    "EMPATHETIC": {"label": "情绪共鸣", "direction": "从旅行者想放松、想陪伴或想换节奏的心情切入；语气像懂你的朋友，温暖但不煽情。"},
+    "SEEDING": {"label": "轻松种草", "direction": "用朋友分享周末发现的口吻：首句有钩子，接着写2到3个值得去的具体理由与可感知的细节；短句友好。"},
 }
 
 
@@ -66,34 +117,6 @@ def marketing_style_direction(style: str, extra_direction: str = "") -> str:
         "每一套内容都要从同行关系、一个具体体验瞬间和一个可感知的杭州地点切入；标题不超过22个中文字符，正文用2到3句短句形成画面，避免反复使用“住一晚、慢慢玩、刚刚好”等套话。可参考旅行平台、小红书与短视频常见的节奏，但不得模仿具体作者或账号。"
         f"{extra}"
     )
-
-
-def marketing_image_prompt(db: Session, product: TravelProduct, output: MarketingAgentOutput, style: str) -> str:
-    guide = MARKETING_STYLE_GUIDES.get(style, MARKETING_STYLE_GUIDES["SEEDING"])
-    partner_name, address, description = "杭州在地体验", "杭州", ""
-    for row in product.resources:
-        if row.resource_type != "PARTNER_RESOURCE":
-            continue
-        partner = db.get(PartnerResource, row.resource_id)
-        if partner:
-            partner_name = partner.resource_name
-            address = partner.address or address
-            description = partner.description or ""
-            break
-    poster = next((asset for asset in output.marketing_assets if asset.asset_type == "POSTER"), None)
-    visual_brief = (poster.visual_brief if poster else "") or guide["visual"]
-    visual_seed = f"{product.product_code}:{product.target_date}:{style}:{partner_name}"
-    return (
-        "Create one distinct photographic hero image for a Hangzhou travel product, not a generic tourism stock photo. "
-        f"Creative seed: {visual_seed}. Theme: {product.theme}. Audience: {product.target_crowd}. "
-        f"Featured verified partner experience: {partner_name}; location cue: {address}. "
-        f"Experience description: {description}. Visual brief: {visual_brief}. Style: {guide['visual']}. "
-        "Use a believable, editorial travel-magazine photograph with a clear subject, natural light, tactile local details, "
-        "and a 3:4 vertical composition. Keep the centre-left or lower third visually quiet for a separate SVG text layer. "
-        "Show only a plausible Hangzhou setting; do not invent landmarks, tickets, prices, service promises or partnerships. "
-        "No readable words, digits, logos, QR codes, watermarks, signage, fake posters, or recognisable faces. "
-        "Vary camera angle, time of day, material texture and composition between products while preserving factual relevance."
-    )[:5000]
 
 
 def blocks_schedule(service: HotelService) -> bool:
@@ -150,17 +173,53 @@ class ProductService:
             )
         return room
 
-    def _default_selections(self, request: GenerateProductRequest, room: RoomInventory, *, variant_index: int = 0) -> list[dict[str, Any]]:
-        selections: list[dict[str, Any]] = []
-        services = list(self.db.scalars(select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.available_date == request.target_date, HotelService.status == "AVAILABLE").order_by(HotelService.id)).all())
-        breakfast = next((item for item in services if item.service_type == "BREAKFAST"), None)
-        late_checkout = next((item for item in services if item.service_type == "LATE_CHECKOUT"), None)
-        if breakfast:
-            selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": breakfast.id, "quantity_per_package": request.party_size})
-        if late_checkout:
-            selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": late_checkout.id, "quantity_per_package": 1})
-        partners = list(self.db.scalars(select(PartnerResource).join(Merchant).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date).order_by(PartnerResource.id)).all())
-        eligible = [item for item in partners if self._partner_candidate(item, request)]
+    def _default_selections(
+        self,
+        request: GenerateProductRequest,
+        room: RoomInventory,
+        *,
+        variant_index: int = 0,
+        base_selections: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build a trip-length itinerary from selected anchors and live inventory.
+
+        Explicitly selected resources are anchors, not a reason to stop looking
+        for complementary experiences. Every addition is still checked against
+        date, stock, time, transfer, daypart and budget constraints.
+        """
+        selections = [dict(item) for item in (base_selections or [])]
+        services = list(self.db.scalars(select(HotelService).where(
+            HotelService.hotel_id == self.hotel_id,
+            HotelService.available_date == request.target_date,
+            HotelService.status == "AVAILABLE",
+        ).order_by(HotelService.id)).all())
+        if base_selections is None:
+            breakfast = next((item for item in services if item.service_type == "BREAKFAST"), None)
+            late_checkout = next((item for item in services if item.service_type == "LATE_CHECKOUT"), None)
+            if breakfast:
+                selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": breakfast.id, "quantity_per_package": request.party_size})
+            if late_checkout:
+                selections.append({"resource_type": "HOTEL_SERVICE", "resource_id": late_checkout.id, "quantity_per_package": 1})
+
+        service_ids = {int(item["resource_id"]) for item in selections if item["resource_type"] == "HOTEL_SERVICE"}
+        selected_services = {
+            item.id: item
+            for item in self.db.scalars(
+                select(HotelService).where(
+                    HotelService.hotel_id == self.hotel_id,
+                    HotelService.id.in_(service_ids),
+                )
+            ).all()
+        } if service_ids else {}
+        all_partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(
+            selectinload(PartnerResource.merchant)
+        ).where(
+            Merchant.hotel_id == self.hotel_id,
+            PartnerResource.available_date >= request.target_date,
+            PartnerResource.available_date <= _trip_last_date(request),
+        ).order_by(PartnerResource.available_date, PartnerResource.id)).unique().all())
+        eligible = [item for item in all_partners if self._partner_candidate(item, request) and _partner_daypart(item)[1] > 0]
+
         theme_text = f"{request.theme} {request.target_crowd}".lower()
         preferred_categories: set[str] = set()
         if any(word in theme_text for word in ("乐园", "游乐", "theme park")):
@@ -199,15 +258,119 @@ class ProductService:
             eligible.sort(key=lambda item: (item.category not in preferred_categories, item.indoor, item.settlement_price, item.id))
         else:
             eligible.sort(key=lambda item: (item.category not in preferred_categories, not item.indoor, item.settlement_price, item.id))
-        # A variant gets a different already-compatible experience.  The model
-        # receives this bounded set and writes the story around it; it must not
-        # select arbitrary overlapping activities from the whole resource pool.
-        selected = eligible[variant_index % len(eligible)] if eligible else None
-        if selected:
-            # Partner capacity is maintained in people, not in a vague
-            # "package" unit.  This makes a couple, a family and a friends
-            # package consume the right amount of real capacity.
-            selections.append({"resource_type": "PARTNER_RESOURCE", "resource_id": selected.id, "quantity_per_package": request.party_size})
+
+        selected_ids = {int(item["resource_id"]) for item in selections if item["resource_type"] == "PARTNER_RESOURCE"}
+        chosen = [item for item in all_partners if item.id in selected_ids]
+
+        part_counts: dict[tuple[date, str], int] = {}
+        for item in chosen:
+            part, _ = _partner_daypart(item)
+            key = (item.available_date, part)
+            part_counts[key] = part_counts.get(key, 0) + 1
+        base_cost = room.accounting_cost
+        for service_id, service in selected_services.items():
+            row = next((item for item in selections if item["resource_type"] == "HOTEL_SERVICE" and int(item["resource_id"]) == service_id), {})
+            base_cost += service.unit_cost * int(row.get("quantity_per_package") or 1)
+
+        offset = variant_index % len(eligible) if eligible else 0
+        candidate_order = eligible[offset:] + eligible[:offset]
+        margin = Decimal(request.minimum_gross_margin or 0)
+
+        def can_add(candidate: PartnerResource) -> bool:
+            if candidate.id in selected_ids or not candidate.start_time or not candidate.end_time:
+                return False
+            normalized_name = candidate.resource_name.strip().casefold()
+            if normalized_name in {item.resource_name.strip().casefold() for item in chosen}:
+                return False
+            part, cap = _partner_daypart(candidate)
+            if cap <= 0 or part_counts.get((candidate.available_date, part), 0) >= cap:
+                return False
+            same_day = [item for item in chosen if item.available_date == candidate.available_date]
+            if any(
+                not item.start_time
+                or not item.end_time
+                or intervals_overlap(item.start_time, item.end_time, candidate.start_time, candidate.end_time)
+                for item in same_day
+            ):
+                return False
+            if any(
+                service.available_date == candidate.available_date
+                and blocks_schedule(service)
+                and intervals_overlap(service.start_time, service.end_time, candidate.start_time, candidate.end_time)
+                for service in selected_services.values()
+            ):
+                return False
+            if _partner_transfer_issue([*same_day, candidate]):
+                return False
+            if request.visitor_budget is not None:
+                cost = base_cost + sum(item.settlement_price * request.party_size for item in [*chosen, candidate])
+                if margin >= 1 or max(room.minimum_price, cost / (Decimal("1") - margin)) > request.visitor_budget:
+                    return False
+            return True
+
+        def add(candidate: PartnerResource) -> None:
+            chosen.append(candidate)
+            selected_ids.add(candidate.id)
+            part, _ = _partner_daypart(candidate)
+            key = (candidate.available_date, part)
+            part_counts[key] = part_counts.get(key, 0) + 1
+            selections.append({"resource_type": "PARTNER_RESOURCE", "resource_id": candidate.id, "quantity_per_package": request.party_size})
+
+        # A product covers every calendar day in its stay, including the
+        # checkout day. Resolve date-specific stock before asking the model for
+        # copy, so a sparse or invented itinerary can never reach publication.
+        missing_by_day: dict[date, list[str]] = {}
+        trip_days = [request.target_date + timedelta(days=day) for day in range(int(getattr(request, "nights", 1) or 1) + 1)]
+        for day in trip_days:
+            required_slots = (
+                ("餐饮体验（午餐或晚餐）", lambda item: item.available_date == day and _partner_is_meal(item)),
+                ("上午体验", lambda item: item.available_date == day and not _is_dining_resource(item) and _partner_covers_window(item, "MORNING")),
+                ("下午体验", lambda item: item.available_date == day and not _is_dining_resource(item) and _partner_covers_window(item, "AFTERNOON")),
+            )
+            for label, matches in required_slots:
+                if any(matches(item) for item in chosen):
+                    continue
+                candidate = next((item for item in candidate_order if matches(item) and can_add(item)), None)
+                if candidate is None:
+                    missing_by_day.setdefault(day, []).append(label)
+                else:
+                    add(candidate)
+
+            if any(
+                item.available_date == day
+                and not _is_dining_resource(item)
+                and Decimal(str(item.market_price or 0)) > 0
+                for item in chosen
+            ):
+                continue
+            paid_candidate = next((
+                item for item in candidate_order
+                if item.available_date == day
+                and not _is_dining_resource(item)
+                and Decimal(str(item.market_price or 0)) > 0
+                and can_add(item)
+            ), None)
+            if paid_candidate is None:
+                missing_by_day.setdefault(day, []).append("付费体验")
+            else:
+                add(paid_candidate)
+
+        if missing_by_day:
+            missing = "; ".join(
+                f"{day.isoformat()}：{'、'.join(slots)}"
+                for day, slots in sorted(missing_by_day.items())
+            )
+            raise AppError(
+                "DAILY_ITINERARY_INCOMPLETE",
+                f"当前日期资源不足，无法组成完整行程（{missing}）。请补充对应日期的可售体验或餐饮场次，或调整日期、预算和已选体验。",
+                field="resource_selections",
+                retryable=True,
+                details={"missing_by_day": {day.isoformat(): slots for day, slots in missing_by_day.items()}},
+            )
+
+        for candidate in candidate_order:
+            if can_add(candidate):
+                add(candidate)
         return selections
 
     def _variant_manual_selections(
@@ -238,8 +401,8 @@ class ProductService:
                 select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.id.in_(service_ids))
             ).all()
         }
-        slots: list[tuple[time | None, time | None, str]] = [
-            (service.start_time, service.end_time, service.service_name)
+        slots: list[tuple[date, time | None, time | None, str]] = [
+            (service.available_date, service.start_time, service.end_time, service.service_name)
             for row in service_rows
             if (service := services.get(int(row["resource_id"]))) and blocks_schedule(service)
         ]
@@ -258,16 +421,22 @@ class ProductService:
         offset = variant_index % len(partner_rows)
         rotated = partner_rows[offset:] + partner_rows[:offset]
         accepted: list[dict[str, Any]] = []
+        part_counts: dict[tuple[date, str], int] = {}
         for row in rotated:
             partner = partners.get(int(row["resource_id"]))
             if not partner:
                 # Let the authoritative validation below report an invalid ID.
                 accepted.append(row)
                 continue
-            if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in slots):
+            part, cap = _partner_daypart(partner)
+            part_key = (partner.available_date, part)
+            if part_counts.get(part_key, 0) >= cap:
+                continue
+            if any(day == partner.available_date and intervals_overlap(partner.start_time, partner.end_time, start, end) for day, start, end, _ in slots):
                 continue
             accepted.append(row)
-            slots.append((partner.start_time, partner.end_time, partner.resource_name))
+            slots.append((partner.available_date, partner.start_time, partner.end_time, partner.resource_name))
+            part_counts[part_key] = part_counts.get(part_key, 0) + 1
 
         # Preserve the original payload if there is no valid alternative; the
         # normal validation will return a concrete operator-facing reason.
@@ -277,14 +446,14 @@ class ProductService:
         merchant = resource.merchant
         return bool(
             merchant
-            and resource.available_date == request.target_date
+            and request.target_date <= resource.available_date <= _trip_last_date(request)
             and resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=resource.package_enabled, resource_status=resource.status, capacity=resource.remaining_capacity, source_type=resource.source_type)
             and resource.remaining_capacity >= request.party_size
         )
 
     def _payload(self, request: GenerateProductRequest, room: RoomInventory, selections: list[dict[str, Any]], *, variant_index: int = 0) -> dict[str, Any]:
         services = list(self.db.scalars(select(HotelService).where(HotelService.hotel_id == self.hotel_id, HotelService.available_date == request.target_date)).all())
-        partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date == request.target_date)).unique().all())
+        partners = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.available_date >= request.target_date, PartnerResource.available_date <= _trip_last_date(request))).unique().all())
         allowed_ids = {(str(item["resource_type"]), int(item["resource_id"])) for item in selections}
         # Keep the full multi-day evidence in the operations UI, but only send
         # evidence usable by this specific product date to the generation skill.
@@ -305,6 +474,8 @@ class ProductService:
         return {
             "hotel_id": self.hotel_id,
             "target_date": request.target_date.isoformat(),
+            "nights": int(getattr(request, "nights", 1) or 1),
+            "trip_days": int(getattr(request, "nights", 1) or 1) + 1,
             "weather": request.weather,
             "target_crowd": request.target_crowd,
             "party_size": request.party_size,
@@ -316,8 +487,8 @@ class ProductService:
             "preferred_price": str(request.preferred_price) if request.preferred_price is not None else "由房价下限决定",
             "room_inventory": {"id": room.id, "room_type": room.room_type, "max_guests": room.max_guests, "features": room.features, "suitable_crowds": room.suitable_crowds, "tags": room.tags, "available_count": room.available_count},
             "requested_selections": selections,
-            "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE" and ("HOTEL_SERVICE", item.id) in allowed_ids],
-            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if ("PARTNER_RESOURCE", item.id) in allowed_ids and item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
+            "allowed_hotel_services": [{"id": item.id, "service_name": item.service_name, "service_type": item.service_type, "available_date": item.available_date.isoformat(), "status": item.status, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "unit_cost": str(item.unit_cost)} for item in services if item.status == "AVAILABLE" and ("HOTEL_SERVICE", item.id) in allowed_ids],
+            "allowed_partner_resources": [{"id": item.id, "resource_name": item.resource_name, "category": item.category, "available_date": item.available_date.isoformat(), "description": item.description, "address": item.address, "start_time": item.start_time.strftime("%H:%M") if item.start_time else None, "end_time": item.end_time.strftime("%H:%M") if item.end_time else None, "remaining_capacity": item.remaining_capacity, "settlement_price": str(item.settlement_price), "indoor": item.indoor, "suitable_crowds": item.suitable_crowds, "weather_tags": item.weather_tags, "source_type": item.source_type, "status": item.status, "package_enabled": item.package_enabled, "merchant_status": item.merchant.cooperation_status if item.merchant else "TERMINATED"} for item in partners if ("PARTNER_RESOURCE", item.id) in allowed_ids and item.merchant and resource_is_usable(merchant_status=item.merchant.cooperation_status, package_enabled=item.package_enabled, resource_status=item.status, capacity=item.remaining_capacity, source_type=item.source_type)],
             # These facts are advisory context only. IDs, capacities, prices and
             # constraints remain selected and checked below in FastAPI.
             "weather_forecast": self.intelligence_context.get("weather"),
@@ -327,40 +498,30 @@ class ProductService:
         }
 
     def _marketing_assets(self, assets, *, product_name: str, theme: str, target_crowd: str, weather: str, target_date: object, price: Decimal | str, room: RoomInventory, resources: list[ProductResource], variant_index: int = 0, copy_style: str = "SEEDING", generated_image: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """Replace only the poster visual with the server-owned media renderer."""
-        partner_name = "杭州城市体验"
-        address = "杭州体验场地"
-        for row in resources:
-            if row.resource_type != "PARTNER_RESOURCE":
-                continue
-            partner = self.db.get(PartnerResource, row.resource_id)
-            if partner:
-                partner_name, address = partner.resource_name, partner.address or address
-                break
+        """Keep channel copy assets; discard legacy poster assets."""
         rendered: list[dict[str, Any]] = []
         for asset in assets:
             data = asset.model_dump(mode="json") if hasattr(asset, "model_dump") else dict(asset)
-            data["copy_style"] = copy_style
             if data.get("asset_type") == "POSTER":
-                creative_angle = str(data.get("creative_angle") or data.get("visual_brief") or "")
-                data.update(poster_asset(title=data.get("title") or product_name, content=data.get("content") or theme, partner_name=partner_name, room_name=room.room_type, address=address, price=str(price), target_crowd=target_crowd, theme=theme, weather=weather, target_date=str(target_date), variant_index=variant_index, creative_angle=creative_angle, media_url=str((generated_image or {}).get("image_url") or "") or None))
-                if generated_image:
-                    data.update(generated_image)
+                continue
+            data["copy_style"] = copy_style
             rendered.append(data)
         return rendered
 
     def generate(self, request: GenerateProductRequest, *, variant_index: int = 0, initial_status: str = "DRAFT") -> tuple[TravelProduct, dict[str, Any], str, bool]:
         room = self._room(request)
         manual_selections = [item.model_dump() for item in request.resource_selections]
-        # The inventory choice is made before the creative call.  In automatic
-        # mode every variant gets one compatible partner experience, rather
-        # than sending a whole list of overlapping "back-up" sessions to the
-        # model and later failing the package time check.
+        # Resolve a compatible multi-day set before the creative call. Selected
+        # experiences anchor the schedule; the model never chooses inventory.
         selections = (
             self._variant_manual_selections(request, manual_selections, variant_index=variant_index)
             if manual_selections
             else self._default_selections(request, room, variant_index=variant_index)
         )
+        if manual_selections:
+            selections = self._default_selections(
+                request, room, variant_index=variant_index, base_selections=selections
+            )
         selected_partner_ids = [int(item["resource_id"]) for item in selections if item["resource_type"] == "PARTNER_RESOURCE"]
         selected_partners_for_arrival = list(self.db.scalars(
             select(PartnerResource).where(
@@ -415,7 +576,14 @@ class ProductService:
         weather_label = {"RAIN": "有雨", "SUNNY": "晴天", "CLOUDY": "多云"}.get(str(request.weather or "").upper(), "当前天气")
         crowd_label = {"FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友同行", "SOLO": "独自出行", "LOCAL_WEEKEND": "本地周末客", "ALL": "不限客群"}.get(str(request.target_crowd or "").upper(), "当前客群")
         crowd_names = {"FAMILY": "亲子家庭", "COUPLE": "两人同行", "FRIENDS": "朋友同行", "SOLO": "独自出行", "LOCAL_WEEKEND": "本地周末客", "ALL": "不限人群"}
-        schedule_slots: list[tuple[time | None, time | None, str]] = []
+        daypart_counts: dict[tuple[date, str], int] = {}
+        for partner in selected_partners:
+            part, cap = _partner_daypart(partner)
+            key = (partner.available_date, part)
+            daypart_counts[key] = daypart_counts.get(key, 0) + 1
+            if daypart_counts[key] > cap:
+                raise AppError("DAYPART_CAPACITY", f"{partner.available_date.isoformat()} 的{part}时段最多安排 {cap} 项", field="resource_selections", retryable=True)
+        schedule_slots: list[tuple[date, time | None, time | None, str]] = []
         for service in services:
             if service is None:
                 continue
@@ -424,13 +592,13 @@ class ProductService:
             # draft must not silently change their per-package quantities.
             q = requested_quantity
             self._validate_service(service, request, q)
-            if blocks_schedule(service) and any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
+            if blocks_schedule(service) and any(day == service.available_date and intervals_overlap(service.start_time, service.end_time, start, end) for day, start, end, _ in schedule_slots):
                 raise AppError("TIME_CONFLICT", f"酒店服务{service.service_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
             resource_rows.append(ProductResource(resource_type="HOTEL_SERVICE", resource_id=service.id, resource_name=service.service_name, quantity_per_package=q, unit_cost=service.unit_cost, replaceable=service.replaceable, required=True))
             capacity_inputs.append(CapacityInput(service.service_name, service.available_quantity, q))
             unit_cost += service.unit_cost * q
             if blocks_schedule(service):
-                schedule_slots.append((service.start_time, service.end_time, service.service_name))
+                schedule_slots.append((service.available_date, service.start_time, service.end_time, service.service_name))
         for partner in selected_partners:
             requested_quantity = requested_by_type.get(("PARTNER_RESOURCE", partner.id), {}).get("quantity_per_package", 1)
             q = requested_quantity
@@ -445,12 +613,12 @@ class ProductService:
                 compatibility_notes.append(
                     f"客群提示：当前按{crowd_label}设计，但{partner.resource_name}登记适合{suitable}；保留该体验，商品说明中应提示运营确认接待与年龄要求。"
                 )
-            if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in schedule_slots):
+            if any(day == partner.available_date and intervals_overlap(partner.start_time, partner.end_time, start, end) for day, start, end, _ in schedule_slots):
                 raise AppError("TIME_CONFLICT", f"文化体验{partner.resource_name}与套餐内其他活动时间冲突", field="resource_selections", retryable=True)
             resource_rows.append(ProductResource(resource_type="PARTNER_RESOURCE", resource_id=partner.id, resource_name=partner.resource_name, quantity_per_package=q, unit_cost=partner.settlement_price, replaceable=True, required=True))
             capacity_inputs.append(CapacityInput(partner.resource_name, partner.remaining_capacity, q))
             unit_cost += partner.settlement_price * q
-            schedule_slots.append((partner.start_time, partner.end_time, partner.resource_name))
+            schedule_slots.append((partner.available_date, partner.start_time, partner.end_time, partner.resource_name))
         transfer_issue = _partner_transfer_issue(selected_partners)
         if transfer_issue:
             raise AppError("TRAVEL_BUFFER_INSUFFICIENT", transfer_issue, field="resource_selections", retryable=True)
@@ -558,6 +726,7 @@ class ProductService:
         return self._payload(request, room, selections)
 
     def regenerate_marketing(self, product: TravelProduct, creative_direction: str = "", *, style: str = "SEEDING", generate_image: bool = False) -> tuple[str, bool]:
+        # Keep accepting the legacy parameter; this refresh now updates copy only.
         # Marketing refresh is a dedicated Skill, not a re-run of product
         # generation: stayscape-marketing-writer rewrites only the creative
         # packaging, and never touches recommendation_reason / risk_message
@@ -567,19 +736,16 @@ class ProductService:
         room = self.db.get(RoomInventory, product.room_inventory_id)
         if room is None:
             raise AppError("ROOM_NOT_FOUND", "产品关联客房不存在，无法重新生成营销素材")
-        generated_image: dict[str, Any] | None = None
-        if generate_image:
-            generated_image = WanImageService().generate(marketing_image_prompt(self.db, product, output, style))
         product.marketing_title = output.marketing_title
         product.marketing_content = output.marketing_content
-        product.marketing_assets = self._marketing_assets(output.marketing_assets, product_name=product.product_name, theme=product.theme, target_crowd=product.target_crowd, weather=product.weather, target_date=product.target_date, price=product.suggested_price, room=room, resources=list(product.resources), variant_index=0, copy_style=style, generated_image=generated_image)
+        product.marketing_assets = self._marketing_assets(output.marketing_assets, product_name=product.product_name, theme=product.theme, target_crowd=product.target_crowd, weather=product.weather, target_date=product.target_date, price=product.suggested_price, room=room, resources=list(product.resources), variant_index=0, copy_style=style)
         self.db.flush()
         return result.trace_id, result.fallback_used
 
     def _validate_service(self, service: HotelService, request: GenerateProductRequest, quantity: int) -> None:
         if quantity <= 0:
             raise AppError("VALIDATION_ERROR", "每套服务消耗量必须大于0", field=f"service_{service.id}")
-        if service.available_date != request.target_date or service.status != "AVAILABLE" or service.available_quantity <= 0:
+        if not request.target_date <= service.available_date <= _trip_last_date(request) or service.status != "AVAILABLE" or service.available_quantity <= 0:
             raise AppError("HOTEL_SERVICE_UNAVAILABLE", f"酒店服务{service.service_name}当前不可用", field="resource_selections", retryable=True)
         validate_interval(service.start_time, service.end_time, service.service_name)
 
@@ -589,8 +755,8 @@ class ProductService:
         merchant = partner.merchant
         if not merchant or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity, source_type=partner.source_type):
             raise AppError("PARTNER_RESOURCE_UNAVAILABLE", f"合作资源{partner.resource_name}当前不可组包", field="resource_selections", retryable=True)
-        if partner.available_date != request.target_date:
-            raise AppError("DATE_NOT_MATCHED", "合作资源日期与入住日期不一致", field="target_date", retryable=True)
+        if not request.target_date <= partner.available_date <= _trip_last_date(request):
+            raise AppError("DATE_NOT_MATCHED", "合作体验日期不在本次旅程内", field="target_date", retryable=True)
         validate_interval(partner.start_time, partner.end_time, partner.resource_name)
 
     def recalculate_for_event(self, event: ResourceChangeEvent) -> list[dict[str, Any]]:
@@ -631,32 +797,32 @@ class ProductService:
         unit_cost = room.accounting_cost
         invalid_reason = None
         partner_row = None
-        schedule_slots: list[tuple[time | None, time | None, str]] = []
+        schedule_slots: list[tuple[date, time | None, time | None, str]] = []
         scheduled_partners: list[PartnerResource] = []
         for row in rows:
             if row.resource_type == "ROOM":
                 continue
             if row.resource_type == "HOTEL_SERVICE":
                 service = self.db.get(HotelService, row.resource_id)
-                if not service or service.available_date != product.target_date or service.status != "AVAILABLE" or service.available_quantity <= 0:
+                if not service or not product.target_date <= service.available_date <= product.target_date + timedelta(days=max(1, int(product.nights or 1))) or service.status != "AVAILABLE" or service.available_quantity <= 0:
                     invalid_reason = f"酒店服务{row.resource_name}不可用"
                     break
                 if service.start_time and service.end_time and service.start_time >= service.end_time:
                     invalid_reason = f"酒店服务{row.resource_name}时间无效"
                     break
-                if blocks_schedule(service) and any(intervals_overlap(service.start_time, service.end_time, start, end) for start, end, _ in schedule_slots):
+                if blocks_schedule(service) and any(day == service.available_date and intervals_overlap(service.start_time, service.end_time, start, end) for day, start, end, _ in schedule_slots):
                     invalid_reason = f"酒店服务{row.resource_name}与套餐内其他活动时间冲突"
                     break
                 capacity_inputs.append(CapacityInput(service.service_name, service.available_quantity, row.quantity_per_package))
                 unit_cost += service.unit_cost * row.quantity_per_package
                 row.unit_cost = service.unit_cost
                 if blocks_schedule(service):
-                    schedule_slots.append((service.start_time, service.end_time, service.service_name))
+                    schedule_slots.append((service.available_date, service.start_time, service.end_time, service.service_name))
             elif row.resource_type == "PARTNER_RESOURCE":
                 partner_row = row
                 partner = self.db.get(PartnerResource, row.resource_id)
                 merchant = self.db.get(Merchant, partner.merchant_id) if partner else None
-                if not partner or not merchant or partner.available_date != product.target_date or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity, source_type=partner.source_type):
+                if not partner or not merchant or not product.target_date <= partner.available_date <= product.target_date + timedelta(days=max(1, int(product.nights or 1))) or not resource_is_usable(merchant_status=merchant.cooperation_status, package_enabled=partner.package_enabled, resource_status=partner.status, capacity=partner.remaining_capacity, source_type=partner.source_type):
                     replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
                     if replacement:
                         replacement_id = replacement.id
@@ -672,12 +838,12 @@ class ProductService:
                 if not partner:
                     invalid_reason = "合作资源不可用"
                     break
-                if partner.available_date != product.target_date:
+                if not product.target_date <= partner.available_date <= product.target_date + timedelta(days=max(1, int(product.nights or 1))):
                     invalid_reason = f"{partner.resource_name}日期与产品入住日期不一致"
                     break
-                if any(intervals_overlap(partner.start_time, partner.end_time, start, end) for start, end, _ in schedule_slots):
+                if any(day == partner.available_date and intervals_overlap(partner.start_time, partner.end_time, start, end) for day, start, end, _ in schedule_slots):
                     replacement = self._find_replacement(product, row, room, capacity_inputs, unit_cost)
-                    if replacement and not any(intervals_overlap(replacement.start_time, replacement.end_time, start, end) for start, end, _ in schedule_slots):
+                    if replacement and not any(day == replacement.available_date and intervals_overlap(replacement.start_time, replacement.end_time, start, end) for day, start, end, _ in schedule_slots):
                         replacement_id = replacement.id
                         row.resource_id = replacement.id
                         row.resource_name = replacement.resource_name
@@ -688,10 +854,19 @@ class ProductService:
                         break
                 capacity_inputs.append(CapacityInput(partner.resource_name, partner.remaining_capacity, row.quantity_per_package))
                 unit_cost += partner.settlement_price * row.quantity_per_package
-                schedule_slots.append((partner.start_time, partner.end_time, partner.resource_name))
+                schedule_slots.append((partner.available_date, partner.start_time, partner.end_time, partner.resource_name))
                 scheduled_partners.append(partner)
         if not invalid_reason:
             invalid_reason = _partner_transfer_issue(scheduled_partners)
+        if not invalid_reason:
+            counts: dict[tuple[date, str], int] = {}
+            for partner in scheduled_partners:
+                part, cap = _partner_daypart(partner)
+                key = (partner.available_date, part)
+                counts[key] = counts.get(key, 0) + 1
+                if counts[key] > cap:
+                    invalid_reason = f"{partner.available_date.isoformat()} 的{part}时段超过安排上限"
+                    break
         if invalid_reason:
             product.sale_quantity = 0
             product.status = "PAUSED"
@@ -750,7 +925,7 @@ class ProductService:
         old = self.db.get(PartnerResource, row.resource_id)
         if not old:
             return None
-        candidates = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.id != old.id, PartnerResource.available_date == product.target_date, PartnerResource.category == old.category, PartnerResource.package_enabled.is_(True), PartnerResource.status == "AVAILABLE", PartnerResource.source_type.in_(["PARTNER", "DEMO"]), Merchant.cooperation_status == "ACTIVE").order_by(PartnerResource.settlement_price)).unique().all())
+        candidates = list(self.db.scalars(select(PartnerResource).join(Merchant).options(selectinload(PartnerResource.merchant)).where(Merchant.hotel_id == self.hotel_id, PartnerResource.id != old.id, PartnerResource.available_date == old.available_date, PartnerResource.category == old.category, PartnerResource.package_enabled.is_(True), PartnerResource.status == "AVAILABLE", PartnerResource.source_type.in_(["PARTNER", "DEMO"]), Merchant.cooperation_status == "ACTIVE").order_by(PartnerResource.settlement_price)).unique().all())
         for candidate in candidates:
             if candidate.remaining_capacity < row.quantity_per_package:
                 continue
@@ -761,7 +936,7 @@ class ProductService:
             if any(
                 intervals_overlap(candidate.start_time, candidate.end_time, source.start_time, source.end_time)
                 for source in [self.db.get(HotelService, existing.resource_id) if existing.resource_type == "HOTEL_SERVICE" else self.db.get(PartnerResource, existing.resource_id) for existing in product.resources if existing.id != row.id and existing.resource_type in {"HOTEL_SERVICE", "PARTNER_RESOURCE"}]
-                if source is not None and (not isinstance(source, HotelService) or blocks_schedule(source))
+                if source is not None and getattr(source, "available_date", None) == candidate.available_date and (not isinstance(source, HotelService) or blocks_schedule(source))
             ):
                 continue
             try:

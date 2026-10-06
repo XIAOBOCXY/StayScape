@@ -4,10 +4,6 @@ from pydantic import BaseModel, Field, field_validator
 
 
 _ASSET_TYPE_ALIASES = {
-    "POSTER": "POSTER",
-    "海报": "POSTER",
-    "宣传海报": "POSTER",
-    "旅行海报": "POSTER",
     "SOCIAL_POST": "SOCIAL_POST",
     "图文": "SOCIAL_POST",
     "图文笔记": "SOCIAL_POST",
@@ -38,15 +34,13 @@ def _plain_text(value: Any) -> Any:
 
 
 class MarketingAssetOutput(BaseModel):
-    asset_type: Literal["POSTER", "SOCIAL_POST", "SHORT_VIDEO_SCRIPT", "STORE_CARD"]
+    asset_type: Literal["SOCIAL_POST", "SHORT_VIDEO_SCRIPT", "STORE_CARD"]
     platform: str = Field(min_length=1, max_length=60)
     title: str = Field(min_length=1, max_length=180)
     content: str = Field(default="", max_length=4000)
     visual_brief: str = Field(default="", max_length=500)
     call_to_action: str = Field(default="", max_length=180)
-    poster_svg: str = Field(default="", max_length=300000)
     creative_angle: str = Field(default="", max_length=260)
-    poster_style: str = Field(default="", max_length=200)
 
     @field_validator("asset_type", mode="before")
     @classmethod
@@ -59,8 +53,6 @@ class MarketingAssetOutput(BaseModel):
         raw = value.strip().replace(" ", "")
         if raw in _ASSET_TYPE_ALIASES:
             return _ASSET_TYPE_ALIASES[raw]
-        if "海报" in raw:
-            return "POSTER"
         if any(token in raw for token in ("视频", "抖音")):
             return "SHORT_VIDEO_SCRIPT"
         if any(token in raw for token in ("图文", "笔记", "推文", "小红书", "社媒", "攻略")):
@@ -82,7 +74,6 @@ class ProductAgentOutput(BaseModel):
     marketing_content: str = ""
     marketing_assets: list[MarketingAssetOutput] = Field(default_factory=list)
     creative_angle: str = Field(default="", max_length=260)
-    poster_style: str = Field(default="", max_length=200)
     recommendation_reason: str = ""
     risk_message: str = ""
 
@@ -98,7 +89,6 @@ class MarketingAgentOutput(BaseModel):
     marketing_content: str = ""
     marketing_assets: list[MarketingAssetOutput] = Field(default_factory=list)
     creative_angle: str = Field(default="", max_length=260)
-    poster_style: str = Field(default="", max_length=200)
 
 
 class VisitorAgentOutput(BaseModel):

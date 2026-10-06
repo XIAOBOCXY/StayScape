@@ -31,29 +31,18 @@ Honor `creative_direction` when supplied. Otherwise use a concrete editorial
 seeding tone that sounds helpful, not like a fabricated traveller review.
 Allowed: “适合周末不想赶行程的人”。Avoid: “我上周刚住过，真的太值了”。
 
-Create five assets with different jobs:
+Create four outputs with different jobs:
 
 1. `marketing_title`: a clear public headline;
 2. `social_post`: a skimmable scene, reasons to go and soft CTA;
 3. `short_video_script`: 0–3 second hook, scene progression and closing CTA;
 4. `store_card`: what it is, who it fits, included highlights and key limits;
-5. `poster_brief`: visual direction only.
 
 Do not duplicate the same paragraph across channels. Keep material risks across
 the asset set, but adapt their strength to the channel instead of repeating a
 generic disclaimer everywhere.
 
-## Poster brief
-
-Return semantic fields such as `creative_angle`, `poster_style`,
-`primary_subject`, `scene`, `composition`, `text_safe_area`, `visual_mood` and
-`avoid`. Do not place Chinese text, prices, inclusions or schedule details in
-the image layer; the server renderer adds validated text. Do not return an
-internet image URL as a supplied asset.
-
-When the caller supplies recent visual history, make the new direction differ
-in at least two of primary subject, environment, camera perspective,
-time-of-day cue, composition and mood.
+Do not create poster artwork, SVG, or image-generation prompts. Existing product photos remain attached to their source resources.
 
 ## Safety boundary
 

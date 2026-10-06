@@ -17,9 +17,9 @@ from .knowledge_service import CURATED_HANGZHOU_KNOWLEDGE
 # Every visitor product is anchored to a hotel room night, so the shortest
 # sellable package is 2 days / 1 night and there is no "day trip" option.
 DEFAULT_STAY_NIGHTS = 1
-MAX_STAY_NIGHTS = 3
-_CHECK_IN_TIME = "15:00"
-_CHECK_OUT_TIME = "12:00"
+MAX_STAY_NIGHTS = 5
+_CHECK_IN_TIME = "13:00"
+_CHECK_OUT_TIME = "13:00"
 _LATEST_DAY_ONE_MINUTES = 13 * 60
 
 _INTERNAL_LANGUAGE = re.compile(
@@ -314,7 +314,7 @@ def _clock_minutes(value: object) -> int | None:
     return int(match.group(1)) * 60 + int(match.group(2))
 
 
-_SLOT_LABELS = {"MORNING": "上午", "AFTERNOON": "下午", "NIGHT": "晚上", "ALL_DAY": "全天", "ANY": "灵活"}
+_SLOT_LABELS = {"MORNING": "上午", "AFTERNOON": "下午", "NIGHT": "晚上", "ALL_DAY": "全天", "ANY": "可选时间"}
 
 
 def _duration_minutes(item: dict[str, Any]) -> int | None:
@@ -444,7 +444,7 @@ def route_proximity(from_address: object, to_address: object) -> dict[str, Any]:
 
     source = str(from_address or "").strip()
     target = str(to_address or "").strip()
-    if not _address_is_specific(source) or not _address_is_specific(target):
+    if (not _address_is_specific(source) or not _address_is_specific(target)) and not (_district(source) and _district(target)):
         return {
             "label": "地址待补全",
             "buffer_minutes": None,
@@ -549,6 +549,170 @@ def _public_route_places(crowd_code: str, weather: str, hotel_address: str, reso
     return sorted(places, key=score, reverse=True)
 
 
+
+_OPEN_PUBLIC_STOP_COPY = {
+    "west-lake-scenic-area": (
+        "沿西湖开放湖岸步道挑选一段慢走，在柳浪闻莺一带看湖面、柳岸与远山；晨间适合散步拍照，傍晚适合看湖光变化。此处安排为公共步行观景，游船、登岛和收费场馆另计。",
+        120,
+    ),
+    "grand-canal-hangzhou": (
+        "沿大运河岸边步道慢行，看看桥梁、河道和沿岸街区，可与小河直街或拱宸桥周边串联；白天适合看街景，傍晚适合感受水岸灯影。当前安排为公共岸线步行，乘船和场馆消费另计。",
+        90,
+    ),
+    "xiaohezhijie": (
+        "沿小河直街的青石巷、河埠和旧建筑慢慢走，感受运河边的生活气息；适合拍照、看街巷细节，也适合与拱宸桥片区连走。街区步行本身轻松，店铺消费和个别展点另计。",
+        90,
+    ),
+    "hubin-pedestrian-street": (
+        "沿湖滨步行街和西湖水岸漫步，把城市街景、湖面观景与短暂停留放在同一段路上；傍晚到夜间适合散步，白天可接西湖湖岸路线。此处为公共步行安排，餐饮、购物和游船消费另计。",
+        90,
+    ),
+    "qinghefang": (
+        "从河坊街走进清河坊老街，看看南宋御街、老字号和传统街巷交织的杭州旧城风貌；午后适合慢逛，入夜后街景更有烟火气。公共街巷步行不另收费，店铺、展馆和体验项目按现场价格自理。",
+        90,
+    ),
+    "qianjiang-city-balcony": (
+        "沿钱江新城城市阳台步行，近看钱塘江水岸、远眺城市天际线；日落前后适合拍照，夜间可感受江岸与城市灯光。当前安排是开放公共空间漫步，沿线演出、展馆及其他商业项目另计。",
+        90,
+    ),
+}
+
+
+def build_included_public_places(
+    resources: list[dict[str, Any]],
+    stay: dict[str, Any],
+    *,
+    crowd_code: str = "",
+    weather: str = "",
+    route_preference: str = "",
+) -> list[dict[str, Any]]:
+    """Place a small number of open public walks into actual free itinerary slots.
+
+    These are included itinerary stops with no purchasable inventory. Ticketed
+    venues and commercial activities are deliberately excluded.
+    """
+    try:
+        start_date = date.fromisoformat(str(stay.get("check_in") or "")[:10])
+    except ValueError:
+        return []
+    nights = max(DEFAULT_STAY_NIGHTS, int(stay.get("nights") or DEFAULT_STAY_NIGHTS))
+    trip_days = nights + 1
+    hotel_address = str(stay.get("hotel_address") or "")
+    reference_addresses = [str(item.get("address") or "") for item in resources if item.get("address")]
+    candidates = [
+        item for item in _public_route_places(crowd_code, weather, hotel_address, reference_addresses, route_preference)
+        if str(item.get("slug") or "") in _OPEN_PUBLIC_STOP_COPY and item.get("address")
+    ]
+    selected_names: set[str] = set()
+    result: list[dict[str, Any]] = []
+
+    def minute(value: object) -> int | None:
+        return _clock_minutes(value)
+
+    def resource_date(item: dict[str, Any]) -> date | None:
+        raw = str(item.get("available_date") or "")[:10]
+        try:
+            return date.fromisoformat(raw) if raw else None
+        except ValueError:
+            return None
+
+    def transfer_buffer(from_address: object, to_address: object) -> int:
+        source, target = str(from_address or "").strip(), str(to_address or "").strip()
+        if source and target and source == target:
+            return 0
+        return int(route_proximity(source, target).get("buffer_minutes") or 30)
+
+    for day_index in range(1, trip_days + 1):
+        visit_date = start_date + timedelta(days=day_index - 1)
+        day_resources = [
+            item for item in resources
+            if item.get("resource_type") != "ROOM"
+            and resource_date(item) in {None, visit_date}
+        ]
+        # An untimed booking cannot be safely interleaved with a public stop.
+        if any(
+            item.get("resource_type") == "PARTNER_RESOURCE"
+            and not (item.get("start_time") and item.get("end_time"))
+            for item in day_resources
+        ):
+            continue
+        counts = {"MORNING": 0, "AFTERNOON": 0, "EVENING": 0}
+        for item in day_resources:
+            start = minute(item.get("start_time"))
+            if start is None:
+                continue
+            slot = "MORNING" if start < 12 * 60 else "AFTERNOON" if start < 18 * 60 else "EVENING"
+            counts[slot] += 1
+        windows = [("09:30", "MORNING")]
+        if 1 < day_index < trip_days:
+            windows.append(("13:30", "AFTERNOON"))
+        # On the departure day keep the walk before the noon checkout.
+        added_for_day = False
+        for start_text, slot in windows:
+            cap = {"MORNING": 2, "AFTERNOON": 3, "EVENING": 1}[slot]
+            if counts[slot] >= cap:
+                continue
+            start_minute = minute(start_text)
+            if start_minute is None:
+                continue
+            for place in candidates:
+                name = str(place.get("name") or "")
+                slug = str(place.get("slug") or "")
+                if not name or name in selected_names:
+                    continue
+                description, default_duration = _OPEN_PUBLIC_STOP_COPY[slug]
+                duration = min(120, max(60, int(place.get("suggested_duration_minutes") or default_duration)))
+                end_minute = start_minute + duration
+                if day_index == trip_days and hotel_address:
+                    if end_minute + transfer_buffer(place.get("address"), hotel_address) > 12 * 60:
+                        continue
+                conflicting = False
+                for item in day_resources:
+                    item_start = minute(item.get("start_time"))
+                    item_end = minute(item.get("end_time"))
+                    if item_start is None or item_end is None:
+                        continue
+                    if start_minute < item_end and item_start < end_minute:
+                        conflicting = True
+                        break
+                    address = str(item.get("address") or hotel_address)
+                    if item_end <= start_minute and start_minute - item_end < transfer_buffer(address, place.get("address")):
+                        conflicting = True
+                        break
+                    if end_minute <= item_start and item_start - end_minute < transfer_buffer(place.get("address"), address):
+                        conflicting = True
+                        break
+                if conflicting:
+                    continue
+                end_text = f"{end_minute // 60:02d}:{end_minute % 60:02d}"
+                selected_names.add(name)
+                result.append({
+                    "id": -(day_index * 100 + len(result) + 1),
+                    "resource_id": slug,
+                    "resource_type": "PUBLIC_REFERENCE",
+                    "resource_name": name,
+                    "description": description,
+                    "available_date": visit_date.isoformat(),
+                    "day_index": day_index,
+                    "time": f"{start_text}–{end_text}",
+                    "start_time": start_text,
+                    "end_time": end_text,
+                    "slot_label": "上午" if slot == "MORNING" else "下午",
+                    "duration_minutes": duration,
+                    "duration_text": _duration_text(duration),
+                    "address": str(place.get("address") or ""),
+                    "included": True,
+                    "route_only": False,
+                    "experience_kind": "OPEN_PUBLIC",
+                })
+                counts[slot] += 1
+                added_for_day = True
+                break
+            if added_for_day:
+                break
+    return result
+
+
 def _slot_summary(entries: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for slot in ("MORNING", "AFTERNOON", "NIGHT", "ALL_DAY"):
@@ -613,13 +777,17 @@ def build_day_plan(
     entries.sort(key=lambda item: _clock_minutes(item.get("time", "").split("–")[0]) or 0)
     all_day = [item for item in entries if item["slot"] == "ALL_DAY"]
     compact_route = any(word in str(route_preference or "") for word in ("特种兵", "紧凑"))
-    public_places = _public_route_places(
-        crowd_code,
-        str(weather or "").upper(),
-        hotel_address,
-        [str(item.get("address") or "") for item in experiences],
-        route_preference,
-    )
+    public_places = [
+        place for place in _public_route_places(
+            crowd_code,
+            str(weather or "").upper(),
+            hotel_address,
+            [str(item.get("address") or "") for item in experiences],
+            route_preference,
+        )
+        if str(place.get("verification_status") or "") == "ACTIVE"
+        and str(place.get("opening_hours") or "").strip()
+    ]
 
     def public_entry(place: dict[str, Any], time_text: str, slot: str, role: str, visit_date: date | None = None) -> dict[str, Any]:
         duration = int(place.get("suggested_duration_minutes") or 90)
@@ -777,17 +945,19 @@ def build_day_plan(
             afternoon_core["description"] += f" 上午{morning_activity['title']}活动量较大，下午安排{afternoon_core['title']}放慢节奏，给体力留出恢复时间。"
         elif morning_intensity == "高" and afternoon_intensity == "高":
             afternoon_core["description"] += f" 上午{morning_activity['title']}后接着安排{afternoon_core['title']}，当天活动较密集，适合主打紧凑型城市游。"
-    latest_activity_end = max(
+    latest_activity = max(
         (
-            _clock_minutes(item.get("end_time"))
-            for item in [*timed_core, *first_items]
+            item for item in [*timed_core, *first_items]
             if item.get("slot") != "NIGHT"
             and item.get("kind") in {"PARTNER_RESOURCE", "PUBLIC_REFERENCE"}
             and _clock_minutes(item.get("end_time")) is not None
         ),
-        default=0,
+        key=lambda item: _clock_minutes(item.get("end_time")) or 0,
+        default=None,
     )
-    checkin_minute = max(15 * 60, latest_activity_end)
+    latest_activity_end = _clock_minutes(latest_activity.get("end_time")) if latest_activity else 0
+    return_minutes = _transfer_minutes(latest_activity.get("address"), hotel_address) if latest_activity and hotel_address else 0
+    checkin_minute = max(_clock_minutes(_CHECK_IN_TIME) or 13 * 60, (latest_activity_end or 0) + return_minutes)
     checkin_time = f"{checkin_minute // 60:02d}:{checkin_minute % 60:02d} 后"
     first_items.append(
         _stay_entry(
@@ -1128,6 +1298,7 @@ def visitor_product_to_dict(
         # List cards never render itinerary, route, review or asset detail. Avoid
         # building those fields only to strip them again in compact_product_payload.
         data["day_plan"] = []
+        data["included_public_places"] = []
         data["route_plan"] = []
         data["detail_sections"] = None
         data["reviews"] = []
@@ -1150,9 +1321,15 @@ def visitor_product_to_dict(
         elif resource.get("resource_type") == "HOTEL_SERVICE":
             fallback = f"{name}在酒店内使用{time_text or '，按当天行程安排'}，到店后向前台报商品名称即可。"
         else:
-            fallback = f"{name}位于{address}{time_text}，现场由工作人员引导，建议提前10分钟抵达。"
+            fallback = f"{name}位于{address}{time_text}；到场要求以订单确认的场次信息为准。"
         resource["description"] = public_travel_copy(resource.get("description"), fallback)
 
+    data["included_public_places"] = build_included_public_places(
+        resources,
+        stay,
+        crowd_code=str(data.get("target_crowd") or ""),
+        weather=str(data.get("weather") or "").upper(),
+    )
     data["day_plan"] = build_day_plan(
         resources,
         stay,
@@ -1192,14 +1369,11 @@ def visitor_product_to_dict(
     assets: list[dict[str, Any]] = []
     for raw_asset in data.get("marketing_assets") or []:
         asset = dict(raw_asset)
+        if asset.get("asset_type") == "POSTER":
+            continue
         for key in ("title", "content", "visual_brief", "creative_angle", "call_to_action"):
             if key in asset:
                 asset[key] = public_travel_copy(asset.get(key), "")
-        poster_svg = str(asset.get("poster_svg") or "")
-        if poster_svg and not poster_svg.lstrip().lower().startswith("<svg"):
-            asset["poster_svg"] = ""
-        elif _INTERNAL_LANGUAGE.search(poster_svg):
-            asset["poster_svg"] = _INTERNAL_LANGUAGE.sub("杭州旅居", poster_svg)
         assets.append(asset)
     data["marketing_assets"] = assets
     return data

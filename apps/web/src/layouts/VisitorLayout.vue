@@ -5,6 +5,8 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 // 旅居助手是整屏对话页：页面本身不滚动，只滚动对话内容。
 const isChat = computed(() => route.path.startsWith('/visitor/assistant'))
+const isCatalog = computed(() => route.path === '/visitor/products')
+const isProductDetail = computed(() => /^\/visitor\/products\/\d+/.test(route.path))
 </script>
 
 <template>
@@ -21,7 +23,7 @@ const isChat = computed(() => route.path.startsWith('/visitor/assistant'))
       </nav>
       <div class="visitor-live"><i /> 杭州周末</div>
     </header>
-    <main class="visitor-main visitor-main--editorial"><router-view /></main>
+    <main :class="['visitor-main', 'visitor-main--editorial', { 'visitor-main--catalog': isCatalog, 'visitor-main--detail': isProductDetail }]"><router-view /></main>
     <footer class="visitor-footer"><span>杭州旅居</span> · 把一间余房，变成一段值得出发的杭州故事</footer>
   </div>
 </template>
@@ -49,7 +51,11 @@ const isChat = computed(() => route.path.startsWith('/visitor/assistant'))
   overflow: hidden;
 }
 .visitor-shell--chat .visitor-footer { display: none; }
+.visitor-main--catalog { width: 100%; max-width: none; padding: 18px 18px 52px; box-sizing: border-box; }
+.visitor-main--detail { width: 100%; max-width: none; padding: 12px 18px 90px; box-sizing: border-box; }
 @media (max-width: 700px) {
+  .visitor-main--catalog { padding: 14px 0 40px; }
+  .visitor-main--detail { padding: 10px 14px 90px; }
   .visitor-shell--chat .visitor-main,
   .visitor-shell--chat .visitor-main--editorial { padding: 8px 12px 10px; }
 }

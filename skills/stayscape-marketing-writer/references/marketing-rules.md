@@ -7,10 +7,7 @@
   Never invent a landmark, attraction, brand, endorsement or right.
 - `PUBLIC_REFERENCE` resources are recommendation-only and must never be
   written as a bookable package element.
-- The poster asset is a visual *brief*, not finished artwork. Return
-  `creative_angle` and `poster_style` only. The FastAPI renderer selects
-  curated media and owns the SVG; never return an internet image URL as a
-  supplied asset.
+- Do not create poster artwork, SVG, or image-generation prompts. Keep existing product photos attached to their source resources.
 - Honor the supplied `creative_direction` marketing style when present.
 - Preserve allergy, child-age, weather and time-conflict risk in the copy.
   Never promise that an experience is safe or available; route those to hotel

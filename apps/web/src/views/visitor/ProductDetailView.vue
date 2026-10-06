@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { posterSvgDataUri } from '../../utils/posterSvg'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast } from 'vant'
@@ -8,11 +7,10 @@ import { errorMessage } from '../../api/client'
 import MediaImage from '../../components/MediaImage.vue'
 import ProductCard from '../../components/ProductCard.vue'
 import VisitorAssistant from '../../components/VisitorAssistant.vue'
-import type { MarketingAsset, TravelProduct } from '../../types'
-import { experienceLabelZh, experienceMoments, heroMedia, mediaForProduct, mediaForResource } from '../../utils/productMedia'
+import type { IncludedPublicPlace, TravelProduct } from '../../types'
+import { experienceLabelZh, experienceMoments, highlightMediaForResource, itineraryMediaForResource, mediaForProduct, mediaForResource, primaryProductMedia } from '../../utils/productMedia'
 import { publicTravelCopy } from '../../utils/publicTravelCopy'
 import { loadVisitorProfile, saveVisitorProfile, type VisitorProfile, visitorConversationId } from '../../utils/visitorProfile'
-import { useCountdown } from '../../utils/countdown'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,7 +26,6 @@ const chats = ref<Array<{ user?: string; answer?: string; suggestions?: TravelPr
 const consultLoading = ref(false)
 const intentDialog = ref(false)
 const intentLoading = ref(false)
-const posterDialog = ref(false)
 const assistantOpen = ref(false)
 const assistantMinimized = ref(false)
 const targetDateLabel = computed(() => {
@@ -48,7 +45,6 @@ const intentNeeds = reactive<VisitorProfile>({
 })
 
 const gallery = computed(() => experienceMoments(product.value))
-const resourceCount = computed(() => product.value?.resources.length || 0)
 // The length of stay belongs to the product itself, so the page only reports
 // the bound stay instead of letting a visitor re-schedule it.
 const nights = ref(1)
@@ -56,9 +52,365 @@ const stay = computed(() => product.value?.stay || null)
 const stayLabel = computed(() => stay.value?.label || '2天1晚')
 const stayPrice = computed(() => String(stay.value?.price || product.value?.suggested_price || ''))
 const stayOptions = computed(() => stay.value?.options || [])
-const dayPlan = computed(() => product.value?.day_plan || [])
+function guideOpenDuring(guide: Record<string, any>, date: string, start: number, end: number) {
+  const hours = String(guide.opening_hours || '')
+  if (!hours) return false
+  const ranges = [...hours.matchAll(/(\d{1,2}):(\d{2})\s*(?:-|–|—|~|～|至|到)\s*(\d{1,2}):(\d{2})/g)]
+  if (!ranges.length) return false
+  const [year, month, day] = date.split('-').map(Number)
+  const weekday = year && month && day ? new Date(Date.UTC(year, month - 1, day)).getUTCDay() : null
+  const dayName = weekday === null ? '' : '周' + ['日', '一', '二', '三', '四', '五', '六'][weekday]
+  if (dayName && (hours.includes(dayName + '闭馆') || hours.includes(dayName + '休馆'))) return false
+  return ranges.some((match) => {
+    const open = Number(match[1]) * 60 + Number(match[2])
+    const close = Number(match[3]) * 60 + Number(match[4])
+    return open < end && close > start
+  })
+}
+function freeTimeSuggestions(date: string, start: number, end: number, crowd: string) {
+  const group = ({ FAMILY: '亲子家庭', COUPLE: '双人同行', FRIENDS: '朋友同行', SOLO: '独自出行' } as Record<string, string>)[crowd] || '同行游客'
+  return guides.value
+    .filter((guide) => guideOpenDuring(guide, date, start, end))
+    .filter((guide) => !['COUPLE', 'FRIENDS', 'SOLO'].includes(crowd) || !/亲子|孩子|儿童|少儿|4[–-]12岁/.test(String(guide.title || '') + String(guide.content || guide.summary || '')))
+    .slice(0, 2)
+    .map((guide) => {
+      const title = String(guide.title || guide.name || '附近地点')
+      const category = String(guide.category_label || '')
+      const reason = String(guide.content || guide.summary || '').split(/[。！？!?；;]/)[0].trim()
+      return { title: title + (category ? '｜' + category : ''), detail: [guideDurationLabel(guide) ? '约 ' + guideDurationLabel(guide) : '', reason, '适合' + group].filter(Boolean).join(' · ') }
+    })
+}
+function formatScheduleClock(minutes: number) {
+  return String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0')
+}
+function cleanHotelAddress(value: unknown) {
+  return String(value || '').replace(/StayScape\s*杭州测试酒店|杭州测试酒店|StayScape\s*测试酒店/gi, '').replace(/^[\s,，·｜|]+|[\s,，·｜|]+$/g, '').trim()
+}
+function itineraryDuration(entry: Record<string, any>) {
+  const match = String(entry.time || '').match(/(?:^|\s)(\d{1,2}:\d{2})\s*[–—-]\s*(\d{1,2}:\d{2})(?:$|\s)/)
+  if (!match) return String(entry.duration_text || '')
+  const toMinutes = (clock: string) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3, 5))
+  let duration = toMinutes(match[2]) - toMinutes(match[1])
+  if (duration < 0) duration += 24 * 60
+  const hours = Math.floor(duration / 60)
+  const minutes = duration % 60
+  return `约 ${hours ? `${hours} 小时` : ''}${hours && minutes ? ' ' : ''}${minutes ? `${minutes} 分钟` : ''}`.trim()
+}
+
+const dayPlan = computed(() => {
+  const current = product.value
+  if (!current) return []
+  const plan = stay.value
+  const nightsCount = Math.max(1, Number(plan?.nights || 1))
+  const startDate = String(plan?.check_in || current.target_date || '').slice(0, 10)
+  const dateStamp = (value: string) => {
+    const [year, month, day] = value.split('-').map(Number)
+    return year && month && day ? Date.UTC(year, month - 1, day) : 0
+  }
+  const startMs = startDate ? dateStamp(startDate) : 0
+  const days: Array<Record<string, any>> = Array.from({ length: nightsCount + 1 }, (_, index) => {
+    const date = startMs ? new Date(startMs + index * 86400000).toISOString().slice(0, 10) : ''
+    return { day_index: index + 1, label: '第 ' + (index + 1) + ' 天', date, title: index === 0 ? '入住与体验安排' : index === nightsCount ? '继续体验 · 退房返程' : '继续体验与自由活动', summary: '', items: [] }
+  })
+  const resources = current.resources.filter((r) => ['ROOM', 'HOTEL_SERVICE', 'PARTNER_RESOURCE'].includes(r.resource_type))
+  for (const r of resources) {
+    if (r.resource_type === 'ROOM') continue
+    const resourceDate = String((r as any).available_date || startDate).slice(0, 10)
+    const resourceMs = resourceDate ? dateStamp(resourceDate) : startMs
+    const dayIndex = startMs && resourceMs ? Math.floor((resourceMs - startMs) / 86400000) + 1 : 1
+    if (dayIndex < 1 || dayIndex > days.length) continue
+    const time = r.start_time ? String(r.start_time).slice(0, 5) + (r.end_time ? '–' + String(r.end_time).slice(0, 5) : '') : ''
+    const hour = Number(String(r.start_time || '').slice(0, 2))
+    const slot = r.resource_type === 'HOTEL_SERVICE' ? '酒店服务' : !time ? '体验' : hour < 12 ? '上午' : hour < 18 ? '下午' : '晚间'
+    days[dayIndex - 1].items.push({
+      kind: r.resource_type, title: r.resource_name, time, slot_label: slot,
+      description: usefulCopy(r.description, r.resource_name + '。'), address: r.address || '',
+      duration_text: '', notes: r.booking_notice || '',
+      included: true, route_only: false, schedule_conflict: false,
+      sort_time: r.start_time ? Number(String(r.start_time).slice(0, 2)) * 60 + Number(String(r.start_time).slice(3, 5)) : 1440,
+    })
+  }
+  for (const stop of (current.included_public_places || [])) {
+    const stopDate = String(stop.available_date || '').slice(0, 10)
+    const stopMs = stopDate ? dateStamp(stopDate) : startMs
+    const dayIndex = Number(stop.day_index || (startMs && stopMs ? Math.floor((stopMs - startMs) / 86400000) + 1 : 1))
+    if (dayIndex < 1 || dayIndex > days.length) continue
+    const start = String(stop.start_time || '').slice(0, 5)
+    const end = String(stop.end_time || '').slice(0, 5)
+    days[dayIndex - 1].items.push({
+      kind: 'PUBLIC_REFERENCE',
+      title: stop.resource_name,
+      time: start && end ? start + '–' + end : stop.time,
+      slot_label: stop.slot_label,
+      description: stop.description,
+      address: stop.address,
+      duration_text: stop.duration_text,
+      notes: '',
+      included: true,
+      route_only: false,
+      schedule_conflict: false,
+      media_resource: stop,
+      sort_time: start ? Number(start.slice(0, 2)) * 60 + Number(start.slice(3, 5)) : 1440,
+    })
+  }
+  const room = resources.find((r) => r.resource_type === 'ROOM')
+  if (room) {
+    const hotelAddress = cleanHotelAddress(plan?.hotel_address || room.address || '')
+    const clockMinutes = (value: unknown) => {
+      const match = String(value || '').match(/^(\d{1,2}):(\d{2})/)
+      return match ? Number(match[1]) * 60 + Number(match[2]) : null
+    }
+    const formatClock = (value: number) => String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0')
+    const firstDay = days[0]
+    const firstStops = firstDay.items.filter((item: Record<string, any>) => ['PARTNER_RESOURCE', 'PUBLIC_REFERENCE'].includes(item.kind))
+    const earliest = [...firstStops].sort((a: Record<string, any>, b: Record<string, any>) => (clockMinutes(a.time) ?? 1440) - (clockMinutes(b.time) ?? 1440))[0]
+    const baggage = resources.some((item) => item.resource_type === 'HOTEL_SERVICE' && /行李寄存/.test(item.resource_name)) || /行李寄存/.test(String(room.description || ''))
+    if (baggage && earliest) {
+      const firstRoute = (current.route_plan || []).find((routeDay) => Number(routeDay.day_index) === 1)
+      const outbound = firstRoute?.legs?.find((item) =>
+        String(item.to_stop || '').includes(String(earliest.title)) && /酒店|住宿|前台|房/.test(String(item.from_stop || '')),
+      )
+      const travel = Math.max(0, Number(outbound?.minutes || 0))
+      const departure = (clockMinutes(earliest.time) ?? 540) - travel
+      const time = Math.max(7 * 60, departure - 12)
+      firstDay.items.push({ kind: 'HOTEL_SERVICE', title: '酒店前台寄存行李', time: formatClock(time), slot_label: '出发前', description: '可先在酒店前台寄存行李，再按预留的交通时间前往首项体验。', address: hotelAddress, included: true, route_only: false, sort_time: time })
+    }
+    const lastStop = [...firstStops].filter((item: Record<string, any>) => clockMinutes(String(item.time).split('–')[1]) !== null)
+      .sort((a: Record<string, any>, b: Record<string, any>) => (clockMinutes(String(b.time).split('–')[1]) ?? 0) - (clockMinutes(String(a.time).split('–')[1]) ?? 0))[0]
+    const activityEnd = lastStop ? clockMinutes(String(lastStop.time).split('–')[1]) : null
+    const leg = lastStop ? (current.route_plan || []).find((day) => Number(day.day_index) === 1)?.legs?.find((item) => item.from_stop.includes(String(lastStop.title)) && /入住|酒店/.test(item.to_stop)) : null
+    const travel = Math.max(0, Number(leg?.minutes || 0))
+    if (lastStop && activityEnd !== null && travel > 0) {
+      firstDay.items.push({ kind: 'TRANSFER', title: '返回酒店', time: formatClock(activityEnd) + '–' + formatClock(activityEnd + travel), slot_label: '返程', description: '从' + lastStop.title + '返回酒店办理入住。', address: hotelAddress, duration_text: '约 ' + travel + ' 分钟', notes: String(leg?.mode || leg?.distance_label || ''), included: false, route_only: true, sort_time: activityEnd })
+    }
+    const checkIn = Math.max(clockMinutes(plan?.check_in_time || '13:00') ?? 13 * 60, (activityEnd ?? 0) + travel)
+    const roomCopy = String(room.description || '').split(/[；。]/).map((part) => part.trim()).filter((part) => part && !/入住|退房|行李寄存|含\d+晚住宿/.test(part)).slice(0, 1).join('')
+    const details = [room.resource_name + '，含 ' + (plan?.nights || 1) + ' 晚住宿', roomCopy, baggage ? '可提前寄存行李；体验结束后返回酒店办理入住。' : '当天体验结束后返回酒店办理入住。'].filter(Boolean).join('。')
+    firstDay.items.push({ id: room.id, resource_id: room.resource_id, kind: 'ROOM', title: '入住 · ' + room.resource_name, time: activityEnd === null ? formatClock(checkIn) + ' 后' : formatClock(checkIn), slot_label: '酒店入住', description: details, address: hotelAddress, quantity_text: '', included: true, route_only: false, sort_time: checkIn })
+    const last = days[days.length - 1]
+    const checkout = clockMinutes(plan?.check_out_time || '13:00') ?? 13 * 60
+    last.items.push({ id: room.id, resource_id: room.resource_id, kind: 'ROOM', title: '办理退房', time: formatClock(checkout) + ' 前', slot_label: '酒店退房', description: baggage ? '退房后可将行李寄存在酒店前台，按返程安排取回。' : '结束本次入住。', address: hotelAddress, quantity_text: '', included: true, route_only: false, sort_time: checkout })
+  }
+  let freePeriodUsed = false
+  for (const day of days) {
+    const scheduled = day.items
+      .filter((item: Record<string, any>) => ['PARTNER_RESOURCE', 'PUBLIC_REFERENCE', 'HOTEL_SERVICE'].includes(item.kind))
+      .map((item: Record<string, any>) => {
+        const match = String(item.time || '').match(/^(\d{1,2}):(\d{2})\s*[–—-]\s*(\d{1,2}):(\d{2})$/)
+        if (!match) return null
+        return { item, start: Number(match[1]) * 60 + Number(match[2]), end: Number(match[3]) * 60 + Number(match[4]) }
+      })
+      .filter((entry: Record<string, any> | null): entry is Record<string, any> => Boolean(entry))
+      .sort((a: Record<string, any>, b: Record<string, any>) => a.start - b.start)
+    if (!freePeriodUsed && scheduled.length && scheduled[0].start >= 14 * 60) {
+      const first = scheduled[0]
+      const dayRoute = (current.route_plan || []).find((routeDay) => Number(routeDay.day_index) === Number(day.day_index))
+      const inbound = dayRoute?.legs?.find((leg) =>
+        String(leg.to_stop || '').includes(String(first.item.title)) && /酒店|住宿|前台|房/.test(String(leg.from_stop || '')),
+      )
+      const travel = Math.max(0, Number(inbound?.minutes || 0))
+      const freeStart = 12 * 60
+      const freeEnd = first.start - travel
+      if (freeEnd - freeStart >= 120) {
+        const suggestions = freeTimeSuggestions(day.date, freeStart, freeEnd, String(current.target_crowd || ''))
+        day.items.push({
+          kind: 'FREE_TIME',
+          title: '午餐与体验前安排',
+          time: formatScheduleClock(freeStart) + '–' + formatScheduleClock(freeEnd),
+          slot_label: '午间',
+          description: '午餐自行安排；可从下方附近地点中择一短游，并为前往首项体验预留时间。',
+          suggestions,
+          included: false,
+          route_only: true,
+          sort_time: freeStart,
+        })
+        if (travel > 0) {
+          day.items.push({
+            kind: 'TRANSFER',
+            title: '前往' + first.item.title,
+            time: formatScheduleClock(freeEnd) + '–' + formatScheduleClock(first.start),
+            slot_label: '前往体验',
+            description: '从酒店前往' + first.item.title + '。',
+            address: first.item.address || '',
+            duration_text: '约 ' + travel + ' 分钟',
+            notes: String(inbound?.mode || inbound?.distance_label || ''),
+            included: false,
+            route_only: true,
+            sort_time: freeEnd,
+          })
+        }
+        freePeriodUsed = true
+      }
+    }
+    for (let index = 0; index < scheduled.length - 1; index += 1) {
+      const previous = scheduled[index]
+      const next = scheduled[index + 1]
+      const gap = next.start - previous.end
+      const dayRoute = (current.route_plan || []).find((routeDay) => Number(routeDay.day_index) === Number(day.day_index))
+      const leg = dayRoute?.legs?.find((item) =>
+        String(item.from_stop || '').includes(String(previous.item.title)) && String(item.to_stop || '').includes(String(next.item.title)),
+      )
+      const travel = Math.max(0, Number(leg?.minutes || 0))
+      const hasTransfer = travel > 0 && travel < gap
+      const freeEnd = hasTransfer ? next.start - travel : next.start
+      if (hasTransfer) {
+        day.items.push({
+          kind: 'TRANSFER',
+          title: '前往' + next.item.title,
+          time: formatScheduleClock(freeEnd) + '–' + formatScheduleClock(next.start),
+          slot_label: '前往下一项',
+          description: '从' + previous.item.title + '前往' + next.item.title + '。',
+          address: next.item.address || '',
+          duration_text: '约 ' + travel + ' 分钟',
+          notes: String(leg?.mode || leg?.distance_label || ''),
+          included: false,
+          route_only: true,
+          sort_time: freeEnd,
+        })
+      }
+      if (freePeriodUsed || freeEnd - previous.end < 120) continue
+      const suggestions = freeTimeSuggestions(day.date, previous.end, freeEnd, String(current.target_crowd || ''))
+      day.items.push({
+        kind: 'FREE_TIME',
+        title: previous.end < 12 * 60 && next.start > 12 * 60 ? '午餐与自由活动' : '自由活动',
+        time: formatScheduleClock(previous.end) + '–' + formatScheduleClock(freeEnd),
+        slot_label: '自由活动',
+        description: suggestions.length
+          ? '午餐自行安排，午餐后可从附近地点中择一短游，并为下一项体验预留路程时间。'
+          : '午餐与休息自行安排，可按兴趣短途漫游；请预留前往下一项体验地点的时间。',
+        suggestions,
+        included: false,
+        route_only: true,
+        sort_time: previous.end,
+      })
+      freePeriodUsed = true
+    }
+    const toClockMinutes = (clock: string) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3, 5))
+    const dayRoute = (current.route_plan || []).find((routeDay) => Number(routeDay.day_index) === Number(day.day_index))
+    const formalStops = day.items
+      .filter((item: Record<string, any>) => ['PARTNER_RESOURCE', 'PUBLIC_REFERENCE'].includes(item.kind))
+      .map((item: Record<string, any>) => {
+        const range = String(item.time || '').match(/(\d{1,2}:\d{2})\s*[–—-]\s*(\d{1,2}:\d{2})/)
+        if (!range) return null
+        return { item, start: toClockMinutes(range[1]), end: toClockMinutes(range[2]) }
+      })
+      .filter((entry: Record<string, any> | null): entry is Record<string, any> => Boolean(entry))
+      .sort((a: Record<string, any>, b: Record<string, any>) => a.start - b.start)
+    const firstFormal = formalStops[0]
+    if (firstFormal) {
+      const route = (current.route_plan || []).find((item) => Number(item.day_index) === Number(day.day_index))
+      const inbound = route?.legs?.find((leg) =>
+        String(leg.to_stop || '').includes(String(firstFormal.item.title)) && /酒店|住宿|前台|房/.test(String(leg.from_stop || '')),
+      )
+      const minutes = Math.max(0, Number(inbound?.minutes || 0))
+      const title = '前往' + firstFormal.item.title
+      const exists = day.items.some((item: Record<string, any>) => item.kind === 'TRANSFER' && item.title === title)
+      if (minutes > 0 && !exists) {
+        const start = Math.max(0, firstFormal.start - minutes)
+        day.items.push({ kind: 'TRANSFER', title, time: formatScheduleClock(start) + '–' + formatScheduleClock(firstFormal.start),
+          slot_label: '前往体验', description: '从酒店前往当天首项正式行程。', address: firstFormal.item.address || '',
+          duration_text: '', notes: [inbound?.mode, inbound?.distance_label].filter(Boolean).join(' · '),
+          transport_info: [inbound?.mode, inbound?.distance_label].filter(Boolean).join(' · '),
+          included: false, route_only: true, sort_time: start })
+      }
+      const lastFormal = formalStops[formalStops.length - 1]
+      const returnLeg = lastFormal && dayRoute?.legs?.find((leg: Record<string, any>) =>
+        String(leg.from_stop || '').includes(String(lastFormal.item.title)) && /酒店|入住|退房|取行李/.test(String(leg.to_stop || '')),
+      )
+      const returnMinutes = Math.max(0, Number(returnLeg?.minutes || 0))
+      const alreadyReturning = day.items.some((item: Record<string, any>) => item.kind === 'TRANSFER' && /返回酒店|返回酒店取行李/.test(String(item.title || '')))
+      if (lastFormal && returnMinutes > 0 && !alreadyReturning) {
+        const returnStart = lastFormal.end
+        const returnEnd = returnStart + returnMinutes
+        const returnTitle = '返回酒店取行李'
+        day.items.push({ kind: 'TRANSFER', title: returnTitle,
+          time: formatScheduleClock(returnStart) + '–' + formatScheduleClock(returnEnd),
+          slot_label: '返店', description: '从' + lastFormal.item.title + '返回酒店，取回行李并办理退房。',
+          address: String(stay.value?.hotel_address || ''), duration_text: '',
+          notes: [returnLeg?.mode, returnLeg?.distance_label].filter(Boolean).join(' · '),
+          transport_info: [returnLeg?.mode, returnLeg?.distance_label].filter(Boolean).join(' · '),
+          included: false, route_only: true, sort_time: returnStart })
+        const checkoutItem = day.items.find((item: Record<string, any>) => /退房/.test(String(item.title || '')))
+        const deadlineText = String(checkoutItem?.time || '').match(/\d{1,2}:\d{2}/)?.[0]
+        const deadline = deadlineText ? toClockMinutes(deadlineText) : 13 * 60
+        if (checkoutItem && deadline > returnEnd) {
+          checkoutItem.time = formatScheduleClock(returnEnd) + '–' + formatScheduleClock(deadline)
+          checkoutItem.title = '办理退房 · 取回行李'
+          checkoutItem.description = '返回酒店后整理行李、办理退房，最晚退房时间为 ' + formatScheduleClock(deadline) + '。'
+          checkoutItem.sort_time = returnEnd
+        }
+      }
+    }
+    day.items.sort((a: Record<string, any>, b: Record<string, any>) => a.sort_time - b.sort_time)
+    day.items.forEach((item: Record<string, any>) => {
+      item.duration_text = itineraryDuration(item)
+      item.location = item.address || ''
+      item.transport_info = item.transport_info || (item.kind === 'TRANSFER' ? item.notes || '' : '')
+      item.inclusion_status = item.included ? (item.kind === 'PUBLIC_REFERENCE' ? 'included_in_itinerary' : 'included_in_package') : 'optional'
+      delete item.sort_time
+    })
+    day.summary = ''
+  }
+  return days
+})
+const highlightResources = computed(() => [
+  ...(product.value?.resources || []),
+  ...(product.value?.included_public_places || []),
+])
+function highlightMedia(item: TravelProduct['resources'][number] | IncludedPublicPlace, index: number) {
+  return highlightMediaForResource(product.value, item as TravelProduct['resources'][number], index)
+}
+function itineraryMediaResource(entry: Record<string, any>) {
+  if (entry.media_resource) return entry.media_resource
+  return {
+    id: entry.id || entry.resource_id || 0,
+    resource_id: entry.resource_id || 0,
+    resource_type: entry.kind || entry.resource_type || 'PARTNER_RESOURCE',
+    resource_name: entry.title || entry.resource_name || '行程体验',
+    description: entry.description || '',
+    image_url: entry.image_url || '',
+    image_source: entry.image_source || '',
+    image_attribution: entry.image_attribution || '',
+  }
+}
 const alternatives = ref<{ room_types: Array<Record<string, any>>; same_room_packages: Array<Record<string, any>> }>({ room_types: [], same_room_packages: [] })
 const roomOptions = ref<Array<Record<string, any>>>([])
+const roomOptionsLoading = ref(false)
+const roomOptionsScroller = ref<HTMLElement | null>(null)
+const roomScrollAtStart = ref(true)
+const roomScrollAtEnd = ref(false)
+function updateRoomScrollState() {
+  const el = roomOptionsScroller.value
+  if (!el) {
+    roomScrollAtStart.value = true
+    roomScrollAtEnd.value = true
+    return
+  }
+  const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth)
+  roomScrollAtStart.value = el.scrollLeft <= 2
+  roomScrollAtEnd.value = maxScroll <= 2 || maxScroll - el.scrollLeft <= 2
+}
+function scrollRoomOptions(direction: -1 | 1) {
+  const el = roomOptionsScroller.value
+  if (!el) return
+  const card = el.querySelector<HTMLElement>(':scope > button')
+  const styles = window.getComputedStyle(el)
+  const gap = Number.parseFloat(styles.columnGap || styles.gap || '0') || 0
+  const step = card ? card.getBoundingClientRect().width + gap : el.clientWidth * 0.8
+  el.scrollBy({ left: direction * step, behavior: 'smooth' })
+  window.setTimeout(updateRoomScrollState, 320)
+}
+function onRoomOptionsWheel(event: WheelEvent) {
+  const el = roomOptionsScroller.value
+  if (!el || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  if (el.scrollWidth <= el.clientWidth) return
+  el.scrollBy({ left: event.deltaY, behavior: 'auto' })
+  event.preventDefault()
+}
+watch(roomOptions, async () => {
+  await nextTick()
+  updateRoomScrollState()
+}, { deep: true, flush: 'post' })
 const dateOptions = ref<Array<Record<string, any>>>([])
 const selectedRoomId = ref<number | null>(null)
 // 支持用 ?room=<room_inventory_id> 直接打开某个房型（分享链接 / 刷新后保持）。
@@ -68,20 +420,17 @@ if (route.query.room) {
 }
 const roomSwitching = ref(false)
 const soldOut = computed(() => !previewMode.value && Number(product.value?.sale_quantity || 0) <= 0)
+const soldOutDateLabel = computed(() => `${targetDateLabel.value}已售罄`)
+const hasAvailableOtherDate = computed(() => dateOptions.value.some((item) => Number(item.sale_quantity || 0) > 0 && item.id !== product.value?.id))
+const hasAvailableAlternatives = computed(() =>
+  hasAvailableOtherDate.value || [...alternatives.value.room_types, ...alternatives.value.same_room_packages].some((item) => Number(item.sale_quantity || 0) > 0),
+)
 const roomFeatures = computed(() => {
   const room = product.value?.resources.find((item) => item.resource_type === 'ROOM')
   return String(room?.description || '')
 })
 const photoResource = computed(() => product.value?.resources.find((item) => /旅拍|摄影|拍照/.test(`${item.resource_name} ${item.description || ''}`)))
 const related = ref<TravelProduct[]>([])
-const countdown = useCountdown(() => product.value?.target_date)
-const routePlan = computed(() => product.value?.route_plan || [])
-const activeRouteDay = ref(1)
-watch(routePlan, (value) => {
-  if (value.length && !value.some((day) => day.day_index === activeRouteDay.value)) {
-    activeRouteDay.value = value[0].day_index
-  }
-})
 // A dense paragraph is hard to read on a phone, so the story is split into
 // sentence-sized paragraphs.
 const storyParagraphs = computed(() =>
@@ -96,21 +445,18 @@ const stayRange = computed(() => {
   return `${plan.check_in} 入住 · ${plan.check_out} 退房`
 })
 const crowdLabel = computed(() => ({ FAMILY: '亲子出行', COUPLE: '双人同游', FRIENDS: '好友相聚', SOLO: '一个人慢游' } as Record<string, string>)[String(product.value?.target_crowd || '')] || '城市旅行')
-const socialLines = computed(() => String(social.value?.content || '').split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 6))
-const poster = computed(() => product.value?.marketing_assets?.find((asset) => asset.asset_type === 'POSTER'))
-const social = computed(() => product.value?.marketing_assets?.find((asset) => asset.asset_type === 'SOCIAL_POST'))
 const heroIndex = ref(0)
 // 当前房型的实拍主图排在最前：切换房型时第一张图会立刻换成该房型，
 // 图库与亮点内容也随 product 一起刷新，不需要整页重载。
 const heroMediaList = computed(() => {
   const list = mediaForProduct(product.value)
-  const room = product.value?.resources.find((item) => item.resource_type === 'ROOM')
-  if (!room) return list
-  const roomMedia = mediaForResource(product.value, room)
-  return [roomMedia, ...list.filter((item) => item.id !== roomMedia.id)]
+  const primary = primaryProductMedia(product.value)
+  return [primary, ...list.filter((item) => item.id !== primary.id)]
 })
-const hero = computed(() => heroMediaList.value[heroIndex.value] || heroMediaList.value[0] || heroMedia(product.value))
+const hero = computed(() => heroMediaList.value[heroIndex.value] || heroMediaList.value[0] || primaryProductMedia(product.value))
 const heroTotal = computed(() => Math.max(1, heroMediaList.value.length))
+const heroRef = ref<HTMLElement | null>(null)
+const heroVisible = ref(true)
 function moveHero(delta: number) {
   heroIndex.value = (heroIndex.value + delta + heroTotal.value) % heroTotal.value
 }
@@ -139,8 +485,7 @@ const anchorSections = [
   { id: 'itinerary', label: '行程' },
   { id: 'fees', label: '费用' },
   { id: 'notice', label: '须知' },
-  { id: 'guides', label: '参考路线' },
-  { id: 'reviews', label: '评价' },
+  { id: 'guides', label: '附近可选' },
 ]
 const activeSection = ref('highlights')
 function updateAnchorFromScroll() {
@@ -156,8 +501,11 @@ function updateAnchorFromScroll() {
 }
 function setupAnchorSpy() {
   window.removeEventListener('scroll', updateAnchorFromScroll)
+  window.removeEventListener('scroll', updatePurchaseBarVisibility)
   window.addEventListener('scroll', updateAnchorFromScroll, { passive: true })
+  window.addEventListener('scroll', updatePurchaseBarVisibility, { passive: true })
   updateAnchorFromScroll()
+  updatePurchaseBarVisibility()
 }
 function scrollToSection(id: string) {
   const element = document.getElementById(id)
@@ -166,16 +514,24 @@ function scrollToSection(id: string) {
   const top = element.getBoundingClientRect().top + window.scrollY - 104
   window.scrollTo({ top, behavior: 'smooth' })
 }
+function scrollToAlternatives() {
+  const target = (hasAvailableOtherDate.value ? document.getElementById('purchase-options') : null)
+    || document.querySelector<HTMLElement>('.room-choice')
+    || document.getElementById('purchase-options')
+  target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+function updatePurchaseBarVisibility() {
+  const heroBounds = heroRef.value?.getBoundingClientRect()
+  // Keep the fixed purchase bar out of the first screen; show it only after
+  // the complete product summary has scrolled above the visitor header.
+  heroVisible.value = !heroBounds || heroBounds.bottom > 78
+}
 
 // 可住人数取自客房本身（max_guests），不再用同行人数，避免「最多 2 人」和房型「可住 3 人」打架。
 const roomMaxGuests = computed(() => {
   const current = roomOptions.value.find((item) => item.room_inventory_id === (product.value?.room_inventory_id || null))
   return Number(current?.max_guests || product.value?.party_size || 2)
 })
-// The formatted SVG is the share asset: it reserves dedicated space for the
-// route and title.  A Wan image remains the product hero, not a substitute
-// that can hide text in a sharing preview.
-const posterVisual = computed(() => poster.value?.poster_svg ? posterSvgDataUri(poster.value.poster_svg) : (poster.value?.image_url || ''))
 const FILLER_COPY = /不用把一天排满|把这段体验慢慢安排进你的杭州行程|把杭州的一段时光留给今天|把这段杭州时光留给周末|住进杭州，慢慢体验这座城市的另一面/i
 
 function usefulCopy(value: unknown, fallback = '') {
@@ -187,6 +543,7 @@ function usefulCopy(value: unknown, fallback = '') {
 }
 
 const roomResource = computed(() => product.value?.resources.find((item) => item.resource_type === 'ROOM'))
+const hotelAddressLabel = computed(() => cleanHotelAddress(stay.value?.hotel_address || roomResource.value?.address || ''))
 // 影音会员这类是房型特色，不计入「体验」，也不算进行程安排。
 const ROOM_FEATURE_WORDS = ['影音', '会员', '电影', '投影', '桌游', '迷你吧']
 function isRoomFeature(name?: string | null) {
@@ -205,23 +562,62 @@ const addressList = computed(() => {
   const values = product.value?.resources.map((item) => item.address).filter(Boolean) || []
   return [...new Set(values.map((item) => String(item)))]
 })
-const addressSummary = computed(() => addressList.value.join('、') || String(stay.value?.hotel_address || '酒店地址待补充'))
-const packageItems = computed(() => product.value?.resources.map((item) => item.resource_name).filter(Boolean).join('、') || '住宿与在地体验')
-// The stay is listed separately with its night count, so the fee list shows
-// only the experience and hotel-service lines to avoid duplicating the room.
-const feeResources = computed(() => (product.value?.resources || []).filter((item) => item.resource_type !== 'ROOM'))
+const purchaseIncludes = computed(() => {
+  const nightsCount = stay.value?.nights || 1
+  const room = roomResource.value?.resource_name || stay.value?.room_name || '酒店住宿'
+  const included = [`${room} × ${nightsCount} 晚`]
+  included.push(...experienceResources.value.map((item) => {
+    const quantity = Number(item.quantity_per_package || 1)
+    return `${item.resource_name}${quantity > 1 ? ` × ${quantity}` : ''}`
+  }).filter(Boolean))
+  included.push(...(product.value?.included_public_places || []).map((item) => String(item.resource_name || '').trim()).filter(Boolean))
+  return [...new Set(included)].join(' · ')
+})
+// Show paid package entitlements separately from included free public routes.
+const feeResources = computed(() => (product.value?.resources || []).filter((item) => item.resource_type === 'PARTNER_RESOURCE'))
+const feeHotelServices = computed(() => (product.value?.resources || []).filter((item) => item.resource_type === 'HOTEL_SERVICE'))
+const feePublicStops = computed(() => product.value?.included_public_places || [])
 const earliestExperience = computed(() => {
-  const item = [...experienceResources.value].filter((resource) => resource.start_time).sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))[0]
-  return item?.start_time ? item.start_time.slice(0, 5) : ''
+  const times = [
+    ...experienceResources.value.map((resource) => resource.start_time),
+    ...(product.value?.included_public_places || []).map((stop) => stop.start_time),
+  ].filter(Boolean).map((time) => String(time).slice(0, 5)).sort()
+  return times[0] || ''
 })
-const transportHint = computed(() => {
-  const address = addressSummary.value
-  if (/西湖|湖滨/.test(address)) return `建议导航至“${address}”，周末从龙翔桥站方向前往，至少预留 30 分钟。`
-  if (/运河|拱宸桥/.test(address)) return `建议导航至“${address}”，可从拱宸桥东站换乘步行或打车抵达。`
-  if (/良渚/.test(address)) return `建议导航至“${address}”，地铁 2 号线良渚站方向更方便。`
-  if (/湘湖/.test(address)) return `建议导航至“${address}”，地铁 1 号线湘湖站方向更方便。`
-  return `直接导航至“${address}”，按页面行程顺序抵达各体验点。`
-})
+function guideDurationLabel(guide: Record<string, any>) {
+  const minutes = Number(guide.suggested_duration_minutes || 0)
+  if (!minutes) return ''
+  if (minutes % 60 === 0) return String(minutes / 60) + ' 小时'
+  if (minutes < 60) return String(minutes) + ' 分钟'
+  return String(Math.floor(minutes / 60)) + ' 小时 ' + String(minutes % 60) + ' 分钟'
+}
+
+function guideRecommendedTime(guide: Record<string, any>) {
+  const explicit = String(guide.best_time || '').trim()
+  if (explicit) return explicit
+  const notes = String(guide.reservation_notice || '') + ' ' + String(guide.content || guide.summary || '')
+  const hint = notes.match(/(?:建议|推荐)(?:在)?(?:开馆后|开门后|上午|下午|傍晚|晚间)[^。；;]*/)
+  if (hint?.[0]) return hint[0]
+  const duration = guideDurationLabel(guide)
+  if (guide.opening_hours && duration) return `建议在开放时段前段到访，预留约 ${duration}，避免临近停止入场时赶行程。`
+  if (guide.opening_hours) return '建议在开放时段前段到访，并预留充足游览时间。'
+  return '出发前查看地点当日开放安排，再选择合适时段。'
+}
+
+function guideHowToGo(guide: Record<string, any>) {
+  const transport = String(guide.transport || '').trim()
+  if (transport) return transport
+  const address = String(guide.address || '').trim()
+  return address
+    ? `按此地址导航至${address}；公交、驾车或步行路线可根据你的出发位置实时规划。`
+    : '在地图中搜索地点名称，并按你的出发位置规划路线。'
+}
+
+function guideMapUrl(guide: Record<string, any>) {
+  const keyword = [guide.title, guide.address].filter(Boolean).join(' ')
+  return `https://uri.amap.com/search?keyword=${encodeURIComponent(keyword)}&city=${encodeURIComponent('杭州')}`
+}
+
 const guideQuery = computed(() => {
   if (!product.value) return '杭州旅行'
   // 参考路线跟着这套产品实际的体验地点走，而不是泛泛地搜「杭州」。
@@ -242,66 +638,70 @@ const story = computed(() => {
   const fallback = `以“${theme}”为主线，住进${room}，前往${place}完成${names}。套餐把住宿、到店时间和体验地点排在一起，到了杭州照着顺序走即可。`
   return usefulCopy(product.value?.marketing_content, fallback)
 })
-// Ratings and review text are stored per product; an unreviewed line shows no
-// score instead of a fixed marketing number.
-const reviews = computed(() => product.value?.reviews || [])
-const ratingAverage = computed(() => {
-  const value = product.value?.rating_average
-  return value === undefined || value === null || value === '' ? '—' : Number(value).toFixed(1)
-})
-const ratingCount = computed(() => Number(product.value?.rating_count || 0))
-function displayAdviceLines(value: unknown): string[] {
-  const source = Array.isArray(value) ? value.join('\n') : String(value || '')
-  return source.split(/\n+|[；;]|(?<=[。！？])\s*/)
-    .map((line) => line.trim().replace(/^[•·→⇒\s-]+/, ''))
-    .filter(Boolean)
-}
-
-const recommendationNote = computed(() => {
-  const time = earliestExperience.value ? `首个体验安排在 ${earliestExperience.value}` : '体验时间按行程卡片安排'
-  return `${time}；集合地点为${addressSummary.value}。${crowdLabel.value}可按页面路线前往。`
-})
-const reviewEntries = computed(() => {
-  const first = experienceResources.value[0]?.resource_name || '核心体验'
-  const second = experienceResources.value[1]?.resource_name || '酒店服务'
-  const place = addressList.value[0] || '酒店内'
-  return [
-    { title: '行程顺，信息很清楚', meta: `${crowdLabel.value} · 近期评价`, content: `从${place}开始，${first}的时间和地址都写得很具体，抵达后按顺序体验即可。` },
-    { title: '内容和住宿一次安排', meta: `套餐体验 · 5.0 分`, content: `${second}和住宿放在同一组商品里，沟通成本低；建议提前确认停车、集合入口和儿童需求。` },
-  ]
-})
 
 function resourceSummary(item: TravelProduct['resources'][number]) {
   const description = usefulCopy(item.description, '')
   if (description) return description
-  const place = item.address || (item.resource_type === 'ROOM' || item.resource_type === 'HOTEL_SERVICE' ? '酒店内' : '杭州')
   const time = item.start_time && item.end_time ? `，${item.start_time.slice(0, 5)}–${item.end_time.slice(0, 5)}` : ''
-  if (item.resource_type === 'ROOM') return `${item.resource_name}含一晚住宿，${item.quantity_per_package}间；早到时先在前台寄存行李，再按行程参加体验。`
-  if (item.resource_type === 'HOTEL_SERVICE') return `${item.resource_name}在酒店内使用${time || '，按当天行程安排'}，到店后向前台报商品名称即可。`
-  return `${item.resource_name}位于${place}${time}，现场由工作人员引导完成，建议提前 10 分钟抵达。`
+  if (item.resource_type === 'ROOM') return `${item.resource_name} · ${stay.value?.nights || 1}晚住宿 · ${item.quantity_per_package}间。`
+  if (item.resource_type === 'HOTEL_SERVICE') return `${item.resource_name}，酒店内使用${time}。`
+  return `${item.resource_name}${item.address ? ` · ${item.address}` : ''}${time}。`
+}
+
+function highlightCopy(item: TravelProduct['resources'][number] | IncludedPublicPlace) {
+  const row = item as any
+  const description = usefulCopy(row.description, '')
+  const sentences = description.match(/[^。！？!?]+[。！？!?]?/g) || []
+  const intro = sentences.slice(0, 2).join('').trim()
+  const name = String(row.resource_name || '行程体验')
+  if (row.resource_type === 'ROOM') {
+    return `${stay.value?.nights || 1} 晚住宿 · ${intro || '为每天游玩和休息留出完整时间。'}`
+  }
+  if (row.resource_type === 'HOTEL_SERVICE') {
+    return [intro, row.booking_notice].filter(Boolean).join(' ')
+  }
+  const details: string[] = []
+  if (intro) details.push(intro)
+  const start = String(row.start_time || '').slice(0, 5)
+  const end = String(row.end_time || '').slice(0, 5)
+  if (start && end) details.push(`${start}–${end}，约 ${itineraryDuration({ time: `${start}–${end}` }).replace(/^约\s*/, '')}`)
+  if (row.resource_type === 'PARTNER_RESOURCE') {
+    const count = Math.max(1, Number(row.quantity_per_package || 1))
+    details.push(`每套含 ${count} 份`)
+    if (row.indoor === true) details.push('室内体验，雨天仍可按场次安排')
+    if (row.minimum_age != null || row.maximum_age != null) {
+      details.push(`适用年龄 ${row.minimum_age ?? '不限'}–${row.maximum_age ?? '不限'} 周岁`)
+    }
+    if (row.booking_notice) details.push(String(row.booking_notice))
+    if (/陶艺|陶杯|陶瓷/.test(name)) {
+    }
+    return details.join(' ')
+  }
+  if (row.duration_text && !start) details.push(`建议停留 ${row.duration_text}`)
+  return details.join(' ') || `${name}已纳入本次行程安排。`
 }
 
 function resourceMeta(item: TravelProduct['resources'][number]) {
   const place = item.address || (item.resource_type === 'ROOM' || item.resource_type === 'HOTEL_SERVICE' ? '酒店内' : '杭州')
-  const time = item.start_time && item.end_time ? item.start_time.slice(0, 5) + ' – ' + item.end_time.slice(0, 5) : '按当日行程安排'
-  return place + ' · ' + time
+  const time = item.start_time && item.end_time ? item.start_time.slice(0, 5) + ' – ' + item.end_time.slice(0, 5) : ''
+  return [place, time].filter(Boolean).join(' · ')
 }
 
-function itineraryTime(item: TravelProduct['resources'][number], index: number) {
+function itineraryTime(item: TravelProduct['resources'][number]) {
   if (item.start_time && item.end_time) return `${item.start_time.slice(0, 5)} – ${item.end_time.slice(0, 5)}`
-  if (item.resource_type === 'ROOM') return index === 0 ? '15:00 后办理入住' : '次日 12:00 前退房'
-  if (item.resource_type === 'HOTEL_SERVICE') return '按当天行程在酒店内使用'
-  return '按行程顺序参加体验'
+  if (item.resource_type === 'ROOM') return '入住与退房时间以订单确认为准'
+  if (item.resource_type === 'HOTEL_SERVICE') return '酒店内使用'
+  return '时间以订单确认为准'
 }
 
 function itineraryAction(item: TravelProduct['resources'][number]) {
   if (item.resource_type === 'ROOM') return `办理入住 · ${item.resource_name}含一晚住宿`
-  if (item.resource_type === 'HOTEL_SERVICE') return `酒店内使用 · 向前台报${item.resource_name}`
-  return item.address ? `抵达 ${item.address} · 提前 10 分钟签到` : '按行程卡片中的地址抵达体验点'
+  if (item.resource_type === 'HOTEL_SERVICE') return `酒店内使用 · ${item.resource_name}`
+  return item.address ? `体验地点：${item.address}` : '体验地点以订单确认为准'
 }
 
 async function load() {
-  loading.value = true
+  if (!product.value) loading.value = true
   try {
     if (hotelContext.value) {
       // 内部预览必须能看到草稿与已售罄商品，公开接口会把这些过滤掉。
@@ -314,26 +714,47 @@ async function load() {
       return
     }
     product.value = (await visitorApi.product(Number(route.params.id), nights.value, selectedRoomId.value)).data
-    guides.value = (await visitorApi.guides(guideQuery.value, addressList.value.join(' '))).data
+    const includedNames = (product.value.included_public_places || []).map((stop) => String(stop.resource_name || '').replace(/[\s·｜|]/g, ''))
+    try {
+      guides.value = (await visitorApi.guides(guideQuery.value, addressList.value.join(' '))).data
+        .filter((guide: Record<string, any>) => guide.verification_status === 'ACTIVE')
+        .filter((guide: Record<string, any>) => {
+          const name = String(guide.title || guide.name || '').replace(/[\s·｜|]/g, '')
+          return !includedNames.some((included) => included && (name.includes(included) || included.includes(name)))
+        })
+        .slice(0, 4)
+    } catch { guides.value = [] }
     if (previewMode.value) {
       alternatives.value = { room_types: [], same_room_packages: [] }
       related.value = []
       roomOptions.value = []
       dateOptions.value = []
     } else {
-      alternatives.value = (await visitorApi.productAlternatives(Number(route.params.id))).data
-      const sameDay = await visitorApi.products({ target_date: product.value?.target_date, compact: true })
-      related.value = sameDay.data.filter((item) => item.id !== product.value?.id).slice(0, 4)
-      roomOptions.value = (await visitorApi.productRooms(Number(route.params.id))).data.rooms
-      try { dateOptions.value = (await visitorApi.productDates(Number(route.params.id))).data.dates } catch { dateOptions.value = [] }
+      roomOptionsLoading.value = true
+      const currentId = Number(route.params.id)
+      const [alternativeResult, sameDayResult, roomsResult, datesResult] = await Promise.allSettled([
+        visitorApi.productAlternatives(currentId),
+        visitorApi.products({ target_date: product.value.target_date, compact: true }),
+        visitorApi.productRooms(currentId),
+        visitorApi.productDates(currentId),
+      ])
+      alternatives.value = alternativeResult.status === 'fulfilled'
+        ? alternativeResult.value.data
+        : { room_types: [], same_room_packages: [] }
+      related.value = sameDayResult.status === 'fulfilled'
+        ? sameDayResult.value.data.filter((item) => item.id !== product.value?.id).slice(0, 4)
+        : []
+      roomOptions.value = roomsResult.status === 'fulfilled' ? roomsResult.value.data.rooms : []
+      dateOptions.value = datesResult.status === 'fulfilled' ? datesResult.value.data.dates : []
+      roomOptionsLoading.value = false
     }
   }
   catch (e) { showToast(errorMessage(e)) }
-  finally { loading.value = false }
+  finally { loading.value = false; roomOptionsLoading.value = false }
 }
 
 async function chooseRoom(option: Record<string, any>) {
-  if (!option.available) { showToast('该房型当天已售完，请选择其他房型'); return }
+  if (!option.available) { showToast('该房型当天已售罄，请选择其他房型'); return }
   if (option.room_inventory_id === (product.value?.room_inventory_id || null)) return
   selectedRoomId.value = Number(option.room_inventory_id)
   roomSwitching.value = true
@@ -344,14 +765,16 @@ async function chooseRoom(option: Record<string, any>) {
     // 主图回到第一张，正好是刚切换到的房型实拍图。
     heroIndex.value = 0
     void router.replace({ query: { ...route.query, room: String(option.room_inventory_id) } })
-    showToast(`已切换到${option.room_type}，房型、行程、费用与须知已同步更新`)
   } catch (e) { showToast(errorMessage(e)) }
   finally { roomSwitching.value = false }
 }
 
 function chooseDate(option: Record<string, any>) {
+  if (Number(option.sale_quantity || 0) <= 0) return
   if (option.id === product.value?.id) return
   selectedRoomId.value = null
+  roomOptions.value = []
+  roomOptionsLoading.value = true
   void router.push(`/visitor/products/${option.id}`)
 }
 
@@ -371,22 +794,11 @@ async function consult() {
   if (!question.value.trim() || !product.value) return
   const text = question.value.trim(); question.value = ''; chats.value.push({ user: text }); consultLoading.value = true
   try {
-    const response = await visitorApi.consult({ product_id: product.value.id, question: text, weather: product.value.weather, conversation_id: visitorConversationId() })
+    const priorTurns = chats.value.map((chat) => chat.user?.trim()).filter((turn): turn is string => Boolean(turn)).slice(-5)
+    const response = await visitorApi.consult({ product_id: product.value.id, question: text, natural_language: priorTurns.join('；').slice(-1000), weather: product.value.weather, conversation_id: visitorConversationId() })
     chats.value.push({ answer: String(response.data.answer || ''), suggestions: (response.data.suggestions as TravelProduct[]) || [], follow_up_questions: (response.data.follow_up_questions as string[]) || [] })
   } catch (e) { showToast(errorMessage(e)) }
   finally { consultLoading.value = false }
-}
-
-async function copySocial() {
-  if (!social.value?.content) return
-  try { await navigator.clipboard.writeText(social.value.content); showToast('旅行灵感文案已复制') }
-  catch { showToast('复制失败，请手动选择文案') }
-}
-
-function downloadPoster(asset?: MarketingAsset) {
-  if (!asset?.poster_svg) return
-  const url = URL.createObjectURL(new Blob([asset.poster_svg], { type: 'image/svg+xml;charset=utf-8' }))
-  const link = document.createElement('a'); link.href = url; link.download = `${asset.title || product.value?.product_name || 'stayscape-poster'}.svg`; link.click(); URL.revokeObjectURL(url)
 }
 
 function syncIntentAges() {
@@ -456,9 +868,10 @@ async function submitIntent() {
 }
 
 onMounted(load)
-watch(product, (value, previous) => {
+watch(product, async (value, previous) => {
   if (value && (value.id !== previous?.id || value.room_inventory_id !== previous?.room_inventory_id)) {
-    void nextTick(setupAnchorSpy)
+    await nextTick()
+    setupAnchorSpy()
   }
 })
 watch(() => String(route.params.id || ''), (id, previous) => {
@@ -477,7 +890,10 @@ watch(() => String(route.query.room || ''), async (value) => {
   } catch (e) { showToast(errorMessage(e)) }
   finally { roomSwitching.value = false }
 })
-onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScroll))
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', updateAnchorFromScroll)
+  window.removeEventListener('scroll', updatePurchaseBarVisibility)
+})
 </script>
 
 <template>
@@ -485,126 +901,123 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
   <div v-else-if="product" class="visitor-product-detail" :class="{ 'is-embedded-preview': embeddedMode }">
     <div v-if="hotelContext && !embeddedMode" class="internal-preview-banner">酒店内部预览 · 展示候选商品内容与当前库存状态</div>
     <div v-else-if="previewMode && !embeddedMode" class="preview-mode-banner"><b>游客端效果预览</b><router-link to="/hotel/products/generate">返回产品方案</router-link></div>
-    <section class="product-detail-hero" @touchstart.passive="onSwipeStart" @touchend.passive="onSwipeEnd">
+    <div class="detail-purchase-layout">
+    <section ref="heroRef" class="product-detail-hero" @touchstart.passive="onSwipeStart" @touchend.passive="onSwipeEnd">
       <MediaImage :media="hero" aspect="hero" eager />
       <div class="product-detail-hero__veil" />
       <router-link v-if="!embeddedMode" :to="previewMode ? '/hotel/products/generate' : '/visitor/products'" class="back-to-list">{{ hotelContext ? '← 返回候选工作台' : previewMode ? '← 返回方案' : '← 返回体验列表' }}</router-link>
       <div v-if="!previewMode" class="hero-actions" aria-label="商品操作">
         <button type="button" :aria-label="favorite ? '取消收藏' : '收藏商品'" @click.stop="favorite = !favorite">{{ favorite ? '♥' : '♡' }}</button>
-        <button type="button" aria-label="分享商品" @click.stop="posterDialog = true">分享</button>
       </div>
       <span class="hero-counter">{{ heroIndex + 1 }} / {{ heroTotal }}</span>
       <button v-if="heroTotal > 1" type="button" class="hero-nav hero-nav--prev" aria-label="上一张图片" @click.stop="moveHero(-1)">‹</button>
       <button v-if="heroTotal > 1" type="button" class="hero-nav hero-nav--next" aria-label="下一张图片" @click.stop="moveHero(1)">›</button>
       <div v-if="heroTotal > 1" class="hero-dots" aria-label="选择图片"><button v-for="(_, index) in heroMediaList" :key="index" type="button" :class="{ active: heroIndex === index }" :aria-label="`第 ${index + 1} 张图片`" @click.stop="heroIndex = index"></button></div>
-      <div class="product-detail-hero__content">
-        <div class="hero-kicker"><span>{{ product.theme || '杭州周末提案' }}</span><i /> <span>{{ crowdLabel }}</span></div>
-        <h1>{{ product.product_name }}</h1>
-        <p>{{ publicTitle }}</p>
-      </div>
-      <div class="hero-price"><strong>¥{{ stayPrice }}</strong><span>起 / 套 · {{ stayLabel }} · 可选不同房型</span></div>
     </section>
 
     <section class="commerce-summary">
-      <div class="commerce-head"><div class="commerce-title"><h2>{{ product.product_name }}</h2><p>{{ publicTitle }}</p><div class="commerce-tags"><span>{{ crowdLabel }}</span><span>{{ stayLabel }}</span><span>含住宿</span><span>{{ experienceResources.length }}项体验</span></div></div>
-      <div class="commerce-price"><strong>¥{{ stayPrice }}</strong><span>起 / 套 · {{ stayLabel }}</span><em>已售 {{ product.sold_quantity ?? 0 }} 套</em></div>
-      </div>
-      <div class="date-picker-row"><b>出行日期</b><span v-for="d in dateOptions" :key="d.id" :class="['date-chip', { active: d.id === product.id }]" @click="chooseDate(d)"><strong>{{ d.target_date.slice(5) }} {{ d.weekday }}</strong><small>{{ d.sale_quantity > 0 ? `余 ${d.sale_quantity} 席` : '售罄' }}</small></span><span v-if="!dateOptions.length" class="date-chip active"><strong>{{ targetDateLabel }}</strong><small>{{ previewMode ? '预览中' : product.sale_quantity > 0 ? `余 ${product.sale_quantity} 席` : '售罄' }}</small></span><span class="date-note">{{ stayLabel }} · {{ stayRange }}</span></div>
-      <div class="date-picker-row"><b>销售倒计时</b><span class="date-note">{{ countdown.expired() ? '本团期已截止销售' : `距结束 ${countdown.remaining()}` }}（{{ product.target_date }} 00:00 截止）</span></div>
-    </section>
-
-    <section v-if="soldOut" class="soldout-banner">
-      <div><strong>该房型当天已售完</strong><span>同一天还有以下可选房型与搭配，可直接切换。</span></div>
-      <div class="soldout-banner__actions">
-        <button v-for="item in [...alternatives.room_types, ...alternatives.same_room_packages].filter((row) => row.sale_quantity > 0).slice(0, 3)" :key="item.id" type="button" @click="openProduct(item.id)">
-          <b>{{ item.room_type }}</b><span>¥{{ item.price }} · 余 {{ item.sale_quantity }}</span>
-        </button>
-      </div>
-    </section>
-
-    <section v-if="alternatives.room_types.length || alternatives.same_room_packages.length" class="room-choice">
-      <div class="room-choice__block" v-if="roomOptions.length">
-        <span class="section-kicker">选择房型（同一套餐可换房型）</span>
-        <div class="room-choice__options">
-          <button v-for="item in roomOptions" :key="item.room_inventory_id" type="button" :class="{ disabled: !item.available, active: item.room_inventory_id === product.room_inventory_id }" @click="chooseRoom(item)">
-            <b>{{ item.room_type }}</b><small>{{ item.features || `最多 ${item.max_guests} 人` }}</small>
-            <em>¥{{ item.price }}{{ item.available ? ` · 余 ${item.sale_quantity}` : ' · 已售完' }}</em>
-          </button>
+      <div class="commerce-head">
+        <div class="commerce-title">
+          <h1>{{ product.product_name }}</h1>
+          <div class="commerce-price"><strong>¥{{ stayPrice }}</strong><span>/ 套</span></div>
+          <p>{{ publicTitle }}</p>
+          <div class="commerce-tags"><span>{{ crowdLabel }}</span><span>{{ stayLabel }}</span></div>
         </div>
       </div>
-      <div class="room-choice__block" v-if="alternatives.same_room_packages.length">
+      <div class="commerce-inclusion"><span>套餐包含</span><strong>{{ purchaseIncludes }}</strong></div>
+      <div id="purchase-options" class="date-picker-row">
+        <b>入住日期</b>
+        <div class="date-options" :aria-label="`${product.theme}可售日期`">
+          <button v-for="d in dateOptions" :key="d.id" type="button" :disabled="d.sale_quantity <= 0" :aria-label="`${Number(d.target_date.slice(5, 7))}月${Number(d.target_date.slice(8, 10))}日${d.sale_quantity > 0 ? `剩${d.sale_quantity}套` : '已售罄'}`" :class="['date-chip', { active: d.id === product.id, 'is-sold-out': d.sale_quantity <= 0 }]" @click="chooseDate(d)">
+            <strong>{{ Number(d.target_date.slice(5, 7)) }}月{{ Number(d.target_date.slice(8, 10)) }}日</strong><small>{{ d.sale_quantity > 0 ? `剩 ${d.sale_quantity} 套` : '已售罄' }}</small>
+          </button>
+          <span v-if="!dateOptions.length" class="date-chip active"><strong>{{ targetDateLabel }}</strong><small>{{ previewMode ? '预览中' : product.sale_quantity > 0 ? `剩 ${product.sale_quantity} 套` : soldOutDateLabel }}</small></span>
+        </div>
+      </div>
+      <div v-if="roomOptions.length || roomOptionsLoading" id="available-alternatives" class="room-choice room-choice--inline" aria-live="polite">
+        <span class="section-kicker">可选房型</span>
+        <div v-if="roomOptionsLoading" class="room-choice-loading">正在更新{{ targetDateLabel }}的房型</div>
+        <div v-else class="room-choice__track"><div ref="roomOptionsScroller" class="room-choice__options" :aria-label="`${targetDateLabel}可选房型`" @scroll.passive="updateRoomScrollState" @wheel="onRoomOptionsWheel">
+          <button
+            v-for="item in roomOptions"
+            :key="item.room_inventory_id"
+            type="button"
+            :disabled="!item.available"
+            :aria-pressed="item.room_inventory_id === product.room_inventory_id"
+            :class="{ disabled: !item.available, active: item.room_inventory_id === product.room_inventory_id }"
+            @click="chooseRoom(item)"
+          >
+            <span v-if="item.room_inventory_id === product.room_inventory_id" class="room-choice__selected">已选</span>
+            <img v-if="item.image_url" :src="item.image_url" :alt="item.room_type" loading="lazy" />
+            <div class="room-choice__copy">
+              <b>{{ item.room_type }}</b>
+              <small>{{ item.features || `最多 ${item.max_guests} 人` }}</small>
+              <em>¥{{ item.price }}{{ item.available ? ` · 剩 ${item.sale_quantity} 套` : ' · 已售罄' }}</em>
+            </div>
+          </button>
+        </div>
+        <button v-if="roomOptions.length > 1" type="button" class="room-choice__prev" aria-label="查看前面的房型" :disabled="roomScrollAtStart" @click="scrollRoomOptions(-1)">‹</button>
+        <button v-if="roomOptions.length > 1" type="button" class="room-choice__next" aria-label="查看更多房型" :disabled="roomScrollAtEnd" @click="scrollRoomOptions(1)">›</button>
+      </div>
+      </div>
+      <p v-if="soldOut" class="soldout-inline"><strong>{{ soldOutDateLabel }}</strong><button v-if="hasAvailableAlternatives" type="button" @click="scrollToAlternatives">查看可售方案</button></p>
+      <p class="commerce-stay-note">{{ stayLabel }} · {{ stayRange }} · {{ crowdLabel }}</p>
+      <div v-if="!previewMode" class="commerce-purchase-actions">
+        <button type="button" class="commerce-assistant-link" @click="router.push({ path: '/visitor/assistant', query: { product: String(product.id) } })">问问这趟行程</button>
+        <el-button v-if="product.sale_quantity > 0" type="primary" @click="openIntent">立即购买</el-button>
+        <el-button v-else type="primary" @click="scrollToAlternatives">查看可售方案</el-button>
+      </div>
+    </section>
+    </div>
+
+    <section v-if="alternatives.same_room_packages.length" class="room-choice room-choice--packages">
+      <div class="room-choice__block">
         <span class="section-kicker">同一房型的其他搭配</span>
         <div class="room-choice__options">
           <button v-for="item in alternatives.same_room_packages" :key="item.id" type="button" :class="{ disabled: item.sale_quantity <= 0 }" @click="item.sale_quantity > 0 && openProduct(item.id)">
             <b>{{ item.experiences.slice(0, 2).join('、') || item.theme }}</b><small>{{ item.room_type }} · {{ item.stay_label }}</small>
-            <em>¥{{ item.price }}{{ item.sale_quantity > 0 ? ` · 余 ${item.sale_quantity}` : ' · 已售完' }}</em>
+            <em>¥{{ item.price }}{{ item.sale_quantity > 0 ? ` · 剩 ${item.sale_quantity} 套` : ' · 已售罄' }}</em>
           </button>
         </div>
       </div>
     </section>
     <nav class="detail-anchor-nav" aria-label="商品章节导航"><button v-for="item in anchorSections" :key="item.id" type="button" :class="{ active: activeSection === item.id }" @click="scrollToSection(item.id)">{{ item.label }}</button></nav>
-    <section class="trip-strip">
-      <div><span>入住 / 退房</span><strong>{{ stayRange }}</strong></div>
-        <div><span>适合谁去</span><strong>{{ crowdLabel }} · {{ product.party_size }} 人</strong></div>
-      <div><span>套餐包含</span><strong>{{ stayLabel }} · {{ resourceCount }} 项内容</strong></div>
-    </section>
 
     <main class="detail-content" :key="`detail-${product.id}-${product.room_inventory_id}`">
-      <section id="highlights" class="commerce-highlight"><div class="section-heading"><div><span class="section-kicker">特色</span><h2>这趟体验包含什么</h2></div></div><div class="highlight-grid"><article v-for="(item,index) in product.resources.slice(0,6)" :key="item.id"><MediaImage :media="mediaForResource(product,item,index)" aspect="card"/><h3>{{ item.resource_name }}</h3><p>{{ resourceSummary(item) }}</p></article></div></section><section class="compact-story">
-        <div class="section-heading">
-          <div><span class="section-kicker">这趟的亮点</span><h2>{{ product.theme || '一段刚刚好的杭州时光' }}</h2></div>
-          <span class="section-count">01</span>
-        </div>
-        <p v-for="(paragraph, index) in storyParagraphs" :key="index" class="story-lead">{{ paragraph }}</p>
-        <div class="story-tags"><span>{{ crowdLabel }}</span><span>{{ product.target_date }}</span><span>杭州周末</span></div>
-        <template v-if="product.detail_sections">
-          <div v-if="product.detail_sections.experience_details.length" class="experience-details">
-            <article v-for="item in product.detail_sections.experience_details" :key="item.name">
-              <header><strong>{{ item.name }}</strong><span>{{ item.time }}<template v-if="item.duration"> · {{ item.duration }}</template></span></header>
-              <p>{{ item.feature }}</p>
-              <ul>
-                <li><b>地点</b>{{ item.address }}</li>
-                <li><b>费用</b>{{ item.included }}；{{ item.extra_cost }}</li>
-                <li><b>注意</b>{{ item.tips }}</li>
-                <li v-if="item.source_note"><b>参考</b>{{ item.source_note }}</li>
-              </ul>
-            </article>
-          </div>
-          <div class="detail-extra">
-            <div>
-              <span class="section-kicker">花费</span>
-              <ul class="detail-advice-list"><li v-for="(line, index) in displayAdviceLines(product.detail_sections.spend_notes)" :key="`spend-${index}`">{{ line }}</li></ul>
-            </div>
-            <div>
-              <span class="section-kicker">出行建议</span>
-              <ul class="detail-advice-list"><li v-for="(line, index) in displayAdviceLines(product.detail_sections.tips)" :key="`tip-${index}`">{{ line }}</li></ul>
-            </div>
-          </div>
-        </template>
-      </section>
+      <section id="highlights" class="commerce-highlight"><div class="section-heading"><div><span class="section-kicker">产品内容</span><h2>套餐包含</h2></div></div><div class="highlight-grid"><article v-for="(item,index) in highlightResources" :key="item.id" :data-inclusion-kind="item.resource_type === 'PUBLIC_REFERENCE' ? 'included_in_itinerary' : 'included_in_package'"><MediaImage :media="highlightMedia(item,index)" aspect="card"/><span class="highlight-type-tag">{{ item.resource_type === 'ROOM' ? '住宿' : item.resource_type === 'PUBLIC_REFERENCE' ? '正式行程' : '包含体验' }}</span><h3>{{ item.resource_name }}</h3><p>{{ highlightCopy(item) }}</p></article></div></section>
 
       <section id="itinerary" class="itinerary-section">
         <div class="section-heading">
           <div><span class="section-kicker">行程</span><h2>{{ stayLabel }}行程安排</h2></div>
-          <span class="section-count">02</span>
+          <span class="section-count">{{ dayPlan.length < 10 ? '0' + dayPlan.length : dayPlan.length }}</span>
         </div>
         <div v-if="dayPlan.length" class="day-plan-list">
           <article v-for="day in dayPlan" :key="day.day_index" class="day-plan">
             <header class="day-plan__head">
-              <div><span class="day-plan__label">{{ day.label }}</span><strong>{{ day.title }}</strong></div>
+              <div><span class="day-plan__label">{{ day.label }}</span><strong>{{ day.title || (Number(day.day_index) === 1 ? '入住与体验安排' : '继续体验 · 退房返程') }}</strong></div>
               <small>{{ day.date || product.target_date }}</small>
             </header>
-            <p class="day-plan__summary">{{ day.summary }}</p>
             <ol class="day-plan__items">
-              <li v-for="(entry, index) in day.items" :key="index">
-                <span class="day-plan__time"><b>{{ entry.slot_label || '行程安排' }}</b>{{ entry.time || '按行程顺序体验' }}</span>
-                <div>
-                  <b>{{ entry.title }}</b>
-                  <p>{{ entry.description }}</p>
-                  <div class="day-plan__meta">
-                    <span v-if="entry.duration_text">{{ entry.duration_text }}</span>
-                    <span v-if="entry.address">{{ entry.address }}</span>
-                    <span v-if="entry.notes" class="day-plan__note" :class="{ 'day-plan__note--warning': entry.schedule_conflict }">{{ entry.notes }}</span>
+              <li v-for="(entry, index) in day.items" :key="index" :class="{ 'day-plan__item--free': entry.kind === 'FREE_TIME', 'day-plan__item--formal': ['PARTNER_RESOURCE', 'PUBLIC_REFERENCE'].includes(entry.kind), 'day-plan__item--operation': ['ROOM', 'HOTEL_SERVICE', 'TRANSFER', 'BAGGAGE'].includes(entry.kind) }">
+                <span class="day-plan__time"><b>{{ entry.slot_label }}</b><span v-if="entry.time">{{ entry.time }}</span></span>
+                <div class="day-plan__entry">
+                  <MediaImage
+                    v-if="['PARTNER_RESOURCE', 'PUBLIC_REFERENCE'].includes(entry.kind)"
+                    class="day-plan__entry-image"
+                    :media="itineraryMediaForResource(product, itineraryMediaResource(entry), index)"
+                    aspect="card"
+                  />
+                  <div class="day-plan__entry-copy">
+                    <b class="day-plan__title"><span v-if="['ROOM', 'HOTEL_SERVICE'].includes(entry.kind)" class="timeline-operation-icon" aria-hidden="true">⌂</span><span>{{ entry.title }}</span><small v-if="entry.address" class="day-plan__address-inline">{{ entry.address }}</small></b>
+                    <p>{{ entry.description }}</p>
+                    <div v-if="entry.suggestions?.length" class="day-plan__suggestions">
+                      <b>空闲时间可选</b>
+                      <p v-for="suggestion in entry.suggestions" :key="suggestion.title"><strong>{{ suggestion.title }}</strong><span>{{ suggestion.detail }}</span></p>
+                    </div>
+                    <div class="day-plan__meta">
+                      <span v-if="entry.duration_text">{{ itineraryDuration(entry) }}</span>
+                      <span v-if="entry.notes" class="day-plan__note" :class="{ 'day-plan__note--warning': entry.schedule_conflict }">{{ entry.notes }}</span>
+                    </div>
                   </div>
                 </div>
               </li>
@@ -613,12 +1026,12 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
         </div>
         <div v-else class="itinerary-list">
           <article v-for="(item, index) in product.resources" :key="item.id" class="itinerary-card">
-            <div class="itinerary-card__image"><MediaImage :media="mediaForResource(product, item, index)" aspect="card" /></div>
+            <div class="itinerary-card__image"><MediaImage :media="itineraryMediaForResource(product, item, index)" aspect="card" /></div>
             <div class="itinerary-card__body">
               <div class="itinerary-card__top"><span>{{ experienceLabelZh(item.resource_type) }}</span><b>第 {{ index + 1 }} 段</b></div>
               <h3>{{ item.resource_name }}</h3>
               <p>{{ resourceSummary(item) }}</p>
-              <strong class="itinerary-card__time">{{ itineraryTime(item, index) }}</strong>
+              <strong class="itinerary-card__time">{{ itineraryTime(item) }}</strong>
               <small>{{ itineraryAction(item) }} · {{ resourceMeta(item) }}</small>
             </div>
             <strong class="itinerary-card__quantity">×{{ item.quantity_per_package }}</strong>
@@ -626,16 +1039,15 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
         </div>
       </section>
 
-      <section id="fees" class="fee-section"><div class="section-heading"><div><span class="section-kicker">费用</span><h2>费用说明</h2></div></div><div class="fee-columns"><div><h3>费用包含</h3><p>✓ {{ stay?.room_name || '酒店住宿' }} × {{ stay?.nights || 1 }} 晚<small>{{ stayRange }}</small></p><p v-for="item in feeResources" :key="'in'+item.id">✓ {{ item.resource_name }} ×{{ item.quantity_per_package }}<small>{{ resourceMeta(item) }}</small></p><p>✓ 酒店服务与现场引导</p></div><div><h3>费用不含</h3><p>× 往返交通与停车费用</p><p>× 套餐外的餐饮和个人消费</p><p>× 超出套餐数量的加购项目</p></div></div></section><section id="notice" class="notice-section"><div class="section-heading"><div><span class="section-kicker">须知</span><h2>购买须知</h2></div></div><div class="notice-list"><p>适合人群：{{ crowdLabel }}；套餐包含 {{ packageItems }}。</p><p>入住与退房：{{ stayRange }}；{{ stay?.check_in_time || '15:00' }} 后可办理入住，{{ stay?.check_out_time || '12:00' }} 前退房。</p><p>行程天数：{{ stayLabel }}，含 {{ stay?.nights || 1 }} 晚酒店住宿，不提供当天往返的一日游。</p><p>出行日期：{{ product.target_date }}；{{ earliestExperience ? '首项体验 ' + earliestExperience + ' 前抵达' : '按行程卡片安排' }}。</p><p>集合地址：{{ addressSummary }}。</p><p>如何前往：{{ transportHint }}</p><p>天气与改期：户外项目遇雨会调整安排，出发前会再次确认。</p><p>取消规则：出发前 48 小时可申请取消，临近出发的取消申请按平台规则处理。</p></div></section><section class="detail-facts-section"><div class="section-heading"><div><span class="section-kicker">出行信息</span><h2>地址、交通与细节</h2></div><span class="section-count">03</span></div><div class="detail-facts-grid"><div><b>费用包含</b><p>{{ packageItems }}；价格已含页面列出的住宿、体验和现场引导。</p></div><div><b>详细地址</b><p>{{ addressSummary }}。</p></div><div><b>如何前往</b><p>{{ transportHint }}</p></div><div><b>注意事项</b><p>{{ crowdLabel }}出行建议提前确认集合入口，并提前 10 分钟抵达。</p></div></div></section>
+        <section id="fees" class="fee-section"><div class="section-heading"><div><span class="section-kicker">价格明细</span><h2>费用说明</h2></div></div><div class="fee-columns"><div><h3>已包含</h3><div class="fee-group"><strong>住宿及体验</strong><p>✓ {{ stay?.room_name || '酒店住宿' }} × {{ stay?.nights || 1 }} 晚<small>{{ stayRange }}</small></p><p v-for="item in feeResources" :key="'paid'+item.id">✓ {{ item.resource_name }} ×{{ item.quantity_per_package }}<small>{{ resourceMeta(item) }}</small></p><p v-for="item in feeHotelServices" :key="'service'+item.id">✓ {{ item.resource_name }}<small>{{ resourceMeta(item) }}</small></p></div><div v-if="feePublicStops.length" class="fee-group fee-group--public"><strong>正式公共行程</strong><p v-for="stop in feePublicStops" :key="'public'+stop.resource_name">✓ {{ stop.resource_name }}<small>公共开放地点，无需额外门票</small></p></div></div><div><h3>需自理</h3><p>往返交通与停车费用</p><p>套餐外的餐饮和个人消费</p><p>超出套餐数量的加购项目</p></div></div></section><section id="notice" class="notice-section"><div class="section-heading"><div><span class="section-kicker">出行前确认</span><h2>入住与集合</h2></div></div><div class="notice-list"><p><b>入住</b><span>{{ stay?.check_in_time || '13:00' }} 后办理</span></p><p><b>退房</b><span>{{ stay?.check_out_time || '13:00' }} 前</span></p><p><b>首项体验集合</b><span>{{ earliestExperience ? `${earliestExperience} 前抵达集合地点` : '按行程确认集合时间' }}</span></p></div></section>
       <section class="hotel-detail-section">
         <div class="section-heading"><div><span class="section-kicker">住宿</span><h2>酒店与房型</h2></div></div>
         <div class="hotel-detail-grid">
           <div><span>房型</span><strong>{{ roomResource?.resource_name || '酒店客房' }}</strong></div>
           <div><span>可住人数</span><strong>最多 {{ roomMaxGuests }} 人</strong></div>
-          <div class="full"><span>房型细节</span><strong>{{ roomFeatures || '入住标准客房，具体设施见房型介绍' }}</strong></div>
-          <div v-if="roomFeatureNames" class="full"><span>房型特色</span><strong>{{ roomFeatureNames }}</strong></div>
-          <div><span>入住 / 退房</span><strong>{{ stayRange }}</strong></div>
-          <div><span>入住时间</span><strong>{{ stay?.check_in_time || '15:00' }} 后入住 · {{ stay?.check_out_time || '12:00' }} 前退房</strong></div>
+          <div><span>入住 / 退房</span><strong>{{ stay?.check_in_time || '13:00' }} 后 / {{ stay?.check_out_time || '13:00' }} 前</strong></div>
+          <div v-if="hotelAddressLabel" class="full"><span>酒店地址</span><strong>{{ hotelAddressLabel }}</strong></div>
+          <div class="full"><span>房型说明</span><strong>{{ roomFeatureNames || roomFeatures || '具体房内设施以酒店实际房型为准。' }}</strong></div>
         </div>
       </section>
 
@@ -648,30 +1060,35 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
         </ul>
       </section>
 
-      <section v-if="guides.length" id="guides" class="guide-source-section">
-        <div class="section-heading"><div><span class="section-kicker">公开攻略</span><h2>参考路线与评价</h2></div></div>
-        <div class="guide-list">
-          <article v-for="guide in guides" :key="guide.source + guide.title">
-            <header>
-              <strong>{{ guide.title }}</strong>
-              <em v-if="guide.duration_minutes">建议停留 {{ guide.duration_minutes }} 分钟</em>
+      <section id="guides" class="guide-source-section">
+        <div class="section-heading"><div><span class="section-kicker">周边推荐</span><h2>附近可选</h2></div></div>
+        <div v-if="guides.length" class="guide-list">
+          <article v-for="guide in guides" :key="guide.source + guide.title" data-inclusion-kind="optional_nearby">
+            <header class="guide-card-head">
+              <div class="guide-title-line">
+                <strong>{{ guide.title }}<span v-if="guide.category_label"> | {{ guide.category_label }}</span></strong>
+                <a class="guide-route-link" :href="guideMapUrl(guide)" target="_blank" rel="noopener noreferrer">地图路线 ↗</a>
+              </div>
+              <span class="guide-exclusion">不含套餐</span>
             </header>
-            <span class="guide-source-line">{{ guide.source }}<template v-if="guide.area"> · {{ guide.area }}</template><template v-if="guide.category_label"> · {{ guide.category_label }}</template></span>
-            <p class="guide-content">{{ guide.content || guide.summary }}</p>
+            <div class="guide-description-row">
+              <p class="guide-content">{{ guide.content || guide.summary || '可按开放时段安排短途游览。' }}</p>
+            </div>
             <ul class="guide-facts">
-              <li v-if="guide.address"><b>地址</b>{{ guide.address }}</li>
-              <li v-if="guide.opening_hours"><b>开放时间</b>{{ guide.opening_hours }}</li>
-              <li v-if="guide.best_time"><b>推荐时段</b>{{ guide.best_time }}</li>
-              <li v-if="guide.crowds_label"><b>适合人群</b>{{ guide.crowds_label }}</li>
-              <li v-if="guide.reservation_notice"><b>预约提示</b>{{ guide.reservation_notice }}</li>
-              <li v-if="guide.transport"><b>怎么去</b>{{ guide.transport }}</li>
+              <li v-if="guide.crowds_label"><b>适合人群</b><span>{{ guide.crowds_label }}</span></li>
+              <li><b>推荐时段</b><span>{{ guideRecommendedTime(guide) }}</span></li>
+              <li v-if="guideDurationLabel(guide)"><b>建议停留</b><span>约 {{ guideDurationLabel(guide) }}</span></li>
+              <li v-if="guide.address" class="guide-address"><b>地址</b><span>{{ guide.address }}</span></li>
+              <li v-if="guide.opening_hours"><b>开放时间</b><span>{{ guide.opening_hours }}</span></li>
+              <li v-if="guide.reservation_notice"><b>预约提示</b><span>{{ guide.reservation_notice }}</span></li>
+              <li class="guide-how-to"><b>怎么去</b><span>{{ guideHowToGo(guide) }}</span></li>
             </ul>
-            <small v-if="guide.verified_at" class="guide-verified">资料核验时间：{{ String(guide.verified_at).slice(0, 10) }}</small>
           </article>
         </div>
+        <p v-else class="guide-empty">附近暂无可展示的推荐地点。</p>
       </section>
 
-      <section v-if="gallery.length" class="moments-section">
+      <section v-if="previewMode && gallery.length" class="moments-section">
         <div class="section-heading">
           <div><span class="section-kicker">照片</span><h2>现场照片</h2></div>
           <span class="section-count">03</span>
@@ -691,18 +1108,29 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 
     </main>
 
-    <section v-if="!previewMode" class="booking-bar">
-      <div><span class="section-kicker">购买</span><p>提交后等待酒店确认。</p></div>
-      <div class="booking-bar__right"><button class="assistant-action" @click="router.push({ path: '/visitor/assistant', query: { product: String(product.id) } })">旅居助手</button><strong>¥{{ stayPrice }}</strong><span>/ 套 · {{ stayLabel }}</span><el-button type="primary" :disabled="product.sale_quantity <= 0" @click="openIntent">立即购买</el-button></div>
+    <section v-if="!previewMode && !heroVisible" class="booking-bar">
+      <div class="booking-bar__left"><div class="booking-bar__price"><strong>¥{{ stayPrice }}</strong><span>/ 套</span></div><span class="booking-bar__stock">{{ product.sale_quantity > 0 ? `余 ${product.sale_quantity} 套` : soldOutDateLabel }}</span></div>
+      <div class="booking-bar__right"><button class="assistant-action" @click="router.push({ path: '/visitor/assistant', query: { product: String(product.id) } })">问问这趟行程</button><el-button type="primary" @click="product.sale_quantity > 0 ? openIntent() : scrollToAlternatives()">{{ product.sale_quantity > 0 ? '立即购买' : '查看可售方案' }}</el-button></div>
     </section>
 
-    <el-dialog v-model="posterDialog" title="分享这段杭州体验" width="min(92vw, 560px)" class="poster-dialog"><img v-if="posterVisual" class="poster-dialog__image" :src="posterVisual" :alt="poster?.title" /><template #footer><el-button @click="posterDialog = false">关闭</el-button><el-button v-if="poster?.poster_svg" type="primary" @click="downloadPoster(poster)">下载 SVG 海报</el-button></template></el-dialog>
-    <el-dialog v-model="intentDialog" title="购买信息" width="min(94vw, 520px)"><el-form label-position="top"><el-form-item label="联系人" required><el-input v-model="form.contact_name" placeholder="怎么称呼" /></el-form-item><el-form-item label="联系电话" required><el-input v-model="form.contact_phone" placeholder="便于酒店联系确认" /></el-form-item><el-form-item label="备注"><el-input v-model="form.natural_language" type="textarea" :rows="3" maxlength="300" show-word-limit placeholder="到店时间、同行人或其他需要说明的情况，可以不填" /></el-form-item></el-form><div class="intent-summary"><span>{{ product.product_name }}</span><span>{{ stayLabel }}</span><span>¥{{ stayPrice }}</span></div><template #footer><el-button @click="intentDialog = false">取消</el-button><el-button type="primary" :loading="intentLoading" @click="submitIntent">提交购买</el-button></template></el-dialog>
+    <el-dialog v-model="intentDialog" class="purchase-confirm-dialog" modal-class="purchase-confirm-overlay" title="购买信息" width="min(94vw, 500px)">
+      <div class="intent-summary">
+        <strong>{{ product.product_name }}</strong>
+        <span>{{ stayLabel }} · {{ Number(product.party_size || 2) === 2 ? '双人同行' : `${product.party_size || 2}人同行` }}</span>
+        <b>¥{{ stayPrice }} <small>/ 套</small></b>
+      </div>
+      <el-form label-position="top" class="purchase-confirm-form">
+        <el-form-item label="联系人" required><el-input v-model="form.contact_name" placeholder="请输入联系人" /></el-form-item>
+        <el-form-item label="联系电话" required><el-input v-model="form.contact_phone" placeholder="请输入联系电话" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="form.natural_language" type="textarea" :rows="3" maxlength="300" placeholder="选填" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="intentDialog = false">取消</el-button><el-button type="primary" :loading="intentLoading" @click="submitIntent">提交购买</el-button></template>
+    </el-dialog>
 
   </div>
   <div v-else class="home-empty">
     <div class="empty-mark" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 32c6-9 11-14 16-14s10 5 16 14" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 35h24" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="33" cy="15" r="4" fill="currentColor"/></svg></div>
-    <h3>{{ hotelContext ? '商品详情暂时无法打开' : '该房型当天已售完' }}</h3>
+    <h3>{{ hotelContext ? '商品详情暂时无法打开' : soldOutDateLabel }}</h3>
     <p>{{ hotelContext ? '请返回候选列表重试预览，商品草稿和资源信息仍保留。' : '同一天的其他房型或体验搭配还有余量，回到列表可以按主题筛选。' }}</p>
     <el-button type="primary" @click="$router.push(hotelContext ? '/hotel/products/generate' : '/visitor/products')">{{ hotelContext ? '返回候选工作台' : '查看同一天的其他方案' }}</el-button>
   </div>
@@ -711,7 +1139,112 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 <style scoped>
 .visitor-product-detail{padding-bottom:86px}.detail-loading{min-height:300px;display:grid;place-items:center;color:var(--muted);font-size:14px}.detail-loading span{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--teal);box-shadow:14px 0 var(--gold),28px 0 var(--teal);margin-right:38px;animation:stay-breathe 1.2s infinite alternate}.product-detail-hero{position:relative;min-height:318px;border-radius:16px;overflow:hidden;background:#173b35;color:#fff}.product-detail-hero>.media-image{position:absolute;inset:0;min-height:100%;border-radius:inherit}.product-detail-hero__veil{position:absolute;inset:0;background:linear-gradient(90deg,rgba(12,39,34,.82),rgba(12,39,34,.2) 75%),linear-gradient(0deg,rgba(12,39,34,.65),transparent 52%)}.back-to-list{position:absolute;z-index:2;top:14px;left:14px;padding:6px 9px;border:1px solid rgba(255,255,255,.42);border-radius:999px;background:rgba(0,0,0,.16);color:#fff;font-size:11px}.product-detail-hero__content{position:absolute;z-index:2;left:5%;right:18%;bottom:30px;max-width:700px}.hero-kicker,.section-kicker{display:inline-flex;align-items:center;gap:8px;color:#23796c;font-size:11px;font-weight:700;letter-spacing:.08em}.hero-kicker{color:rgba(255,255,255,.9)}.hero-kicker i{width:3px;height:3px;border-radius:50%;background:currentColor}.product-detail-hero h1{margin:9px 0 7px;font-size:clamp(27px,3.3vw,40px);line-height:1.13;letter-spacing:-.8px}.product-detail-hero p{max-width:600px;margin:0;color:rgba(255,255,255,.88);font-size:13px;line-height:1.62}.hero-price{position:absolute;z-index:2;right:5%;bottom:29px;text-align:right}.hero-price strong{display:block;font-size:27px;line-height:1;color:#fff}.hero-price span{display:block;margin-top:5px;color:rgba(255,255,255,.78);font-size: 11.5px}.trip-strip{display:grid;grid-template-columns:repeat(3,1fr);margin:10px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}.trip-strip>div{min-width:0;padding:11px 14px;border-right:1px solid var(--line)}.trip-strip>div:last-child{border-right:0}.trip-strip span{display:block;margin-bottom:4px;color:var(--muted);font-size: 11.5px}.trip-strip strong{display:block;overflow:hidden;color:var(--ink);font-size:13px;text-overflow:ellipsis;white-space:nowrap}.detail-content{max-width:960px;margin:0 auto;padding:26px 3% 14px}.compact-story,.itinerary-section,.moments-section{margin-bottom:26px}.section-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:12px}.section-heading h2,.travel-note-heading h2,.share-copy h2,.concierge-header h2{margin:5px 0 0;color:var(--ink);font-family:var(--font-sans);font-size:21px;font-weight:680;line-height:1.22}.section-count{color:#aac8be;font-family:var(--font-mono);font-size:18px;line-height:1}.story-lead{max-width:760px;margin:0;color:var(--ink);font-size:14px;line-height:1.72}.story-note{max-width:720px;margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.62}.story-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.story-tags span{padding:5px 8px;border-radius:999px;background:#eff7f3;color:#2b7569;font-size: 11.5px}.itinerary-list{display:grid;gap:7px}.itinerary-card{position:relative;display:grid;grid-template-columns:118px minmax(0,1fr) auto;gap:11px;align-items:stretch;min-height:112px;padding:7px;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 4px 13px rgba(35,64,55,.03)}.itinerary-card__image,.itinerary-card__image .media-image{height:96px;border-radius:8px;overflow:hidden}.itinerary-card__body{min-width:0;padding:1px 0}.itinerary-card__top{display:flex;align-items:center;justify-content:space-between;gap:8px}.itinerary-card__top span{padding:3px 6px;border-radius:999px;background:#edf7f2;color:#287567;font-size: 11px;font-weight:700}.itinerary-card__top b{color:#9aafa7;font-size: 11px;font-weight:500}.itinerary-card h3{overflow:hidden;margin:5px 0 3px;color:var(--ink);font-size:14px;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}.itinerary-card p{display:-webkit-box;overflow:hidden;margin:0;color:#576963;font-size:11px;line-height:1.48;-webkit-box-orient:vertical;-webkit-line-clamp:2}.itinerary-card small{display:block;overflow:hidden;margin-top:5px;color:#93a19b;font-size: 11px;text-overflow:ellipsis;white-space:nowrap}.itinerary-card__quantity{align-self:start;padding:4px 3px 0 0;color:#597a70;font-size:11px}.moments-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.moments-grid figure{margin:0;overflow:hidden;border:1px solid var(--line);border-radius:11px;background:#fff}.moments-grid .media-image{height:148px}.moments-grid figcaption{padding:8px}.moments-grid figcaption span{display:block;overflow:hidden;color:#7e9690;font-size: 11px;text-overflow:ellipsis;white-space:nowrap}.moments-grid figcaption strong{display:block;overflow:hidden;margin-top:3px;color:var(--ink);font-size:12px;text-overflow:ellipsis;white-space:nowrap}.travel-note-section{display:grid;grid-template-columns:170px minmax(0,1fr);gap:22px;margin:0 0 24px;padding:17px 18px;border-radius:13px;background:#f0f7f3}.travel-note-heading h2{font-size:19px}.travel-note-heading button{margin-top:9px;padding:0 0 3px;border:0;border-bottom:1px solid #438b7c;background:transparent;color:#317a6d;font-size:11px;cursor:pointer}.travel-note-copy{padding-top:1px}.travel-note-copy p{margin:0;color:#40544d;font-size:12px;line-height:1.6}.travel-note-copy p.first{margin-bottom:5px;color:var(--ink);font-size:14px;font-weight:650}.travel-note-copy p.hashtag{color:#338070;font-size: 11.5px}.share-section{display:grid;grid-template-columns:108px minmax(0,1fr);gap:16px;align-items:center;margin:0 0 24px;padding:12px 14px;border:1px solid var(--line);border-radius:13px;background:#fff}.poster-preview{padding:5px;border:0;border-radius:8px;background:#163d36;box-shadow:0 6px 14px rgba(24,61,54,.16);cursor:pointer}.poster-preview img{display:block;width:100%;height:auto;border-radius:4px}.share-copy h2{font-size:20px}.share-copy p{max-width:560px;margin:7px 0 0;color:var(--muted);font-size:11px;line-height:1.55}.share-actions{display:flex;gap:7px;margin-top:9px}.concierge-section{padding:17px 18px;border:1px solid #d9ebe3;border-radius:13px;background:linear-gradient(135deg,#f5faf7,#eef7f2)}.concierge-header h2{font-size:20px}.concierge-header p{margin:6px 0 0;color:var(--muted);font-size:11px;line-height:1.55}.concierge-quick{display:flex;gap:6px;flex-wrap:wrap;margin:11px 0}.concierge-quick button,.chat-followups button{padding:6px 8px;border:1px solid #cfe4db;border-radius:999px;background:#fff;color:#3a7166;font-size: 11.5px;cursor:pointer}.concierge-chat{display:grid;gap:7px;max-height:230px;overflow:auto;margin:10px 0}.concierge-bubble{max-width:83%;padding:9px 10px;border-radius:5px 11px 11px;background:#fff;color:#3e534c;font-size:11px;line-height:1.55;box-shadow:0 3px 9px rgba(27,77,63,.05)}.concierge-bubble.is-user{justify-self:end;border-radius:11px 5px 11px 11px;background:#dceee7;color:#1f4e43}.chat-suggestions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:8px}.chat-suggestions .product-card{background:#fff}.chat-followups{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.concierge-input{display:flex;gap:7px}.booking-bar{position:sticky;bottom:10px;z-index:11;display:flex;align-items:center;justify-content:space-between;gap:12px;max-width:960px;margin:0 auto;padding:11px 14px;border:1px solid #dce8e2;border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 8px 24px rgba(33,67,57,.13);backdrop-filter:blur(10px)}.booking-bar p{margin:3px 0 0;color:var(--muted);font-size:11px}.booking-bar__right{display:flex;align-items:center;gap:6px;white-space:nowrap}.booking-bar__right strong{color:#1c685a;font-family:var(--font-mono);font-size:20px}.booking-bar__right span{margin-right:3px;color:var(--muted);font-size: 11.5px}.poster-dialog__image{display:block;width:100%;max-height:72vh;object-fit:contain;margin:0 auto;border-radius:6px;background:#edf4f0}.form-tip{margin-top:7px;color:var(--muted);font-size:12px;line-height:1.6}.intent-summary{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 16px}.intent-summary span{padding:7px 10px;border-radius:999px;background:#edf7f2;color:var(--teal-dark);font-size:12px}.age-row{display:flex;gap:8px;flex-wrap:wrap}.age-row :deep(.el-input-number){width:92px}.safety-callout{margin-top:12px;padding:11px 13px;border-radius:10px;background:#fff8eb;color:#8b6a36;font-size:12px;line-height:1.6}.home-empty{text-align:center;padding:75px 24px;border:1px solid var(--line);background:#fff}.empty-mark{display:grid;place-items:center;width:42px;height:42px;margin:0 auto 14px;border-radius:14px;background:var(--teal);color:#fff;font-family:Georgia,serif;font-size:25px}.home-empty h3{margin:10px 0;color:var(--ink);font-family:Georgia,serif;font-size:24px;font-weight:500}.home-empty p{color:var(--muted);font-size:13px;line-height:1.8}.home-empty .el-button{margin-top:12px}@keyframes stay-breathe{to{transform:translateX(7px);opacity:.5}}@media(max-width:800px){.visitor-product-detail{padding-bottom:76px}.product-detail-hero{min-height:260px;border-radius:12px}.back-to-list{top:10px;left:10px;font-size: 11.5px}.product-detail-hero__content{right:14px;bottom:15px;left:14px}.product-detail-hero h1{margin:7px 0 5px;font-size:25px;letter-spacing:-.5px}.product-detail-hero p{font-size:11px;line-height:1.45}.hero-price{right:13px;bottom:15px}.hero-price strong{font-size:20px}.trip-strip{margin-top:8px;border-radius:10px}.trip-strip>div{padding:8px 7px}.trip-strip span{font-size: 11px}.trip-strip strong{font-size: 11.5px}.detail-content{padding:20px 0 10px}.compact-story,.itinerary-section,.moments-section{margin-bottom:22px}.section-heading{margin-bottom:10px}.section-heading h2,.travel-note-heading h2,.share-copy h2,.concierge-header h2{font-size:19px}.section-count{font-size:16px}.story-lead{font-size:13px;line-height:1.62}.story-note{font-size:11px;line-height:1.52}.story-tags{margin-top:8px}.itinerary-list{gap:6px}.itinerary-card{grid-template-columns:86px minmax(0,1fr) 18px;gap:7px;min-height:92px;padding:5px;border-radius:10px}.itinerary-card__image,.itinerary-card__image .media-image{height:80px;border-radius:7px}.itinerary-card__body{padding:1px 0}.itinerary-card__top span{padding:2px 5px;font-size: 11.5px}.itinerary-card h3{margin:4px 0 2px;font-size:13px}.itinerary-card p{font-size: 11.5px;line-height:1.38}.itinerary-card small{margin-top:4px;font-size: 11.5px}.itinerary-card__quantity{padding-top:4px;font-size: 11.5px}.moments-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.moments-grid .media-image{height:110px}.moments-grid figure{border-radius:8px}.moments-grid figcaption{padding:6px}.moments-grid figcaption span{font-size: 11.5px}.moments-grid figcaption strong{margin-top:2px;font-size: 11px}.travel-note-section{grid-template-columns:1fr;gap:9px;margin-bottom:20px;padding:13px;border-radius:11px}.travel-note-heading h2{font-size:18px}.travel-note-heading button{margin-top:6px}.travel-note-copy p{font-size:11px;line-height:1.5}.travel-note-copy p.first{font-size:13px}.share-section{grid-template-columns:76px minmax(0,1fr);gap:10px;margin-bottom:20px;padding:10px;border-radius:11px}.share-copy h2{font-size:18px}.share-copy p{font-size: 11.5px;line-height:1.45}.share-actions{gap:5px;margin-top:7px}.share-actions :deep(.el-button){padding:6px 7px;font-size: 11.5px}.concierge-section{padding:13px;border-radius:11px}.concierge-header h2{font-size:18px}.concierge-quick{margin:9px 0}.concierge-quick button{padding:5px 7px;font-size: 11px}.concierge-input :deep(.el-input__wrapper){min-height:30px}.concierge-input :deep(.el-button){padding:7px 9px}.booking-bar{position:fixed;right:9px;bottom:9px;left:9px;width:auto;padding:9px 10px;border-radius:10px}.booking-bar p{display:none}.booking-bar__right{gap:4px}.booking-bar__right strong{font-size:16px}.booking-bar__right span{display:none}.booking-bar__right :deep(.el-button){padding:7px 8px;font-size: 11.5px}.poster-dialog__image{max-height:67vh}}@media(max-width:390px){.product-detail-hero h1{font-size:23px}.moments-grid .media-image{height:96px}.itinerary-card{grid-template-columns:80px minmax(0,1fr) 16px}.itinerary-card__image,.itinerary-card__image .media-image{height:74px}.booking-bar__right strong{font-size:14px}}
 .product-detail-hero__ai{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.itinerary-card__time{display:block;margin-top:6px;color:var(--teal-dark);font-size:11px;font-weight:650}.chat-suggestions{grid-template-columns:1fr!important;gap:7px}.chat-suggestions .product-card--compact{width:100%}
+
+
+/* Align the hero with the detail content grid and use one predictable corner system. */
+.visitor-product-detail .detail-purchase-layout,
+.visitor-product-detail .room-choice--packages,
+.visitor-product-detail .detail-anchor-nav,
+.visitor-product-detail .detail-content,
+.visitor-product-detail .trip-strip,
+.visitor-product-detail .booking-bar {
+  width: min(1200px, calc(100% - 48px)) !important;
+  max-width: 1200px !important;
+  margin-inline: auto;
+  box-sizing: border-box;
+}
+.visitor-product-detail .detail-purchase-layout {
+  margin-bottom: 16px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.visitor-product-detail .product-detail-hero {
+  min-width: 0;
+  height: auto;
+  min-height: 448px;
+  padding: 0;
+  border-radius: 12px 0 0 12px;
+  overflow: hidden;
+}
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero__veil,
+:deep(.visitor-product-detail .product-detail-hero .media-image),
+:deep(.visitor-product-detail .product-detail-hero .media-image img) {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px 0 0 12px !important;
+  overflow: hidden;
+  object-fit: cover;
+}
+.visitor-product-detail .commerce-summary {
+  min-width: 0;
+  border-radius: 0 12px 12px 0;
+}
+.visitor-product-detail .room-choice__options {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  touch-action: pan-x;
+}
+.visitor-product-detail .room-choice--inline .room-choice__options > button { position: relative; }
+.visitor-product-detail .room-choice__selected {
+  position: absolute;
+  z-index: 2;
+  top: 5px;
+  right: 5px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e7f2eb;
+  color: #3d7058;
+  font-size: 10px;
+  line-height: 1.3;
+}
+.visitor-product-detail .room-choice__prev,
+.visitor-product-detail .room-choice__next {
+  display: grid;
+  width: 28px;
+  height: 34px;
+  flex: 0 0 28px;
+  place-items: center;
+  border: 1px solid #e1e7e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #53675b;
+  font-size: 20px;
+  cursor: pointer;
+  transition: background .18s, border-color .18s, opacity .18s;
+}
+.visitor-product-detail .room-choice__prev:hover:not(:disabled),
+.visitor-product-detail .room-choice__next:hover:not(:disabled) { border-color: #b8c9bd; background: #f5f8f5; }
+.visitor-product-detail .room-choice__prev:disabled,
+.visitor-product-detail .room-choice__next:disabled { opacity: .35; cursor: not-allowed; }
+@media (max-width: 980px) {
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: minmax(0, 1fr); }
+  .visitor-product-detail .product-detail-hero { min-height: 0; aspect-ratio: 16 / 10; border-radius: 12px 12px 0 0; }
+  .visitor-product-detail .product-detail-hero > .media-image,
+  .visitor-product-detail .product-detail-hero__veil,
+  :deep(.visitor-product-detail .product-detail-hero .media-image),
+  :deep(.visitor-product-detail .product-detail-hero .media-image img) { border-radius: 12px 12px 0 0 !important; }
+  .visitor-product-detail .commerce-summary { border-radius: 0 0 12px 12px; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail .detail-purchase-layout,
+  .visitor-product-detail .room-choice--packages,
+  .visitor-product-detail .detail-anchor-nav,
+  .visitor-product-detail .detail-content,
+  .visitor-product-detail .trip-strip,
+  .visitor-product-detail .booking-bar { width: calc(100% - 24px) !important; }
+}
+
 </style>
+
+
+
+
+
+
 <style scoped>
 .detail-facts-section,.guide-source-section{margin:0 0 26px}.detail-facts-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.detail-facts-grid>div{padding:14px 16px;background:#fff;border:1px solid var(--line);border-radius:10px}.detail-facts-grid b{font-size:13px;color:var(--teal-dark)}.detail-facts-grid p{margin:7px 0 0;color:#576963;font-size:12px;line-height:1.65}.guide-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.guide-list a{display:grid;gap:6px;padding:13px 14px;background:#f6faf7;border:1px solid #dcebe4;border-radius:10px;color:var(--ink);text-decoration:none}.guide-list a strong{font-size:12px}.guide-list a span{color:var(--muted);font-size: 11.5px;line-height:1.5}
 </style>
@@ -731,7 +1264,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
 <style scoped>
 /* Visitor storefront layer: visual hierarchy follows a conventional travel-commerce product page. */
 .visitor-product-detail {
-  --shop-orange: #ff6a00;
+  --shop-orange: var(--visitor-action, #e96b24);
   --shop-orange-soft: #fff4ec;
   --shop-line: #eee9e4;
   --shop-canvas: #f5f5f5;
@@ -1793,5 +2326,1638 @@ onBeforeUnmount(() => window.removeEventListener('scroll', updateAnchorFromScrol
   .preview-mode-banner { margin:0 0 8px; padding:9px 11px; }
   .review-card header { align-items:flex-start; flex-direction:column; gap:3px; }
   .guide-source-section .guide-facts { grid-template-columns: 1fr; }
+}
+</style>
+
+<style scoped>
+/* Purchase decision comes first; supporting details follow in calm, readable sections. */
+.visitor-product-detail {
+  width: min(1180px, calc(100% - 40px));
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-bottom: 108px;
+  background: #fff;
+}
+.detail-purchase-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(380px, .88fr);
+  align-items: stretch;
+  gap: 30px;
+  margin-top: 16px;
+}
+.detail-purchase-layout .product-detail-hero {
+  width: 100%;
+  height: auto;
+  min-height: 480px;
+  border-radius: 12px;
+  background: #eef1ed;
+}
+.detail-purchase-layout .product-detail-hero > .media-image { position: absolute; inset: 0; width: 100%; height: 100%; }
+.detail-purchase-layout .product-detail-hero__veil { background: linear-gradient(180deg, rgba(0,0,0,.10), transparent 38%, rgba(0,0,0,.26)); }
+.detail-purchase-layout .product-detail-hero__content,
+.detail-purchase-layout .hero-price { display: none; }
+.detail-purchase-layout .back-to-list { top: 16px; left: 16px; padding: 8px 12px; font-size: 13px; }
+.detail-purchase-layout .hero-actions { top: 16px; right: 16px; }
+.commerce-summary {
+  display: flex;
+  max-width: none;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  margin: 0;
+  padding: 16px 8px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+.commerce-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.commerce-title { min-width: 0; }
+.commerce-title h1 { margin: 0; color: #26352e; font-size: clamp(25px, 2.3vw, 32px); font-weight: 680; line-height: 1.35; letter-spacing: -.4px; }
+.commerce-title p { max-width: 560px; margin: 9px 0 0; color: #58665e; font-size: 15px; line-height: 1.7; }
+.commerce-tags { gap: 14px; margin-top: 13px; }
+.commerce-tags span { padding: 0; background: transparent; color: #587365; font-size: 13px; }
+.commerce-price { display: flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: baseline; gap: 6px; margin: 2px 0 0; white-space: nowrap; }
+.commerce-price strong { color: #e66b26; font-size: 30px; }
+.commerce-price span { color: #747e77; font-size: 13px; }
+.commerce-inclusion { display: grid; gap: 5px; padding: 14px 0; border-top: 1px solid #edf0ec; border-bottom: 1px solid #edf0ec; }
+.commerce-inclusion span { color: #7b867f; font-size: 12px; }
+.commerce-inclusion strong { color: #34483d; font-size: 15px; font-weight: 600; line-height: 1.65; }
+.commerce-summary .date-picker-row { flex-wrap: wrap; overflow: visible; gap: 8px; margin: 0; padding: 0; }
+.commerce-summary .date-picker-row > b { width: 100%; color: #4d5c53; font-size: 13px; }
+.commerce-summary .date-chip { min-width: 82px; padding: 8px 10px; border: 1px solid #e5e9e4; border-radius: 8px; background: #fff; color: #4f5a54; }
+.commerce-summary .date-chip.active { border-color: #79a08d; background: #f1f7f2; color: #345d49; box-shadow: none; }
+.commerce-summary .date-chip strong { font-size: 13px; }
+.commerce-summary .date-chip small { color: #738177; font-size: 12px; }
+.commerce-stay-note { margin: -9px 0 0; color: #6d7971; font-size: 13px; line-height: 1.6; }
+.commerce-purchase-actions { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
+.commerce-purchase-actions :deep(.el-button--primary) { min-width: 160px; height: 46px; border: 0; border-radius: 7px; background: var(--visitor-action, #e96b24); font-size: 15px; font-weight: 650; }
+.commerce-assistant-link { min-height: 42px; padding: 0 8px; border: 0; background: transparent; color: #3c6b58; font-size: 14px; cursor: pointer; }
+.commerce-confirmation { margin: -10px 0 0; color: #88928b; font-size: 12px; line-height: 1.5; }
+.detail-anchor-nav { top: 62px; max-width: 1180px; margin: 22px auto 0; justify-content: flex-start; gap: 30px; border-top: 1px solid #ecefea; }
+.detail-anchor-nav button { padding: 14px 2px 12px; font-size: 14px; }
+.detail-content { max-width: 1120px; padding: 8px 12px 24px; }
+.detail-content > .commerce-highlight,
+.detail-content > .itinerary-section,
+.detail-content > .fee-section,
+.detail-content > .notice-section,
+.detail-content > .hotel-detail-section,
+.detail-content > .photo-detail-section,
+.detail-content > .guide-source-section,
+.detail-content > .moments-section,
+.detail-content > .related-section {
+  margin: 0;
+  padding: 28px 0;
+  border: 0;
+  border-bottom: 1px solid #eef0ec;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+.section-heading { margin-bottom: 18px; }
+.section-heading h2 { padding-left: 0; color: #293a31; font-size: 22px; }
+.section-heading h2::before { display: none; }
+.section-heading .section-kicker { color: #849188; font-size: 12px; letter-spacing: 0; }
+.detail-story { max-width: 860px; margin: 0 0 18px; color: #56645c; font-size: 15px; line-height: 1.8; }
+.highlight-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.highlight-grid article { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.highlight-grid .media-image { height: 190px; border-radius: 8px; }
+.highlight-grid h3 { margin: 11px 0 5px; color: #33443a; font-size: 16px; line-height: 1.5; }
+.highlight-grid p { margin: 0; color: #68746d; font-size: 14px; line-height: 1.7; }
+.day-plan { padding: 20px 0; border: 0; border-bottom: 1px solid #eef0ec; border-radius: 0; background: transparent; box-shadow: none; }
+.day-plan__items li { padding: 14px 0; border-bottom: 1px solid #f0f2ef; }
+.day-plan__time { color: #4d6b59; font-size: 13px; }
+.day-plan__items li > div > b { color: #2f4037; font-size: 15px; }
+.day-plan__items li p { color: #606e65; font-size: 14px; line-height: 1.7; }
+.day-plan__optional { display: inline-block; margin-top: 6px; color: #927342; font-size: 12px; }
+.day-plan__meta { color: #728077; font-size: 12px; }
+.fee-columns { gap: 36px; }
+.fee-columns > div { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.fee-columns h3 { padding: 0 0 10px; border-bottom: 1px solid #e9eee9; color: #3b624f; font-size: 15px; }
+.fee-columns p { padding: 9px 0; color: #55645b; font-size: 14px; line-height: 1.65; }
+.fee-columns p small { display: block; margin: 3px 0 0 20px; color: #8a958d; font-size: 12px; }
+.notice-list { padding: 0; border: 0; background: transparent; }
+.notice-list p { margin: 0; padding: 10px 0; border-bottom: 1px solid #f0f2ef; color: #56645c; font-size: 14px; line-height: 1.7; }
+.hotel-detail-grid { gap: 0 30px; }
+.hotel-detail-grid > div { padding: 13px 0; border: 0; border-bottom: 1px solid #f0f2ef; border-radius: 0; background: transparent; }
+.hotel-detail-grid span { color: #7d8981; font-size: 12px; }
+.hotel-detail-grid strong { color: #3a4a40; font-size: 14px; }
+.photo-detail-lead { color: #627168; font-size: 14px; }
+.photo-detail-list li { border-left: 0; border-bottom: 1px solid #f0f2ef; background: transparent; color: #56645c; font-size: 14px; }
+.guide-intro { margin: -6px 0 12px; color: #7b867e; font-size: 13px; }
+.guide-source-section .guide-list { gap: 0; }
+.guide-source-section .guide-list > article { padding: 16px 0; border: 0; border-bottom: 1px solid #eef0ec; border-radius: 0; background: transparent; }
+.guide-source-section .guide-list > article > header strong { color: #35483c; font-size: 16px; }
+.guide-source-section .guide-content { color: #5b6960; font-size: 14px; }
+.guide-source-section .guide-facts { padding: 8px 0 0; border: 0; }
+.guide-source-section .guide-facts li { color: #65736a; font-size: 13px; }
+.guide-source-section .guide-verified { color: #929b94; font-size: 12px; }
+.booking-bar { width: min(1180px, calc(100% - 32px)); max-width: 1180px; border: 1px solid #e7ebe6; border-radius: 10px; box-shadow: 0 8px 24px rgba(29, 47, 37, .12); }
+.booking-bar__right { gap: 14px; }
+.assistant-action { border: 0; background: transparent; color: #3c6b58; font-size: 13px; }
+.assistant-dialog :deep(.el-dialog) { border-radius: 12px; }
+.share-preview { display: grid; grid-template-columns: 44% minmax(0, 1fr); gap: 16px; align-items: center; padding: 8px; }
+.share-preview > .media-image { height: 190px; border-radius: 8px; }
+.share-preview strong { color: #2e4036; font-size: 18px; line-height: 1.4; }
+.share-preview p { margin: 10px 0; color: #627067; font-size: 14px; line-height: 1.6; }
+.share-preview span { color: #df6a28; font-size: 14px; font-weight: 650; }
+@media (max-width: 860px) {
+  .visitor-product-detail { width: min(100%, 740px); }
+  .detail-purchase-layout { grid-template-columns: 1fr; gap: 0; margin-top: 8px; }
+  .detail-purchase-layout .product-detail-hero { min-height: 0; aspect-ratio: 1.55; }
+  .commerce-summary { gap: 14px; padding: 20px 4px 18px; }
+  .commerce-head { gap: 12px; }
+  .commerce-title h1 { font-size: 25px; }
+  .commerce-price strong { font-size: 26px; }
+  .detail-anchor-nav { gap: 20px; overflow-x: auto; }
+  .detail-content { padding-inline: 4px; }
+}
+@media (max-width: 600px) {
+  .visitor-product-detail { width: 100%; padding: 0 14px 108px; box-sizing: border-box; }
+  .detail-purchase-layout .product-detail-hero { aspect-ratio: 1.35; border-radius: 9px; }
+  .detail-purchase-layout .back-to-list { top: 10px; left: 10px; }
+  .commerce-summary { gap: 12px; padding: 17px 0; }
+  .commerce-title h1 { font-size: 22px; }
+  .commerce-title p { margin-top: 6px; font-size: 14px; }
+  .commerce-price strong { font-size: 22px; }
+  .commerce-inclusion strong { font-size: 14px; }
+  .commerce-purchase-actions { gap: 10px; }
+  .commerce-purchase-actions :deep(.el-button--primary) { min-width: 132px; height: 42px; }
+  .commerce-assistant-link { font-size: 13px; }
+  .detail-anchor-nav { position: sticky; top: 56px; z-index: 10; gap: 18px; justify-content: flex-start; margin: 0 -14px; padding: 0 14px; background: #fff; }
+  .detail-anchor-nav button { flex: 0 0 auto; padding: 13px 1px 11px; font-size: 13px; }
+  .detail-content { padding: 0 0 12px; }
+  .detail-content > .commerce-highlight,
+  .detail-content > .itinerary-section,
+  .detail-content > .fee-section,
+  .detail-content > .notice-section,
+  .detail-content > .hotel-detail-section,
+  .detail-content > .photo-detail-section,
+  .detail-content > .guide-source-section,
+  .detail-content > .moments-section,
+  .detail-content > .related-section { padding: 22px 0; }
+  .section-heading h2 { font-size: 19px; }
+  .detail-story { font-size: 14px; }
+  .highlight-grid { grid-template-columns: 1fr; gap: 18px; }
+  .highlight-grid .media-image { height: auto; aspect-ratio: 1.7; }
+  .highlight-grid p,.fee-columns p,.notice-list p,.hotel-detail-grid strong { font-size: 13px; }
+  .fee-columns { grid-template-columns: 1fr; gap: 18px; }
+  .hotel-detail-grid { grid-template-columns: 1fr; }
+  .share-preview { grid-template-columns: 1fr; }
+  .share-preview > .media-image { height: 180px; }
+  .booking-bar { right: 10px; bottom: 10px; left: 10px; width: auto; padding: 8px 10px; }
+  .booking-bar__right { gap: 7px; }
+  .booking-bar__right strong { font-size: 17px; }
+  .booking-bar__right span { display: none; }
+}
+
+/* Keep the established left-image/right-summary hero, with room for the full
+   storefront width; the itinerary returns to a quiet schedule timeline. */
+.visitor-product-detail { width: min(1280px, 100%); max-width: 1280px; margin-inline: auto; }
+.detail-purchase-layout { grid-template-columns: minmax(0, 1.08fr) minmax(390px, .92fr); gap: 30px; align-items: stretch; }
+.detail-purchase-layout .product-detail-hero { min-height: 490px; border-radius: 14px; }
+.commerce-summary { align-content: center; min-width: 0; padding-inline: 8px; }
+.detail-content { width: 100%; max-width: 1180px; margin-inline: auto; }
+.highlight-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 22px; }
+.highlight-grid > article { min-width: 0; padding: 0 0 14px; border: 0; border-bottom: 1px solid #ecefeb; border-radius: 0; background: transparent; }
+.highlight-grid > article .media-image { width: 100%; aspect-ratio: 1.65; overflow: hidden; border-radius: 9px; }
+.highlight-grid > article h3 { margin: 12px 0 5px; color: #293d33; font-size: 16px; }
+.highlight-grid > article p { margin: 0; color: #68766e; font-size: 13px; line-height: 1.65; }
+.day-plan-list { display: grid; gap: 28px; }
+.day-plan { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.day-plan__head { align-items: center; padding: 0 0 11px; border-bottom: 1px solid #e9eeea; }
+.day-plan__head > div { display: flex; align-items: center; gap: 12px; }
+.day-plan__head strong { margin: 0; color: #53645a; font-size: 13px; font-weight: 600; }
+.day-plan__head small { color: #89938d; font-size: 12px; }
+.day-plan__label { padding: 4px 9px; border-radius: 999px; background: #eef5ef; color: #3f6f58; font-size: 12px; }
+.day-plan__items { position: relative; gap: 0; padding-top: 6px; }
+.day-plan__items::before { position: absolute; top: 14px; bottom: 14px; left: 109px; width: 1px; background: #dfe8e1; content: ''; }
+.day-plan__items li { position: relative; grid-template-columns: 92px minmax(0, 1fr); gap: 36px; padding: 14px 0; }
+.day-plan__items li::before { position: absolute; top: 20px; left: 104px; width: 9px; height: 9px; border: 2px solid #fff; border-radius: 50%; background: #4d9770; box-shadow: 0 0 0 1px #b9d4c2; content: ''; }
+.day-plan__time { display: grid; justify-items: end; gap: 4px; padding-top: 0; color: #3e6a52; font-family: var(--font-sans); font-size: 12px; line-height: 1.5; text-align: right; }
+.day-plan__time b { margin: 0; color: #819088; font-size: 11px; font-weight: 500; }
+.day-plan__items li > div > b { color: #293d33; font-size: 15px; }
+.day-plan__items p { margin: 5px 0 0; color: #69776e; font-size: 13px; line-height: 1.65; }
+.day-plan__meta { display: grid; gap: 4px; margin-top: 7px; }
+.day-plan__meta span { width: fit-content; padding: 0; border: 0; border-radius: 0; background: transparent; color: #87928b; font-size: 12px; line-height: 1.55; }
+.day-plan__meta .day-plan__note { color: #7a6b50; }
+.guide-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.guide-source-section .guide-list > article { display: flex; min-width: 0; flex-direction: column; gap: 8px; padding: 16px; border: 1px solid #e8ede8; border-radius: 11px; background: #fff; }
+.guide-source-section .guide-list > article > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.guide-source-section .guide-list > article > header strong { color: #30483a; font-size: 15px; }
+.guide-source-section .guide-list > article > header em { flex: 0 0 auto; color: #7a897f; font-size: 11px; font-style: normal; }
+.guide-source-section .guide-content { margin: 0; color: #65736b; font-size: 13px; line-height: 1.65; }
+.guide-source-section .guide-facts { display: grid; gap: 5px; margin: 0; padding: 8px 0 0; border-top: 1px solid #eff2ef; }
+.guide-source-section .guide-facts li { color: #68766d; font-size: 12px; line-height: 1.6; }
+.guide-source-section .guide-facts b { min-width: 0; color: #87938b; font-weight: 500; }
+.guide-source-section .guide-list > article > footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; padding-top: 5px; }
+.guide-source-section .guide-list > article > footer span { color: #a26437; font-size: 11px; }
+.guide-source-section .guide-list > article > footer a { color: #718177; font-size: 11px; text-decoration: none; }
+.guide-empty { margin: 0; padding: 18px 0; color: #7d8981; font-size: 13px; }
+.booking-bar { width: min(1280px, calc(100% - 40px)); max-width: 1280px; }
+@media (max-width: 980px) {
+  .detail-purchase-layout { grid-template-columns: minmax(0, 1fr) minmax(330px, .95fr); gap: 20px; }
+  .detail-purchase-layout .product-detail-hero { min-height: 420px; }
+  .guide-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .visitor-product-detail { width: 100%; }
+  .detail-purchase-layout { grid-template-columns: 1fr; gap: 0; }
+  .detail-purchase-layout .product-detail-hero { min-height: 0; }
+}
+@media (max-width: 700px) {
+  .day-plan__items::before { left: 83px; }
+  .day-plan__items li { grid-template-columns: 68px minmax(0, 1fr); gap: 28px; }
+  .day-plan__items li::before { left: 78px; }
+  .guide-list { grid-template-columns: 1fr; gap: 10px; }
+  .guide-source-section .guide-list > article { padding: 13px 0; border: 0; border-bottom: 1px solid #e9eeea; border-radius: 0; background: transparent; }
+}
+</style>
+
+<style scoped>
+.day-plan-list{gap:12px}.day-plan{padding:17px 18px;border:1px solid #f0e1d6;border-radius:12px;background:#fffdfb;box-shadow:none}.day-plan__head{align-items:flex-start;padding-bottom:10px;border-bottom:1px dashed #f0e2d6}.day-plan__head>div{display:grid;justify-items:start;gap:7px}.day-plan__head strong{display:block;margin:0;color:#292724;font-size:17px;line-height:1.35}.day-plan__head small{padding-top:4px;color:#a4968b;font-size:11.5px;white-space:nowrap}.day-plan__summary{margin:10px 0 13px;color:#7d6f66;font-size:12px;line-height:1.65}.day-plan__items{gap:12px;margin-top:12px}.day-plan__items li{grid-template-columns:96px minmax(0,1fr);gap:12px}.day-plan__time{padding-top:1px;color:#d56835;font-size:11.5px;line-height:1.5}.day-plan__time b{font-size:12px}.day-plan__items>li>div{min-width:0}.day-plan__items>li>div>b{color:#292724;font-size:13.5px;line-height:1.45}.day-plan__items p{margin-top:3px;color:#766a62;font-size:12px;line-height:1.6}.day-plan__meta{gap:5px;margin-top:6px}.day-plan__meta span{background:#f7f1eb;font-size:11.5px}@media(max-width:700px){.day-plan{padding:14px}.day-plan__items li{grid-template-columns:76px minmax(0,1fr);gap:8px}.day-plan__head strong{font-size:15px}}
+
+/* Itinerary follows the compact day card and two-column activity rows in the reference. */
+.day-plan-list { display: grid; gap: 14px; }
+.day-plan { padding: 16px 18px; border: 1px solid #f0e1d6; border-radius: 12px; background: #fffdfb; box-shadow: none; }
+.day-plan__head { align-items: flex-start; padding: 0 0 11px; border-bottom: 1px dashed #f0e2d6; }
+.day-plan__head > div { display: grid; justify-items: start; gap: 7px; }
+.day-plan__head strong { display: block; margin: 0; color: #292724; font-size: 16px; line-height: 1.4; }
+.day-plan__head small { padding-top: 4px; color: #a4968b; font-size: 12px; white-space: nowrap; }
+.day-plan__label { width: fit-content; padding: 4px 9px; border-radius: 999px; background: #fff0e6; color: #d56835; font-size: 12px; }
+.day-plan__items { position: relative; gap: 0; margin-top: 7px; padding-top: 0; }
+.day-plan__items::before, .day-plan__items li::before { display: none !important; content: none !important; }
+.day-plan__items li { position: static; grid-template-columns: 96px minmax(0, 1fr); gap: 13px; padding: 10px 0; border: 0; }
+.day-plan__time { display: grid; justify-items: start; align-content: start; gap: 2px; padding-top: 0; color: #df5f2c; font-size: 12px; line-height: 1.45; text-align: left; }
+.day-plan__time b { margin: 0; color: #262522; font-size: 13px; font-weight: 650; }
+.day-plan__items li > div > b { color: #292724; font-size: 14px; line-height: 1.45; }
+.day-plan__items p { margin: 4px 0 0; color: #766a62; font-size: 12.5px; line-height: 1.65; }
+.day-plan__meta { display: flex; flex-wrap: wrap; gap: 5px 6px; margin-top: 7px; }
+.day-plan__meta span { width: fit-content; padding: 3px 8px; border: 0; border-radius: 999px; background: #f7f1eb; color: #8d7a6d; font-size: 11.5px; line-height: 1.5; }
+.day-plan__meta .day-plan__note { background: #fff4e5; color: #94613b; }
+.day-plan__meta .day-plan__note--warning { background: #fff0eb; color: #9a4f36; }
+
+/* Nearby recommendations use one readable card per place. */
+.guide-source-section .section-heading h2::before { display: inline-block; width: 3px; height: 18px; margin-right: 9px; border-radius: 2px; background: #ef6b28; vertical-align: -3px; content: ''; }
+.guide-source-section .guide-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.guide-source-section .guide-list > article { display: grid; gap: 8px; padding: 16px 18px; border: 1px solid #eee9e2; border-radius: 10px; background: #f8fbf9; }
+.guide-source-section .guide-list > article > header { display: grid; justify-content: start; gap: 3px; }
+.guide-source-section .guide-list > article > header strong { color: #24463d; font-size: 16px; line-height: 1.45; }
+.guide-source-section .guide-list > article > header strong span { color: #718078; font-size: 13px; font-weight: 500; }
+.guide-source-section .guide-list > article > header em { color: #c57735; font-size: 12px; font-style: normal; }
+.guide-source-section .guide-source-line { display: block; width: fit-content; margin: 1px 0 0; color: #87958e; font-size: 12px; text-decoration: none; }
+.guide-source-section a.guide-source-line:hover { color: #326d5d; text-decoration: underline; }
+.guide-source-section .guide-content { margin: 0; color: #43574f; font-size: 13px; line-height: 1.75; }
+.guide-source-section .guide-facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; margin: 3px 0 0; padding: 8px 0 0; border-top: 1px dashed #eee7df; }
+.guide-source-section .guide-facts li { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 8px; color: #58675f; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.guide-source-section .guide-facts b { min-width: 0; margin: 0; color: #287363; font-weight: 600; }
+.guide-source-section .guide-list > article > footer { display: flex; justify-content: flex-start; margin-top: 0; padding: 0; }
+.guide-source-section .guide-list > article > footer span { color: #b66b34; font-size: 11.5px; }
+
+/* Group facts without drawing a rule after every line. */
+.fee-columns { gap: 44px; }
+.fee-columns h3 { padding: 0 0 7px; border: 0; color: #3b624f; font-size: 15px; }
+.fee-columns p { margin: 0; padding: 4px 0; border: 0; color: #55645b; font-size: 14px; line-height: 1.65; }
+.notice-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 34px; }
+.notice-list p { margin: 0; padding: 0; border: 0; color: #56645c; font-size: 13.5px; line-height: 1.7; }
+.hotel-detail-grid { gap: 15px 38px; }
+.hotel-detail-grid > div { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.hotel-detail-grid span { color: #9a8f86; font-size: 12px; }
+.hotel-detail-grid strong { margin-top: 4px; color: #3a4a40; font-size: 14px; }
+
+@media (max-width: 700px) {
+  .day-plan { padding: 14px; }
+  .day-plan__items li { grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
+  .day-plan__head strong { font-size: 15px; }
+  .guide-source-section .guide-list > article { padding: 14px; }
+  .notice-list { grid-template-columns: 1fr; gap: 10px; }
+}
+
+
+
+.highlight-public-tag {
+  display: inline-block;
+  margin-top: 10px;
+  color: #bd6938;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.day-plan__entry {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 13px;
+}
+.day-plan__entry-image {
+  width: 116px;
+  height: 78px;
+  flex: 0 0 116px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.day-plan__entry-image :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.day-plan__entry-copy {
+  min-width: 0;
+}
+@media (max-width: 700px) {
+  .day-plan__entry { gap: 9px; }
+  .day-plan__entry-image { width: 88px; height: 66px; flex-basis: 88px; }
+}
+</style>
+
+<style scoped>
+/* Use the desktop canvas for product decisions and keep the amount with its unit. */
+.visitor-product-detail { width: min(1520px, calc(100% - 40px)); max-width: 1520px; }
+.detail-content { max-width: 1480px; }
+.detail-anchor-nav { max-width: 1520px; }
+.booking-bar { width: min(1520px, calc(100% - 40px)); max-width: 1520px; }
+.visitor-product-detail .commerce-head .commerce-price { display: inline-flex !important; flex: 0 0 auto; flex-direction: row; flex-wrap: nowrap !important; align-items: baseline; justify-content: flex-end; gap: 5px; width: max-content; max-width: 100%; white-space: nowrap; }
+.visitor-product-detail .commerce-head .commerce-price strong,
+.visitor-product-detail .commerce-head .commerce-price span { flex: 0 0 auto; white-space: nowrap; }
+.visitor-product-detail .commerce-head .commerce-price strong { font-size: clamp(23px, 2vw, 30px); }
+.visitor-product-detail .commerce-head .commerce-price span { font-size: 12px; }
+.booking-bar__price { display: flex; flex: 0 0 auto; align-items: baseline; gap: 5px; white-space: nowrap; }
+.booking-bar__price strong, .booking-bar__price span { white-space: nowrap; }
+.commerce-highlight > .section-heading,
+.commerce-highlight > .highlight-grid { padding-inline: 14px; }
+.highlight-grid > article { padding-inline: 0; }
+.highlight-grid > article h3 { margin-top: 14px; }
+.highlight-grid > article p { line-height: 1.75; }
+.day-plan { padding: 20px 24px; }
+.day-plan__items li { gap: 20px; }
+.day-plan__entry { gap: 16px; }
+.day-plan__suggestions { display: grid; gap: 3px; margin-top: 10px; }
+.day-plan__suggestions > b { color: #567461; font-size: 12px; font-weight: 600; }
+.day-plan__suggestions > p { display: grid; gap: 2px; margin: 3px 0 0; }
+.day-plan__suggestions > p > strong { color: #394d40; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.day-plan__suggestions > p > span { color: #77837b; font-size: 11.5px; line-height: 1.55; }
+@media (max-width: 860px) { .visitor-product-detail { width: 100%; } .detail-content { max-width: none; } .booking-bar { width: auto; } }
+@media (max-width: 700px) {
+  .day-plan { padding: 18px 18px; }
+  .day-plan__items li { grid-template-columns: 76px minmax(0, 1fr); gap: 14px; }
+  .day-plan__entry { gap: 11px; }
+  .day-plan__suggestions > p > span { font-size: 11px; }
+}
+</style>
+
+<style scoped>
+/* Visitor product detail typography scale and shared alignment. */
+.visitor-product-detail .commerce-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 16px;
+}
+.visitor-product-detail .commerce-title { min-width: 0; }
+.visitor-product-detail .commerce-title h1 {
+  display: -webkit-box;
+  max-width: 100%;
+  margin: 0 0 8px;
+  overflow: hidden;
+  color: #263832;
+  font-size: clamp(26px, 1.45vw, 28px);
+  font-weight: 680;
+  line-height: 1.28;
+  text-wrap: balance;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.visitor-product-detail .commerce-title > p { margin: 0 0 8px; color: #64736a; font-size: 14px; line-height: 1.6; }
+.visitor-product-detail .commerce-tags { gap: 7px; }
+.visitor-product-detail .commerce-tags > span { font-size: 12px; line-height: 1.45; }
+.visitor-product-detail .commerce-head .commerce-price {
+  align-self: start;
+  justify-self: end;
+  gap: 5px;
+  margin-top: 2px;
+}
+.visitor-product-detail .commerce-head .commerce-price strong { color: #dc6c31; font-size: 27px; font-weight: 700; line-height: 1.2; }
+.visitor-product-detail .commerce-head .commerce-price span { color: #778179; font-size: 13px; }
+.visitor-product-detail .commerce-inclusion { gap: 6px; padding: 12px 0; }
+.visitor-product-detail .commerce-inclusion > span { color: #758178; font-size: 13px; }
+.visitor-product-detail .commerce-inclusion > strong { color: #34483d; font-size: 14px; line-height: 1.6; }
+.visitor-product-detail .date-picker-row {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  overflow: visible;
+  margin: 0;
+  padding: 0;
+}
+.visitor-product-detail .date-picker-row > b { width: auto; margin-right: 3px; font-size: 13px; }
+.visitor-product-detail .date-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+.visitor-product-detail .date-chip strong { font-size: 13px; }
+.visitor-product-detail .date-chip small { margin: 0; color: #718078; font-size: 12px; }
+.visitor-product-detail .commerce-stay-note { margin: -5px 0 0; color: #768179; font-size: 13px; line-height: 1.5; }
+.visitor-product-detail .commerce-purchase-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.visitor-product-detail .commerce-purchase-actions :deep(.el-button) { height: 44px; margin: 0; padding-inline: 22px; font-size: 14px; }
+.visitor-product-detail .commerce-assistant-link { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; padding: 0 16px; font-size: 14px; line-height: 1; }
+.visitor-product-detail .back-to-list { font-size: 12px; }
+
+.visitor-product-detail .detail-anchor-nav {
+  top: 56px !important;
+  display: flex;
+  width: 100%;
+  max-width: 1280px;
+  height: 50px;
+  align-items: stretch;
+  justify-content: space-around;
+  gap: 0;
+  margin: 12px auto 0 !important;
+  padding: 0;
+}
+.visitor-product-detail .detail-anchor-nav button {
+  display: inline-flex;
+  min-width: 0;
+  height: 50px;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  font-size: 14px;
+  line-height: 1;
+}
+.visitor-product-detail .detail-anchor-nav button.active::after { right: 20%; left: 20%; height: 2px; }
+.visitor-product-detail .detail-content {
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
+  padding: 20px 0 44px;
+}
+.visitor-product-detail .detail-content > section {
+  margin: 0;
+  padding: 24px 0;
+}
+.visitor-product-detail .detail-content .section-heading {
+  align-items: center;
+  margin: 0 0 16px;
+  padding: 0;
+}
+.visitor-product-detail .detail-content .section-heading h2 {
+  position: static;
+  margin: 0;
+  padding: 0;
+  color: #273b32;
+  font-size: 22px;
+  font-weight: 680;
+  line-height: 1.35;
+}
+.visitor-product-detail .detail-content .section-heading h2::before {
+  position: static;
+  display: inline-block;
+  width: 3px;
+  height: 18px;
+  margin: 0 12px 0 0;
+  border-radius: 2px;
+  background: #ef6b28;
+  vertical-align: -2px;
+  content: '';
+}
+.visitor-product-detail .detail-content .section-kicker { font-size: 12px; }
+.visitor-product-detail .detail-content .section-count { font-size: 12px; }
+.visitor-product-detail .commerce-highlight > .section-heading,
+.visitor-product-detail .commerce-highlight > .highlight-grid { padding-inline: 0; }
+.visitor-product-detail .highlight-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  align-items: stretch;
+  gap: 16px;
+}
+.visitor-product-detail .highlight-grid > article {
+  display: grid;
+  height: 100%;
+  grid-template-rows: 176px 18px minmax(44px, auto) 1fr;
+  gap: 8px;
+  padding: 0 0 14px;
+  border: 1px solid #e9ece8;
+  border-radius: 11px;
+  background: #fff;
+}
+.visitor-product-detail .highlight-grid > article .media-image {
+  width: 100%;
+  height: 176px;
+  overflow: hidden;
+  border-radius: 10px 10px 0 0;
+}
+.visitor-product-detail .highlight-grid > article .media-image :deep(img) { width: 100%; height: 100%; object-fit: cover; }
+.visitor-product-detail .highlight-type-tag {
+  justify-self: start;
+  align-self: center;
+  margin: 0 14px;
+  color: #b76532;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.visitor-product-detail .highlight-grid > article h3 {
+  min-height: 44px;
+  margin: 0 14px;
+  color: #2d4036;
+  font-size: 16.5px;
+  font-weight: 650;
+  line-height: 1.38;
+}
+.visitor-product-detail .highlight-grid > article p {
+  margin: 0 14px;
+  color: #65746b;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.visitor-product-detail .itinerary-section .section-heading { margin-bottom: 14px; }
+.visitor-product-detail .day-plan { padding: 18px 22px; }
+.visitor-product-detail .day-plan__head {
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 10px;
+}
+.visitor-product-detail .day-plan__head > div { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.visitor-product-detail .day-plan__head strong { margin: 0; color: #2e4036; font-size: 16px; font-weight: 650; line-height: 1.35; }
+.visitor-product-detail .day-plan__head small { margin-left: auto; padding: 0; color: #78847d; font-size: 13px; }
+.visitor-product-detail .day-plan__label { flex: 0 0 auto; font-size: 12px; }
+.visitor-product-detail .day-plan__items li {
+  grid-template-columns: 86px minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  padding: 13px 0;
+}
+.visitor-product-detail .day-plan__time { gap: 3px; padding: 0; font-family: var(--font-sans); font-size: 13px; line-height: 1.45; }
+.visitor-product-detail .day-plan__time b { margin: 0; font-size: 13px; font-weight: 650; }
+.visitor-product-detail .day-plan__entry { min-width: 0; align-items: flex-start; gap: 14px; }
+.visitor-product-detail .day-plan__entry-image { width: 116px; height: 82px; flex: 0 0 116px; }
+.visitor-product-detail .day-plan__entry-copy { min-width: 0; flex: 1 1 auto; }
+.visitor-product-detail .day-plan__entry-copy > b { color: #293d33; font-size: 16px; font-weight: 650; line-height: 1.4; }
+.visitor-product-detail .day-plan__entry-copy > p { margin: 5px 0 0; color: #5f6e64; font-size: 14px; line-height: 1.65; }
+.visitor-product-detail .day-plan__meta,
+.visitor-product-detail .day-plan__entry-copy small { color: #78847d; font-size: 13px; line-height: 1.55; }
+.visitor-product-detail .day-plan__suggestions { gap: 5px; margin-top: 8px; }
+.visitor-product-detail .day-plan__suggestions > b,
+.visitor-product-detail .day-plan__suggestions > p > strong,
+.visitor-product-detail .day-plan__suggestions > p > span { font-size: 13px; line-height: 1.55; }
+
+.visitor-product-detail .fee-columns {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.visitor-product-detail .fee-columns > div { min-width: 0; }
+.visitor-product-detail .fee-columns h3 { margin: 0 0 8px; padding: 0; border: 0; font-size: 16px; line-height: 1.4; }
+.visitor-product-detail .fee-columns p { margin: 0; padding: 5px 0; border: 0; font-size: 14px; line-height: 1.6; }
+.visitor-product-detail .fee-columns p small { margin-top: 2px; font-size: 13px; }
+.visitor-product-detail .notice-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.visitor-product-detail .notice-list p { display: grid; gap: 5px; margin: 0; padding: 0; border: 0; font-size: 14px; line-height: 1.55; }
+.visitor-product-detail .notice-list p b { color: #7b877f; font-size: 13px; font-weight: 500; }
+.visitor-product-detail .notice-list p span { color: #35473c; font-size: 14px; font-weight: 550; }
+.visitor-product-detail .hotel-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 30px; }
+.visitor-product-detail .hotel-detail-grid > div { min-width: 0; padding: 0; border: 0; background: transparent; }
+.visitor-product-detail .hotel-detail-grid span { color: #849088; font-size: 13px; }
+.visitor-product-detail .hotel-detail-grid strong { margin-top: 4px; color: #35463d; font-size: 14px; font-weight: 450; line-height: 1.6; }
+.visitor-product-detail .hotel-detail-grid > div:nth-child(-n+2) strong { font-size: 15px; font-weight: 600; }
+.visitor-product-detail .hotel-detail-grid > div.full strong { font-size: 14px; font-weight: 400; }
+
+.visitor-product-detail .guide-source-section .guide-list > article > header { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.visitor-product-detail .guide-source-section .guide-list > article > header { align-items: center; }
+.visitor-product-detail .guide-source-section .guide-list > article > header strong { min-width: 0; font-size: 16px; font-weight: 650; line-height: 1.4; }
+.visitor-product-detail .guide-source-section .guide-list > article > header strong span { font-size: 13px; }
+.visitor-product-detail .guide-exclusion { flex: 0 0 auto; color: #a26437; font-size: 12px; line-height: 1.4; }
+.visitor-product-detail .guide-advice { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: start; gap: 10px; }
+.visitor-product-detail .guide-advice > b { color: #2f6f60; font-size: 13px; font-weight: 600; line-height: 1.68; }
+.visitor-product-detail .guide-source-section .guide-source-line { font-size: 13px; }
+.visitor-product-detail .guide-source-section .guide-content { font-size: 14px; line-height: 1.68; }
+.visitor-product-detail .guide-source-section .guide-facts li { grid-template-columns: 76px minmax(0, 1fr); font-size: 13px; line-height: 1.55; }
+.visitor-product-detail .guide-source-section .guide-facts .guide-how-to { grid-template-columns: 76px minmax(0, 1fr) auto; align-items: start; }
+.visitor-product-detail .guide-how-to a { color: #bb6534; font-size: 13px; line-height: 1.55; text-decoration: none; white-space: nowrap; }
+.visitor-product-detail .guide-how-to a:hover { color: #e86c26; text-decoration: underline; }
+.visitor-product-detail .guide-source-section .guide-facts b { font-size: 13px; }
+.visitor-product-detail .guide-source-section .guide-list > article > footer span { font-size: 12px; }
+.visitor-product-detail .photo-detail-lead,
+.visitor-product-detail .photo-detail-list,
+.visitor-product-detail .review-section,
+.visitor-product-detail .related-section { font-size: 14px; line-height: 1.65; }
+.visitor-product-detail small { font-size: max(12px, 1em); }
+.visitor-product-detail .booking-bar { min-height: 62px; }
+.visitor-product-detail .booking-bar__price { align-items: baseline; gap: 6px; }
+.visitor-product-detail .booking-bar__price strong { font-size: 27px; line-height: 1.2; }
+.visitor-product-detail .booking-bar__price span { font-size: 13px; }
+.visitor-product-detail .booking-bar :deep(.el-button),
+.visitor-product-detail .booking-bar .commerce-assistant-link { min-height: 42px; height: 42px; font-size: 14px; }
+
+@media (max-width: 1100px) {
+  .visitor-product-detail .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .visitor-product-detail .product-detail-hero { min-height: 0; aspect-ratio: 1.55; }
+  .visitor-product-detail .commerce-summary { padding: 16px 4px; }
+  .visitor-product-detail .commerce-head { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .visitor-product-detail .commerce-head .commerce-price { justify-self: start; }
+  .visitor-product-detail .detail-anchor-nav { margin-inline: -14px !important; padding-inline: 14px; overflow-x: auto; }
+  .visitor-product-detail .detail-anchor-nav button { flex: 0 0 auto; min-width: 92px; padding-inline: 8px; }
+  .visitor-product-detail .detail-content { padding: 12px 0 34px; }
+  .visitor-product-detail .detail-content > section { padding: 20px 0; }
+  .visitor-product-detail .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .visitor-product-detail .highlight-grid > article { grid-template-rows: 132px 18px minmax(44px, auto) 1fr; }
+  .visitor-product-detail .highlight-grid > article .media-image { height: 132px; }
+  .visitor-product-detail .highlight-grid > article h3 { margin-inline: 10px; font-size: 15px; }
+  .visitor-product-detail .highlight-grid > article p { margin-inline: 10px; font-size: 13px; }
+  .visitor-product-detail .highlight-type-tag { margin-inline: 10px; }
+  .visitor-product-detail .day-plan { padding: 15px 12px; }
+  .visitor-product-detail .day-plan__items li { grid-template-columns: 78px minmax(0, 1fr); gap: 10px; }
+  .visitor-product-detail .day-plan__entry { gap: 10px; }
+  .visitor-product-detail .day-plan__entry-image { width: 84px; height: 64px; flex-basis: 84px; }
+  .visitor-product-detail .fee-columns { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .visitor-product-detail .notice-list { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .visitor-product-detail .hotel-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 13px; }
+  .visitor-product-detail .guide-advice { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .visitor-product-detail .guide-source-section .guide-facts .guide-how-to { grid-template-columns: 76px minmax(0, 1fr); }
+  .visitor-product-detail .guide-how-to a { grid-column: 2; }
+}
+</style>
+
+<style scoped>
+.visitor-product-detail .detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 44px;
+  width: min(100%, 1280px);
+  max-width: 1280px;
+  box-sizing: border-box;
+  padding: 20px 0 44px;
+}
+.visitor-product-detail .detail-content > section { margin: 0; padding: 0 48px; }
+.visitor-product-detail .detail-content .section-heading { margin: 0 0 22px; }
+.visitor-product-detail .detail-content .section-heading h2::before { width: 3px; height: 18px; margin-right: 9px; }
+.visitor-product-detail .highlight-grid { gap: 16px; }
+.visitor-product-detail .highlight-grid > article { padding-bottom: 18px; }
+.visitor-product-detail .highlight-grid > article h3,
+.visitor-product-detail .highlight-grid > article p,
+.visitor-product-detail .highlight-type-tag { margin-inline: 20px; }
+.visitor-product-detail .day-plan { padding: 20px 24px; }
+.visitor-product-detail .day-plan__items li { grid-template-columns: 88px minmax(0, 1fr); gap: 16px; }
+.visitor-product-detail .day-plan__entry { gap: 16px; }
+.visitor-product-detail .day-plan__entry-copy > b { display: flex; align-items: center; gap: 8px; }
+.visitor-product-detail .timeline-operation-icon { display: inline-grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: #f2f3f1; color: #6d7b72; font-size: 13px; font-weight: 500; }
+.visitor-product-detail .fee-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 44px; max-width: 1100px; }
+.visitor-product-detail .fee-group { margin-top: 14px; }
+.visitor-product-detail .fee-group > strong { display: block; margin: 0 0 7px; color: #6b766e; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.visitor-product-detail .fee-group > p { padding: 4px 0; }
+.visitor-product-detail .fee-group--public > strong { color: #45735b; }
+.visitor-product-detail .notice-list,
+.visitor-product-detail .hotel-detail-grid { max-width: 1100px; }
+.visitor-product-detail .guide-source-section .guide-list { max-width: 1100px; }
+.visitor-product-detail .guide-source-section .guide-list > article { padding: 20px 24px; }
+@media (max-width: 860px) {
+  .visitor-product-detail .detail-content { gap: 34px; padding-top: 16px; }
+  .visitor-product-detail .detail-content > section { padding-inline: 28px; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail .detail-content { gap: 30px; padding: 12px 0 34px; }
+  .visitor-product-detail .detail-content > section { padding-inline: 16px; }
+  .visitor-product-detail .detail-content .section-heading { margin-bottom: 18px; }
+  .visitor-product-detail .highlight-grid { gap: 12px; }
+  .visitor-product-detail .highlight-grid > article h3,
+  .visitor-product-detail .highlight-grid > article p,
+  .visitor-product-detail .highlight-type-tag { margin-inline: 12px; }
+  .visitor-product-detail .day-plan { padding: 16px; }
+  .visitor-product-detail .day-plan__items li { grid-template-columns: 76px minmax(0, 1fr); gap: 12px; }
+  .visitor-product-detail .day-plan__entry { gap: 10px; }
+  .visitor-product-detail .fee-columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .visitor-product-detail .guide-source-section .guide-list > article { padding: 16px; }
+}
+</style>
+
+<style scoped>
+/* Unified visitor storefront details. */
+.visitor-product-detail { width: min(100%, 1200px); max-width: 1200px; margin: 0 auto; padding: 0 0 116px; background: transparent; box-sizing: border-box; }
+.visitor-product-detail .detail-purchase-layout { display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(0, 1fr); gap: 30px; align-items: stretch; width: 100%; margin: 0 auto 0; }
+.visitor-product-detail .product-detail-hero { width: 100%; max-width: none; min-height: 490px; margin: 0; border-radius: 14px; }
+.visitor-product-detail .commerce-summary { display: flex; flex-direction: column; justify-content: center; gap: 20px; width: 100%; max-width: none; min-width: 0; margin: 0; padding: 34px; border: 0; border-radius: 14px; background: #fff; box-shadow: 0 6px 24px rgba(30, 54, 43, .06); box-sizing: border-box; }
+.visitor-product-detail .commerce-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 14px; }
+.visitor-product-detail .commerce-title { min-width: 0; }
+.visitor-product-detail .commerce-title h1 { display: -webkit-box; overflow: hidden; margin: 0; color: #26362e; font-size: clamp(26px, 2.2vw, 28px); font-weight: 680; line-height: 1.28; letter-spacing: -.35px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.visitor-product-detail .commerce-title > p { margin: 8px 0 0; color: #65736b; font-size: 14px; line-height: 1.6; }
+.visitor-product-detail .commerce-tags { gap: 7px; margin-top: 12px; }
+.visitor-product-detail .commerce-tags span { padding: 5px 9px; border-radius: 999px; font-size: 12px; }
+.visitor-product-detail .commerce-price { align-self: start; min-width: max-content; padding-top: 1px; text-align: right; }
+.visitor-product-detail .commerce-price strong { color: #dd6524; font-size: 27px; font-weight: 700; line-height: 1.1; white-space: nowrap; }
+.visitor-product-detail .commerce-price span { margin-left: 4px; color: #7e8981; font-size: 13px; white-space: nowrap; }
+.visitor-product-detail .commerce-inclusion { display: grid; gap: 6px; margin: 0; padding: 0; border: 0; }
+.visitor-product-detail .commerce-inclusion > span { color: #89938c; font-size: 12px; }
+.visitor-product-detail .commerce-inclusion > strong { color: #354940; font-size: 14px; font-weight: 600; line-height: 1.65; }
+.visitor-product-detail .date-picker-row { flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; margin: 0; padding: 0; border: 0; box-sizing: border-box; }
+.visitor-product-detail .date-picker-row > b { margin-right: 2px; color: #738078; font-size: 13px; }
+.visitor-product-detail .date-chip { min-width: 82px; padding: 8px 9px; border: 1px solid #e0e5e0; border-radius: 9px; background: #fff; }
+.visitor-product-detail .date-chip strong { font-size: 13px; }
+.visitor-product-detail .date-chip small { font-size: 12px; }
+.visitor-product-detail .date-chip.active { border-color: #237966; background: #eef7f2; }
+.visitor-product-detail .date-chip.is-sold-out { border-color: #ead1cd; background: #fbf2f0; color: #9e5d55; cursor: not-allowed; opacity: .88; }
+.visitor-product-detail .date-chip:disabled { cursor: not-allowed; }
+.visitor-product-detail .date-chip:disabled:hover { transform: none; }
+.visitor-product-detail .soldout-inline { display: flex; align-items: center; gap: 12px; margin: -12px 0 0; color: #9e5d55; font-size: 13px; }
+.visitor-product-detail .soldout-inline button { padding: 0; border: 0; background: none; color: #a65c31; font: inherit; text-decoration: underline; cursor: pointer; }
+.visitor-product-detail .commerce-stay-note { margin: -10px 0 0; color: #77827b; font-size: 13px; line-height: 1.5; }
+.visitor-product-detail .commerce-purchase-actions { display: flex; align-items: center; gap: 10px; margin: 0; }
+.visitor-product-detail .commerce-purchase-actions :deep(.el-button),
+.visitor-product-detail .commerce-purchase-actions .commerce-assistant-link { height: 46px; min-height: 46px; padding: 0 21px; border-radius: 9px; font-size: 14px; font-weight: 600; }
+.visitor-product-detail .commerce-purchase-actions .commerce-assistant-link { border: 1px solid #d8e2db; background: #fff; color: #345b49; cursor: pointer; }
+.visitor-product-detail .commerce-purchase-actions .commerce-assistant-link:hover { border-color: #9fbdab; background: #f8fbf8; }
+.visitor-product-detail .detail-anchor-nav { width: 100%; max-width: 1200px; margin: 24px auto 0; border: 0; border-bottom: 1px solid #e6e9e5; box-shadow: none; }
+.visitor-product-detail .detail-content { width: 100%; max-width: 1200px; gap: 44px; padding: 28px 0 44px; }
+.visitor-product-detail .detail-content > section { padding-inline: 48px; border: 0; }
+.visitor-product-detail .detail-content .section-heading { margin: 0 0 22px; }
+.visitor-product-detail .highlight-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.visitor-product-detail .highlight-grid > article { border: 1px solid #e7e9e5; border-radius: 12px; box-shadow: none; }
+.visitor-product-detail .highlight-type-tag { margin: 14px 18px 0; font-size: 12px; }
+.visitor-product-detail .highlight-grid > article h3 { margin: 7px 18px 0; font-size: 16px; }
+.visitor-product-detail .highlight-grid > article p { margin: 6px 18px 18px; font-size: 14px; line-height: 1.6; }
+.visitor-product-detail .day-plan { border-color: #e8e3dc; box-shadow: none; }
+.visitor-product-detail .day-plan__item--formal .day-plan__time b { color: #9b642e; }
+.visitor-product-detail .day-plan__item--operation .day-plan__time b { color: #68756d; }
+.visitor-product-detail .day-plan__item--free { border-radius: 9px; background: #f5f7f4; }
+.visitor-product-detail .day-plan__item--free .day-plan__time b { color: #78857c; }
+.visitor-product-detail .day-plan__suggestions > b { color: #78857c; }
+.visitor-product-detail .fee-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px; max-width: 960px; }
+.visitor-product-detail .fee-columns > div { padding: 0; border: 0; background: transparent; }
+.visitor-product-detail .fee-columns h3 { margin-bottom: 12px; font-size: 16px; }
+.visitor-product-detail .fee-columns p { color: #59665e; font-size: 14px; }
+.visitor-product-detail .fee-group > strong { color: #56685d; }
+.visitor-product-detail .fee-group--public > strong { color: #38725c; }
+.visitor-product-detail .notice-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; max-width: 960px; padding: 0; border: 0; background: transparent; }
+.visitor-product-detail .notice-list p { gap: 6px; }
+.visitor-product-detail .hotel-detail-grid { max-width: 960px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 32px; }
+.visitor-product-detail .hotel-detail-grid > .full { grid-column: 1 / -1; }
+.visitor-product-detail .guide-source-section .guide-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 1080px; gap: 16px; }
+.visitor-product-detail .guide-source-section .guide-list > article { padding: 20px; border-color: #e6e9e4; background: #f7f9f6; box-shadow: none; }
+.visitor-product-detail .guide-source-section .guide-advice { display: block; margin: 10px 0 12px; }
+.visitor-product-detail .guide-source-section .guide-advice > b { display: none; }
+.visitor-product-detail .guide-content { margin: 0; color: #56655d; font-size: 14px; line-height: 1.65; }
+.visitor-product-detail .guide-source-section .guide-facts { gap: 8px; }
+.visitor-product-detail .guide-source-section .guide-facts li { grid-template-columns: 78px minmax(0, 1fr); font-size: 13px; }
+.visitor-product-detail .guide-source-section .guide-facts .guide-address { grid-template-columns: 56px minmax(0, 1fr) auto; align-items: start; }
+.visitor-product-detail .guide-address a { color: #a95f31; font-size: 12px; line-height: 1.6; text-decoration: none; white-space: nowrap; }
+.visitor-product-detail .guide-how-to { grid-template-columns: 56px minmax(0, 1fr) !important; }
+.visitor-product-detail .booking-bar { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; align-items: center; justify-content: space-between; gap: 24px; width: min(1200px, calc(100% - 36px)); max-width: 1200px; min-height: 68px; padding: 10px 22px; border: 1px solid #e4e7e2; border-radius: 12px; box-sizing: border-box; }
+.visitor-product-detail .booking-bar > div:first-child { display: flex !important; }
+.visitor-product-detail .booking-bar__left { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.visitor-product-detail .booking-bar__price { display: flex; align-items: baseline; gap: 5px; }
+.visitor-product-detail .booking-bar__price strong { color: #dc6523; font-size: 26px; }
+.visitor-product-detail .booking-bar__price span { display: inline; color: #768078; font-size: 13px; }
+.visitor-product-detail .booking-bar__stock { color: #6c786f; font-size: 13px; white-space: nowrap; }
+.visitor-product-detail .booking-bar__right { gap: 10px; }
+.visitor-product-detail .booking-bar .assistant-action { min-width: 150px; height: 44px; border: 1px solid #d4dfd7; border-radius: 9px; background: #fff; color: #345b49; font-size: 14px; }
+.visitor-product-detail .booking-bar :deep(.el-button) { min-width: 132px; height: 44px; border-radius: 9px; font-size: 14px; }
+@media (max-width: 900px) {
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 18px; }
+  .visitor-product-detail .commerce-summary { padding: 24px; }
+  .visitor-product-detail .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .visitor-product-detail .detail-content > section { padding-inline: 30px; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail { padding-bottom: 104px; }
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: 1fr; gap: 10px; }
+  .visitor-product-detail .product-detail-hero { min-height: 0; aspect-ratio: 1.55; }
+  .visitor-product-detail .commerce-summary { padding: 20px; gap: 16px; }
+  .visitor-product-detail .commerce-head { grid-template-columns: minmax(0, 1fr) auto; }
+  .visitor-product-detail .commerce-title h1 { font-size: 24px; }
+  .visitor-product-detail .commerce-price strong { font-size: 23px; }
+  .visitor-product-detail .detail-content { gap: 36px; padding: 22px 0 32px; }
+  .visitor-product-detail .detail-content > section { padding-inline: 18px; }
+  .visitor-product-detail .highlight-grid { gap: 12px; }
+  .visitor-product-detail .highlight-type-tag { margin-inline: 12px; }
+  .visitor-product-detail .highlight-grid > article h3 { margin-inline: 12px; font-size: 15px; }
+  .visitor-product-detail .highlight-grid > article p { margin-inline: 12px; font-size: 13px; }
+  .visitor-product-detail .notice-list { grid-template-columns: 1fr; gap: 14px; }
+  .visitor-product-detail .hotel-detail-grid { grid-template-columns: 1fr 1fr; gap: 14px; }
+  .visitor-product-detail .guide-source-section .guide-list { grid-template-columns: 1fr; }
+  .visitor-product-detail .guide-source-section .guide-list > article { padding: 16px; }
+  .visitor-product-detail .guide-source-section .guide-facts .guide-address { grid-template-columns: 50px minmax(0, 1fr); }
+  .visitor-product-detail .guide-address a { grid-column: 2; }
+  .visitor-product-detail .booking-bar { bottom: 8px; width: calc(100% - 16px); min-height: 62px; padding: 8px 10px; gap: 8px; }
+  .visitor-product-detail .booking-bar__left { display: grid; gap: 0; }
+  .visitor-product-detail .booking-bar__price strong { font-size: 20px; }
+  .visitor-product-detail .booking-bar__stock { font-size: 11px; }
+  .visitor-product-detail .booking-bar__right { gap: 6px; }
+  .visitor-product-detail .booking-bar .assistant-action { min-width: 0; padding-inline: 9px; font-size: 12px; }
+  .visitor-product-detail .booking-bar :deep(.el-button) { min-width: 0; padding-inline: 11px; font-size: 12px; }
+}
+
+/* Final storefront refinements: give the hero an inset frame and keep the
+   summary title, price and date choices in a clear vertical order. */
+.visitor-product-detail .detail-purchase-layout { align-items: start; }
+.visitor-product-detail .product-detail-hero {
+  align-self: start;
+  height: 438px;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 16px;
+  background: #eef1ed;
+}
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero__veil { inset: 12px; width: auto; height: auto; min-height: 0; border-radius: 10px; }
+.visitor-product-detail .product-detail-hero__veil { background: linear-gradient(0deg, rgba(12,39,34,.34), transparent 50%); }
+.visitor-product-detail .commerce-head { display: block; }
+.visitor-product-detail .commerce-title { display: grid; align-content: start; }
+.visitor-product-detail .commerce-title h1 { margin: 0; }
+.visitor-product-detail .commerce-title > .commerce-price {
+  display: inline-flex !important;
+  align-self: start;
+  justify-self: start;
+  align-items: baseline;
+  gap: 5px;
+  width: fit-content;
+  min-width: 0;
+  margin: 9px 0 0;
+  padding: 0;
+  text-align: left;
+}
+.visitor-product-detail .commerce-title > .commerce-price strong { font-size: 27px; }
+.visitor-product-detail .commerce-title > .commerce-price span { margin: 0; }
+.visitor-product-detail .highlight-grid { grid-auto-rows: auto; align-items: stretch; }
+.visitor-product-detail .highlight-grid > article {
+  height: auto;
+  grid-template-rows: 152px auto auto auto;
+  align-content: start;
+  gap: 6px;
+  padding-bottom: 14px;
+}
+.visitor-product-detail .highlight-grid > article .media-image { height: 152px; }
+.visitor-product-detail .highlight-grid > article h3 { min-height: 0; margin-top: 2px; }
+.visitor-product-detail .highlight-grid > article p { margin-top: 0; margin-bottom: 2px; }
+.visitor-product-detail .date-picker-row { align-items: start; gap: 8px; }
+.visitor-product-detail .date-picker-row > b { flex: 0 0 100%; width: 100%; margin: 0 0 2px; }
+.visitor-product-detail .date-chip {
+  display: grid;
+  width: 84px;
+  height: 84px;
+  min-width: 84px;
+  flex: 0 0 84px;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 6px 4px;
+  text-align: center;
+  white-space: normal;
+}
+.visitor-product-detail .date-chip strong { color: #34463c; font-size: 13px; line-height: 1.25; }
+.visitor-product-detail .date-chip small { color: #738078; font-size: 11.5px; line-height: 1.25; }
+.visitor-product-detail .day-plan__item--free { background: transparent !important; }
+.visitor-product-detail .day-plan__title { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.visitor-product-detail .day-plan__title > span:not(.timeline-operation-icon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visitor-product-detail .day-plan__address-inline { min-width: 0; overflow: hidden; color: #7b877f; font-size: 12px; font-weight: 400; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.visitor-product-detail .guide-source-section .guide-facts .guide-address { align-items: center; }
+.visitor-product-detail .guide-address a {
+  display: inline-flex;
+  grid-column: auto;
+  align-items: center;
+  justify-self: start;
+  min-height: 0;
+  padding: 2px 6px;
+  border: 1px solid #e7e8e3;
+  border-radius: 999px;
+  background: #fff;
+  color: #9b6038;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.visitor-product-detail .guide-facts li { font-size: 13px; line-height: 1.6; }
+.visitor-product-detail .guide-facts b { font-size: 13px; }
+@media (max-width: 900px) {
+  .visitor-product-detail .product-detail-hero { height: auto; min-height: 0; aspect-ratio: 1.55; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail .product-detail-hero { padding: 9px; border-radius: 13px; }
+  .visitor-product-detail .product-detail-hero > .media-image,
+  .visitor-product-detail .product-detail-hero__veil { inset: 9px; border-radius: 8px; }
+  .visitor-product-detail .commerce-title > .commerce-price { margin-top: 7px; }
+  .visitor-product-detail .date-picker-row { flex-wrap: wrap; }
+  .visitor-product-detail .date-chip { width: 78px; height: 78px; min-width: 78px; flex-basis: 78px; }
+  .visitor-product-detail .day-plan__title { flex-wrap: wrap; }
+  .visitor-product-detail .day-plan__address-inline { flex-basis: 100%; margin-left: 0; white-space: normal; }
+  .visitor-product-detail .highlight-grid > article { grid-template-rows: 126px auto auto auto; }
+  .visitor-product-detail .highlight-grid > article .media-image { height: 126px; }
+  .visitor-product-detail .guide-source-section .guide-facts .guide-address { grid-template-columns: 50px minmax(0, 1fr) auto; }
+  .visitor-product-detail .guide-address a { grid-column: auto; }
+}
+
+/* One continuous purchase panel with a horizontal, scrollable date rail. */
+.visitor-product-detail .detail-purchase-layout {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+  gap: 0;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid #e6e9e4;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 26px rgba(31, 55, 44, .06);
+}
+.visitor-product-detail .product-detail-hero {
+  height: auto;
+  min-height: 448px;
+  align-self: stretch;
+  padding: 12px;
+  border-radius: 0;
+  background: #fff;
+}
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero__veil {
+  inset: 12px;
+  width: auto;
+  height: auto;
+  border-radius: 10px;
+}
+.visitor-product-detail .commerce-summary {
+  min-height: 448px;
+  height: 100%;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+.visitor-product-detail .date-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.visitor-product-detail .date-picker-row > b { width: auto; margin: 0; }
+.visitor-product-detail .date-options {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1px 1px 5px;
+  box-sizing: border-box;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+.visitor-product-detail .date-chip { flex: 0 0 84px; }
+.visitor-product-detail .date-chip.active { box-shadow: inset 0 0 0 1px #237966; }
+.visitor-product-detail .commerce-inclusion > strong { overflow-wrap: anywhere; }
+
+/* Keep every nearby fact on the same visitor text scale; place map action
+   directly under its package label rather than in the address row. */
+.visitor-product-detail .guide-header__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.visitor-product-detail .guide-facts li,
+.visitor-product-detail .guide-facts li > span,
+.visitor-product-detail .guide-facts li > b {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+.visitor-product-detail .guide-facts li > b { color: #738078; font-weight: 550; }
+.visitor-product-detail .guide-facts li > span { min-width: 0; color: #45564d; overflow-wrap: anywhere; }
+.visitor-product-detail .guide-header__actions > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid #e5e8e2;
+  border-radius: 999px;
+  background: #fff;
+  color: #9b6038;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.visitor-product-detail .guide-source-section .guide-facts .guide-address { grid-template-columns: 78px minmax(0, 1fr); }
+.visitor-product-detail .guide-address a { display: none; }
+.visitor-product-detail .assistant-action::before { display: none !important; content: none !important; }
+
+/* Room choices belong directly below the selected stay date. */
+.visitor-product-detail .room-choice--inline {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: -7px 0 0;
+}
+.visitor-product-detail .room-choice--inline > .section-kicker {
+  color: #68766d;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.visitor-product-detail .room-choice-loading {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  color: #748078;
+  font-size: 13px;
+}
+.visitor-product-detail .room-choice--inline .room-choice__options {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 1px 1px 5px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+}
+.visitor-product-detail .room-choice--inline .room-choice__options > button {
+  display: flex;
+  flex: 0 0 190px;
+  align-items: center;
+  gap: 9px;
+  min-height: 82px;
+  padding: 9px 10px;
+  border: 1px solid #e4e8e3;
+  border-radius: 10px;
+  background: #fff;
+  scroll-snap-align: start;
+}
+.visitor-product-detail .room-choice--inline .room-choice__options > button.active {
+  border-color: #8cae99;
+  background: #f5f9f5;
+}
+.visitor-product-detail .room-choice--inline .room-choice__options > button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.visitor-product-detail .room-choice--inline .room-choice__options > button > img {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 58px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.visitor-product-detail .room-choice--inline .room-choice__copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.visitor-product-detail .room-choice--inline .room-choice__copy b {
+  overflow: hidden;
+  color: #34463c;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.visitor-product-detail .room-choice--inline .room-choice__copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #758178;
+  font-size: 11.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+.visitor-product-detail .room-choice--inline .room-choice__copy em {
+  color: #bb6031;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Nearby title, short description, and map link share two compact rows. */
+.visitor-product-detail .guide-source-section .guide-list > article > .guide-card-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.visitor-product-detail .guide-source-section .guide-card-head > strong {
+  min-width: 0;
+  color: #30483a;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.visitor-product-detail .guide-source-section .guide-card-head .guide-exclusion {
+  align-self: flex-end;
+  margin-bottom: 1px;
+  color: #a26437;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.visitor-product-detail .guide-description-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  min-width: 0;
+}
+.visitor-product-detail .guide-source-section .guide-description-row .guide-content {
+  min-width: 0;
+  margin: 0;
+  color: #53645a;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+}
+.visitor-product-detail .guide-route-link {
+  display: inline-flex;
+  align-items: center;
+  align-self: end;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid #e5e8e2;
+  border-radius: 999px;
+  background: #fff;
+  color: #9b6038;
+  font-size: 12px;
+  line-height: 1.3;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.visitor-product-detail .guide-route-link:hover {
+  border-color: #d6b69d;
+  color: #e36b25;
+}
+.visitor-product-detail .guide-source-section .guide-facts li,
+.visitor-product-detail .guide-source-section .guide-facts .guide-how-to {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) !important;
+  column-gap: 12px;
+  align-items: start;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.visitor-product-detail .guide-source-section .guide-facts li > b {
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+  color: #738078;
+  font-weight: 550;
+}
+.visitor-product-detail .guide-source-section .guide-facts li > span {
+  min-width: 0;
+  font: inherit;
+  color: #45564d;
+  text-align: left;
+}
+
+@media (max-width: 700px) {
+  .visitor-product-detail .room-choice--inline .room-choice__options > button { flex-basis: 176px; }
+  .visitor-product-detail .guide-description-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .visitor-product-detail .guide-route-link { padding-inline: 6px; font-size: 11.5px; }
+  .visitor-product-detail .guide-source-section .guide-facts li,
+  .visitor-product-detail .guide-source-section .guide-facts .guide-how-to { grid-template-columns: 64px minmax(0, 1fr) !important; }
+}
+
+/* Compact purchase confirmation: summary first, three fields, two actions. */
+:deep(.purchase-confirm-overlay) { background: rgba(0, 0, 0, .38) !important; backdrop-filter: none !important; }
+:deep(.el-dialog.purchase-confirm-dialog) {
+  overflow: hidden;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 40px rgba(22, 30, 25, .16);
+}
+:deep(.purchase-confirm-dialog .el-dialog__header) { padding: 24px 24px 0; }
+:deep(.purchase-confirm-dialog .el-dialog__title) { color: #26362e; font-size: 20px; font-weight: 650; }
+:deep(.purchase-confirm-dialog .el-dialog__body) { padding: 18px 24px 0; }
+.intent-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 14px;
+  min-height: 68px;
+  margin: 0 0 20px;
+  padding: 11px 14px;
+  border-radius: 8px;
+  background: #f4f6f3;
+  box-sizing: border-box;
+}
+.intent-summary strong { overflow: hidden; color: #293a31; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.intent-summary span { color: #78837b; font-size: 12px; line-height: 1.4; }
+.intent-summary b { grid-column: 2; grid-row: 1 / span 2; color: #e66a20; font-size: 17px; font-weight: 650; white-space: nowrap; }
+.intent-summary b small { color: #79837c; font-size: 12px; font-weight: 400; }
+:deep(.purchase-confirm-form .el-form-item) { margin-bottom: 18px; }
+:deep(.purchase-confirm-form .el-form-item:last-child) { margin-bottom: 0; }
+:deep(.purchase-confirm-form .el-form-item__label) { height: auto; padding: 0; margin-bottom: 7px; color: #47564e; font-size: 14px; line-height: 1.4; }
+:deep(.purchase-confirm-form .el-input__wrapper) { min-height: 42px; border-radius: 7px; box-shadow: 0 0 0 1px #dfe4de inset; }
+:deep(.purchase-confirm-form .el-textarea__inner) { min-height: 80px !important; padding: 10px 11px; border: 0; border-radius: 7px; box-shadow: 0 0 0 1px #dfe4de inset; resize: vertical; }
+:deep(.purchase-confirm-dialog .el-dialog__footer) { display: flex; justify-content: flex-end; gap: 10px; padding: 20px 24px 24px; }
+:deep(.purchase-confirm-dialog .el-dialog__footer .el-button) { min-width: 92px; height: 42px; margin-left: 0; border-radius: 8px; }
+:deep(.purchase-confirm-dialog .el-dialog__footer .el-button--primary) { border-color: #ef6b20; background: #ef6b20; color: #fff; }
+:deep(.purchase-confirm-dialog .el-dialog__footer .el-button--primary:hover) { border-color: #dc5c15; background: #dc5c15; }
+@media (max-width: 900px) {
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 0; }
+  .visitor-product-detail .product-detail-hero { min-height: 420px; }
+  .visitor-product-detail .commerce-summary { min-height: 420px; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .visitor-product-detail .product-detail-hero { min-height: 0; aspect-ratio: 1.55; }
+  .visitor-product-detail .commerce-summary { min-height: 0; height: auto; padding: 20px; }
+  :deep(.purchase-confirm-dialog .el-dialog__header) { padding: 20px 18px 0; }
+  :deep(.purchase-confirm-dialog .el-dialog__body) { padding: 16px 18px 0; }
+  :deep(.purchase-confirm-dialog .el-dialog__footer) { padding: 18px; }
+  .intent-summary { grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 10px; }
+  .intent-summary strong { font-size: 13px; }
+}
+
+/* Keep the visitor detail page on one desktop scale and one shared content grid. */
+.visitor-product-detail {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding-bottom: 112px;
+  background: #fff;
+  box-sizing: border-box;
+}
+.visitor-product-detail .detail-purchase-layout,
+.visitor-product-detail .room-choice--packages,
+.visitor-product-detail .detail-anchor-nav,
+.visitor-product-detail .detail-content,
+.visitor-product-detail .trip-strip,
+.visitor-product-detail .booking-bar {
+  width: min(1200px, calc(100% - 48px));
+  max-width: 1200px;
+  margin-right: auto;
+  margin-left: auto;
+  box-sizing: border-box;
+}
+.visitor-product-detail .detail-purchase-layout {
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr);
+  align-items: stretch;
+  gap: 28px;
+}
+.visitor-product-detail .product-detail-hero,
+.visitor-product-detail .commerce-summary {
+  min-height: 480px;
+  height: auto;
+  box-sizing: border-box;
+}
+.visitor-product-detail .product-detail-hero {
+  aspect-ratio: auto;
+  overflow: hidden;
+  border-radius: 14px;
+}
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero > .media-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+:deep(.visitor-product-detail .product-detail-hero .media-image img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+.visitor-product-detail .commerce-summary { border-radius: 14px; }
+.visitor-product-detail .commerce-summary h1 {
+  font-size: 30px !important;
+  line-height: 1.2 !important;
+}
+.visitor-product-detail .detail-anchor-nav { min-height: 52px; }
+.visitor-product-detail .detail-content { padding: 36px 48px 48px; }
+.visitor-product-detail .highlight-grid .media-image {
+  height: auto !important;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+}
+.visitor-product-detail .highlight-grid .media-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+:deep(.visitor-product-detail .highlight-grid .media-image img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Keep the map action compact and inline with the nearby place name. */
+.visitor-product-detail .guide-card-head {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center !important;
+  gap: 12px;
+}
+.visitor-product-detail .guide-title-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 9px;
+}
+.visitor-product-detail .guide-title-line > strong {
+  min-width: 0;
+  color: #30483a;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.visitor-product-detail .guide-title-line > strong > span { color: #748178; font-weight: 450; }
+.visitor-product-detail .guide-title-line .guide-route-link {
+  width: auto !important;
+  min-width: 0;
+  min-height: 25px;
+  margin: 0;
+  padding: 3px 7px;
+  flex: 0 0 auto;
+  justify-self: start;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.visitor-product-detail .guide-description-row {
+  display: block !important;
+  min-width: 0;
+}
+.visitor-product-detail .guide-exclusion { white-space: nowrap; }
+
+/* Remove Element Plus separator rules from the purchase confirmation dialog. */
+:deep(.purchase-confirm-dialog .el-dialog__header),
+:deep(.purchase-confirm-dialog .el-dialog__body),
+:deep(.purchase-confirm-dialog .el-dialog__footer) {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+:deep(.purchase-confirm-dialog .el-dialog__header) { border-bottom: 0 !important; }
+:deep(.purchase-confirm-dialog .el-dialog__footer) { border-top: 0 !important; }
+
+@media (max-width: 980px) {
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .visitor-product-detail .product-detail-hero { min-height: 0; aspect-ratio: 16 / 10; }
+  .visitor-product-detail .commerce-summary { min-height: 0; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail .detail-purchase-layout,
+  .visitor-product-detail .room-choice--packages,
+  .visitor-product-detail .detail-anchor-nav { width: calc(100% - 24px); }
+  .visitor-product-detail .detail-content { width: 100%; padding: 24px 16px 112px !important; }
+  .visitor-product-detail .detail-purchase-layout { gap: 12px; }
+  .visitor-product-detail .commerce-summary h1 { font-size: 26px !important; }
+  .visitor-product-detail .guide-card-head { gap: 8px; }
+  .visitor-product-detail .guide-title-line { gap: 5px 7px; }
+}
+
+/* Compact commerce hero, consistent fee columns, and a usable room carousel. */
+.visitor-product-detail .detail-purchase-layout {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(28, 45, 36, .07);
+}
+.visitor-product-detail .product-detail-hero {
+  height: 460px;
+  min-height: 0;
+  aspect-ratio: 4 / 3;
+  border-radius: 0;
+}
+.visitor-product-detail .commerce-summary {
+  min-height: 0;
+  height: 460px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 20px 24px;
+  border-radius: 0;
+  box-shadow: none;
+}
+.visitor-product-detail .commerce-head { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.visitor-product-detail .commerce-title { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.visitor-product-detail .commerce-title h1 { font-size: clamp(28px, 2.1vw, 31px) !important; line-height: 1.22 !important; }
+.visitor-product-detail .commerce-title > p { margin: 0; font-size: 13px; line-height: 1.45; }
+.visitor-product-detail .commerce-price { align-self: flex-start; min-width: 0; padding: 0; text-align: left; }
+.visitor-product-detail .commerce-price strong { font-size: 25px; }
+.visitor-product-detail .commerce-tags,
+.visitor-product-detail .commerce-stay-note { display: none; }
+.visitor-product-detail .commerce-inclusion { gap: 3px; }
+.visitor-product-detail .commerce-inclusion > strong { font-size: 13px; line-height: 1.5; }
+.visitor-product-detail .date-picker-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.visitor-product-detail .date-picker-row > b { flex: 0 0 auto; font-size: 12px; }
+.visitor-product-detail .date-options { display: flex; min-width: 0; gap: 7px; overflow-x: auto; scrollbar-width: thin; }
+.visitor-product-detail .date-chip { display: grid; flex: 0 0 72px; place-content: center; min-width: 72px; min-height: 62px; padding: 5px; text-align: center; }
+.visitor-product-detail .date-chip strong { font-size: 12px; }
+.visitor-product-detail .date-chip small { font-size: 11px; }
+.visitor-product-detail .room-choice--inline { display: grid; gap: 5px; margin: 0; }
+.visitor-product-detail .room-choice--inline > .section-kicker { font-size: 12px; line-height: 1.2; }
+.visitor-product-detail .room-choice__track { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.visitor-product-detail .room-choice--inline .room-choice__options { flex: 1 1 auto; gap: 7px; padding: 1px 1px 3px; scrollbar-width: none; }
+.visitor-product-detail .room-choice--inline .room-choice__options::-webkit-scrollbar { display: none; }
+.visitor-product-detail .room-choice--inline .room-choice__options > button { flex-basis: 190px; min-height: 74px; height: 74px; padding: 7px 8px; }
+.visitor-product-detail .room-choice--inline .room-choice__options > button > img { width: 46px; height: 56px; flex-basis: 46px; }
+.visitor-product-detail .room-choice__next { display: grid; width: 28px; height: 34px; flex: 0 0 28px; place-items: center; border: 1px solid #e1e7e1; border-radius: 8px; background: #fff; color: #53675b; font-size: 20px; cursor: pointer; }
+.visitor-product-detail .commerce-purchase-actions { gap: 8px; margin-top: 1px; }
+.visitor-product-detail .commerce-purchase-actions :deep(.el-button),
+.visitor-product-detail .commerce-purchase-actions .commerce-assistant-link { height: 42px; min-height: 42px; }
+.visitor-product-detail .fee-columns { grid-template-columns: minmax(0, 1.38fr) minmax(0, 1fr); gap: 40px; max-width: 1080px; }
+.visitor-product-detail .fee-columns > div { min-width: 0; padding: 0; border: 0; background: transparent; }
+.visitor-product-detail .fee-columns h3 { margin: 0 0 10px; font-size: 16px; }
+.visitor-product-detail .fee-group { margin-top: 12px; }
+.visitor-product-detail .fee-group > strong { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.visitor-product-detail .fee-group > p,
+.visitor-product-detail .fee-columns > div > p { padding: 3px 0; border: 0; }
+.visitor-product-detail .day-plan__item--free { background: #fff; }
+.visitor-product-detail .day-plan__item--free .day-plan__time b { color: inherit; }
+@media (max-width: 980px) {
+  .visitor-product-detail .detail-purchase-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .visitor-product-detail .product-detail-hero { width: 100%; height: auto; min-height: 0; aspect-ratio: 16 / 10; }
+  .visitor-product-detail .commerce-summary { height: auto; min-height: 0; padding: 22px; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail .fee-columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .visitor-product-detail .commerce-summary { padding: 18px 16px; }
+  .visitor-product-detail .room-choice__track { align-items: flex-start; }
+  .visitor-product-detail .room-choice--inline .room-choice__options > button { flex-basis: 174px; }
+}
+</style>
+
+<style scoped>
+/* Keep the carousel media, pagination and overlays clipped as one finished card. */
+.visitor-product-detail .detail-purchase-layout { margin-bottom: 0; border-radius: 12px; }
+.visitor-product-detail .product-detail-hero { position: relative; overflow: hidden; border-radius: 12px 0 0 12px; }
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero__veil { border-radius: 12px; overflow: hidden; }
+.visitor-product-detail .hero-actions { top: 22px; right: 22px; }
+.visitor-product-detail .hero-actions button { width: 40px; height: 40px; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(26,45,39,.56); box-shadow: 0 4px 12px rgba(12,24,19,.18); backdrop-filter: blur(8px); }
+.visitor-product-detail .detail-anchor-nav { margin-top: 20px; }
+@media (max-width: 980px) {
+  .visitor-product-detail .product-detail-hero { border-radius: 12px 12px 0 0; }
+  .visitor-product-detail .detail-anchor-nav { margin-top: 20px; }
+}
+@media (max-width: 700px) {
+  .visitor-product-detail .detail-purchase-layout { margin-bottom: 0; border-radius: 12px; }
+  .visitor-product-detail .product-detail-hero > .media-image,
+  .visitor-product-detail .product-detail-hero__veil { border-radius: 10px; }
+  .visitor-product-detail .hero-actions { top: 18px; right: 18px; }
+  .visitor-product-detail .hero-actions button { width: 38px; height: 38px; }
+}
+</style>
+
+<style scoped>
+/* Keep the commerce hero compact while preserving the existing left image/right summary structure. */
+.visitor-product-detail .detail-purchase-layout {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  max-width: 1200px;
+  margin-inline: auto;
+}
+.visitor-product-detail .product-detail-hero,
+.visitor-product-detail .commerce-summary { height: 400px; min-height: 400px; }
+.visitor-product-detail .commerce-summary { gap: 6px; padding: 15px 22px; }
+.visitor-product-detail .commerce-title h1 { font-size: 28px !important; line-height: 1.2 !important; }
+.visitor-product-detail .commerce-price strong { font-size: 24px; }
+.visitor-product-detail .date-chip { min-height: 56px; }
+.visitor-product-detail .room-choice--inline .room-choice__options > button { height: 66px; min-height: 66px; }
+.visitor-product-detail .commerce-purchase-actions :deep(.el-button),
+.visitor-product-detail .commerce-purchase-actions .commerce-assistant-link { height: 40px; min-height: 40px; }
+@media (max-width: 980px) {
+  .visitor-product-detail .product-detail-hero { height: auto; min-height: 0; }
+  .visitor-product-detail .commerce-summary { height: auto; min-height: 0; }
+}
+</style>
+
+<style scoped>
+.visitor-product-detail .detail-purchase-layout {
+  overflow:hidden; border-radius:12px; margin-bottom:18px;
+}
+.visitor-product-detail .product-detail-hero {
+  overflow:hidden; border-radius:12px; isolation:isolate;
+}
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero > .media-image img,
+.visitor-product-detail .product-detail-hero__veil {
+  overflow:hidden; border-radius:12px;
+}
+.visitor-product-detail .hero-actions { top:18px; right:18px; }
+.visitor-product-detail .hero-actions button {
+  display:grid; place-items:center; width:42px; height:42px; font-size:24px; line-height:1;
+}
+.visitor-product-detail .date-options { gap:6px; }
+.visitor-product-detail .date-chip {
+  display:flex; flex:0 0 66px; flex-direction:column; justify-content:center; align-items:center;
+  box-sizing:border-box; width:66px; min-width:66px; height:54px; min-height:54px;
+  gap:2px; padding:4px 3px; border-radius:8px;
+}
+.visitor-product-detail .date-chip strong { font-size:12px; line-height:1.2; }
+.visitor-product-detail .date-chip small { font-size:10.5px; line-height:1.2; }
+.visitor-product-detail .detail-anchor-nav { margin-top:16px; }
+@media(max-width:980px) {
+  .visitor-product-detail .product-detail-hero { border-radius:12px; }
+}
+@media(max-width:700px) {
+  .visitor-product-detail .detail-purchase-layout { margin-bottom:16px; }
+  .visitor-product-detail .product-detail-hero,
+  .visitor-product-detail .product-detail-hero > .media-image,
+  .visitor-product-detail .product-detail-hero > .media-image img,
+  .visitor-product-detail .product-detail-hero__veil { border-radius:12px; }
+  .visitor-product-detail .hero-actions { top:12px; right:12px; }
+  .visitor-product-detail .hero-actions button { width:40px; height:40px; font-size:23px; }
+}
+</style>
+
+
+<style scoped>
+/* Square white product area; the independent gallery owns its rounded crop. */
+.visitor-product-detail .detail-purchase-layout {
+  overflow: visible !important;
+  border-radius: 0 !important;
+  background: #fff;
+}
+.visitor-product-detail .product-detail-hero {
+  overflow: hidden;
+  border-radius: 16px !important;
+  isolation: isolate;
+  background: transparent;
+}
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero__veil {
+  border-radius: 16px !important;
+  overflow: hidden;
+}
+.visitor-product-detail .product-detail-hero > .media-image :deep(img) {
+  border-radius: 16px !important;
+}
+@media (max-width: 980px) {
+  .visitor-product-detail .detail-purchase-layout {
+    overflow: visible !important;
+    border-radius: 0 !important;
+  }
+  .visitor-product-detail .product-detail-hero {
+    border-radius: 16px !important;
+  }
+}
+
+/* Keep the white commerce area square; inset the image as its own rounded card. */
+.visitor-product-detail .detail-purchase-layout {
+  overflow: visible !important;
+  border-radius: 0 !important;
+  background: #fff;
+}
+.visitor-product-detail .product-detail-hero {
+  position: relative;
+  box-sizing: border-box;
+  padding: 12px;
+  overflow: visible !important;
+  border-radius: 0 !important;
+  background: #fff;
+}
+.visitor-product-detail .product-detail-hero > .media-image,
+.visitor-product-detail .product-detail-hero__veil {
+  position: absolute !important;
+  inset: 12px !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  border-radius: 16px !important;
+}
+.visitor-product-detail .product-detail-hero > .media-image :deep(img) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 16px !important;
+}
+.visitor-product-detail .product-detail-hero__veil { pointer-events: none; }
+@media (max-width: 700px) {
+  .visitor-product-detail .product-detail-hero > .media-image,
+  .visitor-product-detail .product-detail-hero__veil {
+    inset: 9px !important;
+    border-radius: 12px !important;
+  }
+  .visitor-product-detail .product-detail-hero > .media-image :deep(img) {
+    border-radius: 12px !important;
+  }
 }
 </style>

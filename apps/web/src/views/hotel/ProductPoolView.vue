@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { posterSvgDataUri } from '../../utils/posterSvg'
 import MediaImage from '../../components/MediaImage.vue'
 import { heroMedia, mediaForResource } from '../../utils/productMedia'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -39,17 +38,6 @@ function reload() { items.value = []; totalItems.value = 0; void load(true) }
 function loadMore() { void load(false) }
 watch(selectedDate, () => reload())
 async function remove(row: TravelProduct) { try { await ElMessageBox.confirm(`确定删除“${row.product_name}”吗？已有订单的产品会安全归档。`, '删除产品', { type: 'warning' }); const response = await hotelApi.deleteProduct(row.id); ElMessage.success(response.data.message); await load() } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(errorMessage(e)) } }
-function poster(row: TravelProduct) { return row.marketing_assets?.find(asset => asset.asset_type === 'POSTER') }
-// 工作台主图与游客端保持一致：展示当前产品的实拍/抓取图，SVG 海报只作为可下载的分享底版。
-function downloadPoster(asset?: { poster_svg?: string; title?: string }) {
-  if (!asset?.poster_svg) { ElMessage.info('当前产品还没有 SVG 海报，可先点击“生成主图与文案”'); return }
-  const url = URL.createObjectURL(new Blob([asset.poster_svg], { type: 'image/svg+xml;charset=utf-8' }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${asset.title || preview.value?.product_name || 'stayscape-poster'}.svg`
-  link.click()
-  URL.revokeObjectURL(url)
-}
 async function openPreview(row: TravelProduct) {
   preview.value = row
   previewVisible.value = true
@@ -62,7 +50,7 @@ async function openPreview(row: TravelProduct) {
   } catch (e) { ElMessage.error(errorMessage(e)) }
   finally { if (preview.value?.id === row.id) previewLoading.value = false }
 }
-async function regenerate(row: TravelProduct) { marketingLoading.value = true; try { const updated = (await hotelApi.regenerateMarketing(row.id, { style: 'SEEDING', generate_image: true })).data; fullProductIds.add(row.id); const index = items.value.findIndex(item => item.id === row.id); if (index >= 0) items.value[index] = updated; preview.value = updated; ElMessage.success('已生成新的旅行者文案、SVG 海报与产品专属主图') } catch (e) { ElMessage.error(errorMessage(e)) } finally { marketingLoading.value = false } }
+async function regenerate(row: TravelProduct) { marketingLoading.value = true; try { const updated = (await hotelApi.regenerateMarketing(row.id, { style: 'SEEDING', generate_image: false })).data; fullProductIds.add(row.id); const index = items.value.findIndex(item => item.id === row.id); if (index >= 0) items.value[index] = updated; preview.value = updated; ElMessage.success('已更新产品宣传文案') } catch (e) { ElMessage.error(errorMessage(e)) } finally { marketingLoading.value = false } }
 // 卡片主图与游客端一致：优先产品最主要的在地体验实拍图，其次是客房图
 function poolMedia(row: any) {
   const focus = row.resources?.find((item: any) => item.resource_type === 'PARTNER_RESOURCE') || row.resources?.[0]
@@ -81,7 +69,7 @@ onMounted(() => { void load() })
   <div v-if="items.length && hasMore" class="load-more-row"><el-button plain :loading="loadingMore" @click="loadMore">加载更多（{{ items.length }} / {{ totalItems }}）</el-button></div>
   <div v-if="!loading && !visibleItems.length" class="panel empty-state">这一天暂无产品；可切换日期，或生成一组新方案。</div>
 
-  <el-dialog v-if="preview" v-model="previewVisible" title="宣传素材工作台" width="980px" top="4vh"><div class="marketing-workbench" v-loading="previewLoading"><div class="workbench-poster"><MediaImage :media="poolMedia(preview)" aspect="card" /><div class="poster-caption">{{ preview.product_name }} · {{ preview.target_date }} · {{ preview.weather }}</div></div><div class="workbench-copy"><div class="workbench-title"><div><div class="eyebrow">宣传内容</div><h2>{{ preview.marketing_title }}</h2></div><div class="workbench-title__actions"><el-button plain @click="downloadPoster(poster(preview))">下载 SVG 海报</el-button><el-button type="primary" plain :loading="marketingLoading" @click="regenerate(preview)">生成主图与文案</el-button></div></div><div v-for="asset in preview.marketing_assets.filter(item => item.asset_type !== 'POSTER')" :key="asset.asset_type" class="copy-card"><div class="product-card__top"><strong>{{ asset.title }}</strong><el-tag size="small" effect="plain">{{ asset.platform }}</el-tag></div><p>{{ asset.content }}</p><small>{{ asset.visual_brief }}</small><b>{{ asset.call_to_action }}</b></div></div></div><template #footer><el-button @click="router.push(`/hotel/products/${preview.id}`)">进入产品详情</el-button><el-button type="primary" @click="previewVisible = false">关闭</el-button></template></el-dialog>
+  <el-dialog v-if="preview" v-model="previewVisible" title="产品文案" width="980px" top="4vh"><div class="marketing-workbench" v-loading="previewLoading"><div class="workbench-product-image"><MediaImage :media="poolMedia(preview)" aspect="card" /><div class="product-caption">{{ preview.product_name }} · {{ preview.target_date }} · {{ preview.weather }}</div></div><div class="workbench-copy"><div class="workbench-title"><div><div class="eyebrow">宣传内容</div><h2>{{ preview.marketing_title }}</h2></div><div class="workbench-title__actions"><el-button type="primary" plain :loading="marketingLoading" @click="regenerate(preview)">重新生成文案</el-button></div></div><div v-for="asset in preview.marketing_assets.filter(item => item.asset_type !== 'POSTER')" :key="asset.asset_type" class="copy-card"><div class="product-card__top"><strong>{{ asset.title }}</strong><el-tag size="small" effect="plain">{{ asset.platform }}</el-tag></div><p>{{ asset.content }}</p><small>{{ asset.visual_brief }}</small><b>{{ asset.call_to_action }}</b></div></div></div><template #footer><el-button @click="router.push(`/hotel/products/${preview.id}`)">进入产品详情</el-button><el-button type="primary" @click="previewVisible = false">关闭</el-button></template></el-dialog>
 </template>
 
 <style scoped>
@@ -116,10 +104,10 @@ onMounted(() => { void load() })
 .pool-card{transition:transform .18s ease,box-shadow .18s ease}
 .pool-card:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(27,53,44,.10)}
 .marketing-workbench{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);gap:20px}
-.workbench-poster{position:sticky;top:0;align-self:start;overflow:hidden;border-radius:16px;background:#e7f1ed}
-.workbench-poster :deep(.media-image){width:100%;aspect-ratio:1.42/1;border-radius:0}
-.workbench-poster :deep(.media-image img){display:block;width:100%;height:auto;max-height:58vh;object-fit:contain;background:#eef4f1}
-.poster-caption{padding:10px 12px;background:#174d46;color:#e4f4ee;font-size:12px}
+.workbench-product-image{position:sticky;top:0;align-self:start;overflow:hidden;border-radius:16px;background:#e7f1ed}
+.workbench-product-image :deep(.media-image){width:100%;aspect-ratio:1.42/1;border-radius:0}
+.workbench-product-image :deep(.media-image img){display:block;width:100%;height:auto;max-height:58vh;object-fit:contain;background:#eef4f1}
+.product-caption{padding:10px 12px;background:#174d46;color:#e4f4ee;font-size:12px}
 .workbench-copy{min-width:0;max-height:66vh;overflow:auto;padding-right:4px}
 .workbench-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
 .workbench-title h2{margin:7px 0 0;font-size:21px}
@@ -128,7 +116,7 @@ onMounted(() => { void load() })
 .copy-card p{margin:10px 0;font-size:13px;line-height:1.75;white-space:pre-wrap}
 .copy-card small{display:block;color:var(--muted);line-height:1.6}
 .copy-card b{display:block;margin-top:8px;color:var(--teal);font-size:12px}
-@media(max-width:900px){.product-pool-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));gap:12px}.marketing-workbench{grid-template-columns:1fr}.workbench-poster{position:static}.workbench-copy{max-height:none}}
+@media(max-width:900px){.product-pool-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));gap:12px}.marketing-workbench{grid-template-columns:1fr}.workbench-product-image{position:static}.workbench-copy{max-height:none}}
 @media(max-width:700px){.filter-bar{padding:10px}.filter-bar>div{align-items:center}.product-pool-count{margin-left:0}.product-pool-grid{grid-template-columns:1fr}.pool-card__visual{aspect-ratio:1.8/1;min-height:160px}.pool-card__body{padding:16px;gap:10px}.pool-card__body h2{min-height:44px;font-size:17px}.pool-card__metrics{gap:6px;margin:11px 0 9px}.pool-card__metrics div{min-height:52px;padding:7px}.pool-card__metrics strong{font-size:15px}.pool-card__actions{gap:6px}.workbench-title{flex-direction:column}.workbench-title__actions{flex-wrap:wrap}}
 @media(max-width:420px){.pool-card__body{padding:12px}.pool-card__metrics small{font-size:11px}.pool-card__metrics strong{font-size:15px}.pool-card__actions :deep(.el-button){padding:5px 8px;font-size:11.5px}}
 .header-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin:0 0 14px}.header-actions :deep(.el-button){height:32px;min-height:32px;padding:0 12px;font-size:12px;border-radius:8px}.header-actions :deep(.el-radio-button__inner){display:inline-flex;align-items:center;height:32px;padding:0 12px}.filter-bar{padding:13px 15px;background:#fff;border:1px solid #e9eeea;box-shadow:none}.filter-bar :deep(.el-radio-button__inner){min-height:32px;padding:8px 12px;border-color:#e5ebe7;background:#fff;color:#55645b}.filter-bar :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner){background:#eaf3ed;border-color:#bdd1c4;color:#315b46;box-shadow:none}.pool-card{border:1px solid #e8ede9!important;border-radius:13px!important;background:#fff!important;box-shadow:none!important}.pool-card__body{gap:9px;padding:14px 16px 15px}.pool-card__body h2{min-height:0;margin:1px 0 0;font-size:17px;line-height:1.4}.pool-card__theme{color:#728078;font-size:12px;line-height:1.5}.pool-card .product-card__resources span{padding:3px 8px;border:0;background:#f2f6f3;color:#52675a}.pool-card__metrics{gap:0;margin-top:3px;padding:8px 0;border-block:1px solid #edf0ed;background:transparent}.pool-card__metrics div{min-height:42px;padding:5px 9px;border:0;border-right:1px solid #edf0ed;border-radius:0;background:transparent}.pool-card__metrics div:last-child{border-right:0}.pool-card__metrics strong{font-size:15px;color:#304d3e}.pool-card__actions{gap:6px;padding-top:6px;border-top:0}.pool-card__actions :deep(.el-button){height:32px;min-height:32px;border-radius:7px}.pool-card:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(27,53,44,.07)!important}@media(max-width:700px){.header-actions{justify-content:space-between}.filter-bar{margin-bottom:12px}.pool-card__body{padding:13px}.pool-card__actions{justify-content:flex-start}}

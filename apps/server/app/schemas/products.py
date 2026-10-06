@@ -245,6 +245,26 @@ class DetailSections(BaseModel):
     tips: list[str] = Field(default_factory=list)
 
 
+class IncludedPublicPlaceRead(BaseModel):
+    id: int
+    resource_id: str
+    resource_type: Literal["PUBLIC_REFERENCE"] = "PUBLIC_REFERENCE"
+    resource_name: str
+    description: str = ""
+    available_date: date
+    day_index: int
+    time: str = ""
+    start_time: str = ""
+    end_time: str = ""
+    slot_label: str = ""
+    duration_minutes: int = 0
+    duration_text: str = ""
+    address: str = ""
+    included: bool = True
+    route_only: bool = False
+    experience_kind: str = "OPEN_PUBLIC"
+
+
 class ProductRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -279,6 +299,7 @@ class ProductRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     resources: list[ProductResourceRead] = Field(default_factory=list)
+    included_public_places: list[IncludedPublicPlaceRead] = Field(default_factory=list)
     # Visitor-facing stay information. Hotel-operated packages are always
     # anchored to at least one room night, so `stay` is never a day trip.
     stay: StayPlan | None = None

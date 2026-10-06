@@ -16,10 +16,10 @@ Use each input according to its role:
 
 - allowed_hotel_services and allowed_partner_resources are the only formal package components.
 - weather_forecast and operations_insights are supporting evidence; preserve their verification state.
-- travel_knowledge and PUBLIC_REFERENCE are place and route reference only.
+- travel_knowledge and PUBLIC_REFERENCE provide destination facts and route context. Explicit open public spaces may appear as free walking stops in the itinerary; they never become paid, bookable or inventory-backed package rights. Other public places remain nearby recommendations.
 - tourism_planning_context is macro/local/case planning context only; it is not current demand, destination operation, or commercial performance data.
 
-Formal package resources may use only IDs present in the two allowed resource lists. Knowledge and public references can never become package rights. ACTIVE knowledge may support factual copy. VERIFY_REQUIRED knowledge is unconfirmed and must be labelled as such. REFERENCE_ONLY policy and case material may inspire a theme but is not evidence of local demand, current operation, financial performance or a bookable package right. Never copy a case's dates, prices or operational claims into a candidate.
+Paid or bookable package resources may use only IDs present in the two allowed resource lists. Knowledge and public references cannot become paid rights or inventory. An explicitly open public space can be included as a free itinerary stop; do not imply that tickets, merchant purchases or transport are included. Other public places remain nearby recommendations. Use supplied verification state for changing facts.
 
 ## Product decisions
 
@@ -49,8 +49,7 @@ creative angle and visual concept. Do not return cosmetic A/B copies.
 
 Follow `creative_direction` when supplied. Write specific traveller-facing
 Chinese and avoid system terms such as inventory, margin, cost, Skill, Demo,
-Mock or internal IDs. Return semantic `creative_angle`, `poster_style` and
-`visual_brief` only; the server owns media selection and SVG text layout.
+Mock or internal IDs. Return a concrete creative angle and concise product copy. Do not create poster artwork, SVG, or image-generation prompts; product photography stays tied to its real source resource.
 
 The product generator owns product concept and composition. For full-channel
 copy, the caller should invoke `stayscape-marketing-writer` after validation.
@@ -87,7 +86,11 @@ Complex reasoning is internal; the response is the final JSON document only. Mul
 
 ## 中文文案与路线规范
 
-- 优先安排 1–3 个正式体验并留出合理自由时间；只使用调用方提供的具体场次和地点。
+- 先读取 nights 并按 nights + 1 计算游玩日；逐日使用 resource.available_date 编排行程，不能把所有体验都放在入住日。每个游玩日都必须有上午体验、下午体验、午餐或晚餐中的一项真实餐饮资源，并至少有一项非餐饮付费体验；同一体验名称在整个行程中不得重复。一个跨越上午和下午的长时段体验只有在数据库场次确实覆盖两个时段时才可同时满足两项。用户指定的资源作为锚点，但不能因此省略每日覆盖要求。
+- 时段上限按每个自然日计算：上午最多 2 项，中午 11:30–13:30 最多 1 项体验，下午最多 3 项，晚餐 17:00–20:00 最多 1 项餐饮，晚间最多 1 项非餐饮体验。每个体验按完整场次占用时间，同日不得重叠；相邻地点之间须按地址关系留足转场时间。上限不是配额，不额外填入无关资源。
+- 如果任何游玩日缺少符合库存、日期、人数、时段、预算或转场条件的必要资源，不得生成缺项产品、用自由活动或附近地点冒充体验，也不得编造价格或库存；应返回缺少资源的日期和时段，要求运营方补充真实场次或调整日期、预算及所选项目后再生成。
+- 按体验实际开始和结束时间校验同日冲突；一项体验占用的完整时段内不得插入其他体验。相邻地点之间须留出基于地址关系计算的转场缓冲。场次或地址不明确时不编造精确时间。
+- 组合数量随游玩天数、候选资源、库存、客群、天气、预算和转场条件变化；只选允许资源列表中的真实场次。餐饮只进入午餐/晚餐时段，博物馆等有明确闭馆时段的资源不得安排在闭馆后。行李寄存服务可用于入住前或退房后的体验衔接，但必须有数据库服务记录支持。
 - 只有地图/交通工具提供转场时长时才能写精确耗时；否则不补造分钟数，必要时注明转场待规划。
 - 按已提供的天气和适配信息安排室内外体验；不把季节常识或编辑评分说成实时天气或安全保证。
 - 行程只写有来源支持的时间、地点、体验和时长；缺少数据时省略，不用占位句凑格式。

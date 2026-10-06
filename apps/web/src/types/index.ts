@@ -244,6 +244,26 @@ export interface ProductReview {
   stayed_on?: string | null
 }
 
+export interface IncludedPublicPlace {
+  id: number
+  resource_id: string
+  resource_type: 'PUBLIC_REFERENCE'
+  resource_name: string
+  description: string
+  available_date: string
+  day_index: number
+  time: string
+  start_time: string
+  end_time: string
+  slot_label: string
+  duration_minutes: number
+  duration_text: string
+  address: string
+  included: true
+  route_only: false
+  experience_kind: 'OPEN_PUBLIC'
+}
+
 export interface TravelProduct {
   id: number
   hotel_id: number
@@ -276,6 +296,7 @@ export interface TravelProduct {
   created_at: string
   updated_at: string
   resources: ProductResource[]
+  included_public_places?: IncludedPublicPlace[]
   stay?: StayPlan | null
   day_plan?: DayPlan[]
   route_plan?: DayRoute[]

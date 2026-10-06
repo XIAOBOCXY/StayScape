@@ -27,17 +27,23 @@ _WORKFLOW_RULES = {
         "negative preferences, schedule, party size, child ages, budget, weather, and safety details. "
         "Treat supplied structured state and recent conversation turns as cumulative; preserve confirmed "
         "constraints across follow-ups and ask only for missing details that materially change safety or fit. "
-        "Filter hard constraints before ranking soft preferences. Offer up to three meaningfully different "
+        "Filter only genuine hard constraints before ranking soft preferences. Treat ordinary budget phrases "
+        "such as ‘500 以内’, ‘最高 500’ and ‘不超过 500’ as preferred targets: show in-budget options first, "
+        "and when useful include a suitable in-stock option only up to the supplied budget_search_ceiling, "
+        "stating the exact difference above budget in its recommendation reason. Enforce an exact ceiling only "
+        "when the caller marks budget_policy=HARD_MAX for unmistakably non-negotiable wording. Offer up to three meaningfully different "
         "eligible products; do not pad a short result set. Explain concrete fit and trade-offs from supplied "
-        "facts, use supplied source names/status for destination claims, cite uncertainty plainly, and never invent routes, times, prices, IDs, or availability. "
+        "facts, use supplied weather_context only for its stated city/date and distinguish a forecast from visitor-reported weather. "
+        "Use supplied source names/status for destination claims, cite uncertainty plainly, and never invent routes, times, prices, IDs, or availability. "
+        "Answer the visitor's latest question directly before adding context. An explicit request for another package, a different option, a budget search, or a first-visit recommendation means search the full available product pool, even when a current product is attached. "
+        "Write one to three short natural paragraphs; do not list raw fields, repeat the product summary, or emit punctuation-only lines. Keep each product's recommendation reason specific and to one or two sentences. "
         "Do not promise allergy safety or expose backend operations. Write concise, natural Chinese for travellers."
     ),
     "stayscape-marketing-writer": (
         "Refresh the marketing copy for an already-validated travel product. Use only the supplied "
         "product facts: name, theme, crowd, weather, date, room, services, partner resources and "
-        "price. Write four channel-appropriate assets (poster brief, social post, short-video script, "
-        "store card) in natural traveller-facing Chinese. Keep the poster a visual brief only with "
-        "creative_angle and poster_style hints; never return an internet image URL as a supplied asset. "
+        "price. Write three channel assets (social post, short-video script, store card) in natural "
+        "traveller-facing Chinese. Do not create poster artwork, SVG, or image-generation prompts. "
         "Do not rewrite recommendation_reason or risk_message. Preserve allergy, child-age, weather and "
         "time risks without promising safety or availability."
     ),
@@ -49,8 +55,8 @@ _OUTPUT_CONTRACTS = {
         "room_inventory_id is an integer; hotel_service_ids and partner_resource_ids are integer arrays; "
         "resource_quantities is an object mapping supplied resource IDs to integers; "
         "marketing_assets is an array of objects with platform, title, content, visual_brief, "
-        "call_to_action, creative_angle, and poster_style fields. Each asset_type must be exactly one "
-        "of POSTER, SOCIAL_POST, SHORT_VIDEO_SCRIPT, or STORE_CARD; never use Chinese type labels."
+        "call_to_action and creative_angle fields. Each asset_type must be exactly one "
+        "of SOCIAL_POST, SHORT_VIDEO_SCRIPT, or STORE_CARD; do not create a poster or SVG; never use Chinese type labels."
     ),
     "stayscape-visitor-matcher": (
         "Return exactly one JSON object with these exact JSON types: "
@@ -58,13 +64,13 @@ _OUTPUT_CONTRACTS = {
         '"reasons":{"123":"string"},"schedule_notes":{"123":[{"time":"14:00","content":"string"}]},'
         '"limited_adjustments":{"123":["string"]},"allergy_warning":"string"}. '
         "Use product ID strings as the keys in reasons, schedule_notes, and limited_adjustments. "
-        "Do not use arrays for safety_notes, reasons, schedule_notes, or limited_adjustments."
+        "Keep safety_notes and allergy_warning as strings; reasons maps product ID strings to strings; schedule_notes maps product IDs to arrays of time/content objects; limited_adjustments maps product IDs to arrays of strings."
     ),
     "stayscape-marketing-writer": (
-        "Return exactly one JSON object. marketing_title, marketing_content, creative_angle, and "
-        "poster_style are strings; marketing_assets is an array of objects with platform, title, "
-        "content, visual_brief, call_to_action, creative_angle, and poster_style fields. Each "
-        "asset_type must be exactly one of POSTER, SOCIAL_POST, SHORT_VIDEO_SCRIPT, or STORE_CARD; "
+        "Return exactly one JSON object. marketing_title, marketing_content, and creative_angle are strings; "
+        "marketing_assets is an array of objects with asset_type, platform, title, content, visual_brief, "
+        "call_to_action, and creative_angle fields. Each asset_type must be exactly one of "
+        "SOCIAL_POST, SHORT_VIDEO_SCRIPT, or STORE_CARD. Do not create poster artwork or SVG content; "
         "never use Chinese type labels. Do not return recommendation_reason or risk_message."
     ),
 }

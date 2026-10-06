@@ -109,52 +109,6 @@ class MockAgent:
         return sorted(pool, key=affinity)[variant_index % len(pool)]
 
     @classmethod
-    def _poster_svg(cls, *, profile: dict[str, str], title: str, partner_name: str, room_name: str, weather_label: str, price: str, partner_address: str) -> str:
-        palette = {
-            "themepark": ("#e9a34d", "#1c5e54", "#fff0cc"),
-            "kids": ("#e17b64", "#24695e", "#fff1d4"),
-            "nature": ("#6a9b70", "#245a50", "#e9f3df"),
-            "sport": ("#4e7d9e", "#1c5360", "#e5f3f5"),
-            "nightlife": ("#6e5b9b", "#202b4d", "#f1e7ff"),
-            "photo": ("#d49a79", "#284e56", "#ffe9d8"),
-            "food": ("#c87b4a", "#5a3f2f", "#fff0dc"),
-            "performance": ("#9d5f78", "#4d2744", "#fce5ee"),
-            "entertainment": ("#6b8eb8", "#243b5b", "#e8f2ff"),
-            "city_walk": ("#7fa9a2", "#21554f", "#e8f3ed"),
-            "culture": ("#d19b5d", "#174d46", "#f6e8ce"),
-            "tea": ("#86a66d", "#365a48", "#eff3dc"),
-        }
-        accent, dark, light = palette.get(profile["key"], ("#d19b5d", "#174d46", "#f6e8ce"))
-        safe = lambda value: escape(str(value), quote=True)
-        art = {
-            "themepark": '<circle cx="270" cy="410" r="88" fill="#fff" opacity=".7"/><path d="M205 410 Q270 315 335 410" fill="none" stroke="#fff" stroke-width="12"/><path d="M225 415 v88 M315 415 v88" stroke="#fff" stroke-width="10"/><circle cx="270" cy="365" r="18" fill="#fff"/>',
-            "kids": '<rect x="155" y="370" width="240" height="130" rx="22" fill="#fff" opacity=".8"/><circle cx="215" cy="430" r="30" fill="#e9a56e"/><circle cx="335" cy="430" r="30" fill="#7db5a8"/><path d="M240 455 Q275 490 310 455" fill="none" stroke="#24695e" stroke-width="10"/>',
-            "nature": '<path d="M120 510 Q235 300 350 510" fill="#fff" opacity=".75"/><path d="M235 515 V350 M235 410 Q170 365 135 410 M235 430 Q300 380 345 420" fill="none" stroke="#245a50" stroke-width="12"/><circle cx="690" cy="350" r="48" fill="#fff" opacity=".7"/>',
-            "sport": '<path d="M160 500 L220 330 L300 500" fill="none" stroke="#fff" stroke-width="24" stroke-linecap="round"/><circle cx="225" cy="320" r="28" fill="#f6c06e"/><path d="M430 460 q115 -80 230 0" fill="none" stroke="#fff" stroke-width="20"/>',
-            "nightlife": '<circle cx="250" cy="390" r="82" fill="#f4d488" opacity=".9"/><path d="M180 520 Q300 380 430 520" fill="none" stroke="#fff" stroke-width="16"/><path d="M685 260 v270 M745 300 v230 M805 250 v280" stroke="#fff" stroke-width="10"/><circle cx="685" cy="245" r="12" fill="#f4d488"/><circle cx="745" cy="285" r="12" fill="#f4d488"/>',
-            "photo": '<rect x="150" y="350" width="270" height="170" rx="20" fill="#fff" opacity=".8"/><circle cx="285" cy="435" r="54" fill="#d49a79"/><circle cx="285" cy="435" r="30" fill="#284e56"/><path d="M480 500 Q625 340 790 500" fill="none" stroke="#fff" stroke-width="14"/>',
-            "food": '<ellipse cx="270" cy="500" rx="180" ry="34" fill="#fff" opacity=".8"/><path d="M140 470 Q160 330 270 330 Q380 330 400 470Z" fill="#fff" opacity=".75"/><circle cx="220" cy="405" r="23" fill="#c87b4a"/><circle cx="300" cy="390" r="23" fill="#e5bb69"/>',
-            "performance": '<path d="M150 500 Q300 330 450 500" fill="#fff" opacity=".75"/><circle cx="245" cy="410" r="24" fill="#9d5f78"/><circle cx="355" cy="410" r="24" fill="#4d2744"/><path d="M230 450 Q300 500 370 450" fill="none" stroke="#4d2744" stroke-width="14"/>',
-            "entertainment": '<rect x="145" y="360" width="280" height="170" rx="24" fill="#fff" opacity=".78"/><circle cx="215" cy="445" r="28" fill="#6b8eb8"/><circle cx="355" cy="445" r="28" fill="#243b5b"/><path d="M245 445 h80" stroke="#243b5b" stroke-width="12"/>',
-            "city_walk": '<path d="M90 520 Q260 390 430 520 T790 510" fill="none" stroke="#fff" stroke-width="22"/><path d="M550 500 v-190 M650 500 v-230" stroke="#21554f" stroke-width="18"/><circle cx="550" cy="285" r="23" fill="#f4d488"/>',
-            "culture": '<rect x="145" y="420" width="300" height="70" rx="12" fill="#d19b5d"/><path d="M210 390 l80 120 M370 390 l-80 120" stroke="#174d46" stroke-width="13" stroke-linecap="round"/><circle cx="210" cy="370" r="16" fill="#d45c53"/><circle cx="370" cy="370" r="16" fill="#d45c53"/>',
-            "tea": '<ellipse cx="285" cy="480" rx="180" ry="36" fill="#fff" opacity=".7"/><path d="M175 440 Q175 330 285 330 Q395 330 395 440Z" fill="#fff" opacity=".85"/><path d="M395 370 Q480 360 460 435 Q445 480 395 450" fill="none" stroke="#365a48" stroke-width="14"/>',
-        }.get(profile["key"], "")
-        return (
-            '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" viewBox="0 0 1080 1440">'
-            f'<rect width="1080" height="1440" rx="36" fill="{light}"/><circle cx="900" cy="140" r="230" fill="{accent}" opacity=".25"/>'
-            f'<text x="72" y="90" fill="{dark}" font-size="26" font-weight="700" letter-spacing="4" font-family="Arial, Microsoft YaHei, sans-serif">STAYSCAPE · HANGZHOU</text>'
-            f'<rect x="60" y="128" width="960" height="560" rx="34" fill="{accent}"/><path d="M60 560 Q240 450 430 560 T760 540 T1020 500 V688 H60Z" fill="{dark}" opacity=".42"/>'
-            f'<g>{art}</g><text x="100" y="770" fill="{dark}" font-size="56" font-weight="700" font-family="Microsoft YaHei, sans-serif">{safe(title[:22])}</text>'
-            f'<text x="104" y="820" fill="{dark}" font-size="24" font-family="Microsoft YaHei, sans-serif">{safe(weather_label)} · {safe(profile["tag"])} · {safe(partner_name[:20])}</text>'
-            f'<rect x="70" y="885" width="940" height="190" rx="24" fill="#fff" opacity=".85"/><text x="110" y="945" fill="{dark}" font-size="25" font-weight="700" font-family="Microsoft YaHei, sans-serif">住进 {safe(room_name)}，把 {safe(profile["label"])} 放进今晚</text>'
-            f'<text x="110" y="995" fill="#5b756e" font-size="22" font-family="Microsoft YaHei, sans-serif">{safe(partner_address[:28])}</text><text x="110" y="1035" fill="#5b756e" font-size="22" font-family="Microsoft YaHei, sans-serif">慢慢体验 · 给今天留一段杭州时间</text>'
-            f'<rect x="70" y="1110" width="420" height="190" rx="24" fill="{dark}"/><text x="105" y="1170" fill="#c9eadc" font-size="20" font-family="Microsoft YaHei, sans-serif">为今天安排的一段杭州旅居</text><text x="105" y="1250" fill="#fff" font-size="56" font-weight="700" font-family="Arial, sans-serif">¥{safe(price)}</text>'
-            f'<rect x="530" y="1110" width="480" height="190" rx="24" fill="#f2dfad"/><text x="570" y="1170" fill="#7b5b2a" font-size="23" font-weight="700" font-family="Microsoft YaHei, sans-serif">{safe(profile["label"])} · {safe(partner_name[:14])}</text><text x="570" y="1220" fill="#6b6250" font-size="21" font-family="Microsoft YaHei, sans-serif">打开 StayScape，看看这段行程</text>'
-            f'<text x="72" y="1370" fill="#5b756e" font-size="21" font-family="Microsoft YaHei, sans-serif">#杭州旅行 #StayScape #{safe(profile["key"])}</text></svg>'
-        )
-
-    @classmethod
     def _product(cls, payload: dict[str, Any]) -> dict[str, Any]:
         room = payload.get("room_inventory") or {}
         selections = payload.get("requested_selections") or []
@@ -212,7 +166,6 @@ class MockAgent:
             f"地点在{partner_address}，{partner_description}"
             f"出发前，酒店会和你确认体验时间与到店安排。"
         )
-        poster_svg = cls._poster_svg(profile=profile, title=title, partner_name=partner_name, room_name=room_name, weather_label=weather_label, price=payload.get("preferred_price", "599"), partner_address=partner_address)
         social_post = (
             f"这个周末的杭州，也值得住一晚。\n\n"
             f"{partner_description}\n\n"
@@ -237,9 +190,7 @@ class MockAgent:
             "marketing_title": title,
             "marketing_content": content,
             "creative_angle": f"{profile['label']}的具体城市体验主视觉：{partner_name} + {room_name}",
-            "poster_style": f"{profile['key']}-editorial",
             "marketing_assets": [
-                {"asset_type": "POSTER", "platform": "StayScape / 小红书封面", "title": title, "content": content, "visual_brief": f"以{profile['label']}（{profile['tag']}）为主视觉，画面包含{partner_name}、{room_name}与体验现场氛围，不使用空泛纯色背景。", "creative_angle": f"{profile['label']}的具体城市体验主视觉", "poster_style": f"{profile['key']}-editorial", "call_to_action": "查看场次 · 提交预约意向", "poster_svg": poster_svg},
                 {"asset_type": "SOCIAL_POST", "platform": "小红书 / 朋友圈", "title": f"杭州周末：{profile['label']}值得住一晚", "content": social_post, "visual_brief": f"首图突出{partner_name}具体体验，后续展示房间、城市场景、行程片段和城市氛围。", "call_to_action": "收藏这段杭州行程"},
                 {"asset_type": "SHORT_VIDEO_SCRIPT", "platform": "短视频 30 秒", "title": f"30秒讲清{profile['label']}主题宿", "content": short_video, "visual_brief": "镜头必须出现房间、服务、体验现场和时间地点四类具体画面。", "call_to_action": "看看这段行程"},
                 {"asset_type": "STORE_CARD", "platform": "OTA / 酒店前台", "title": f"{profile['label']}产品卖点卡", "content": f"杭州周末 · {room_name} · {service_names} · {partner_name}\n场次 {partner_time} · {partner_address}\n适合 {audience} · ¥{payload.get('preferred_price', '599')} / 套 · 余 {capacity} 个名额", "visual_brief": "用房间、服务、体验、地点四块信息替代大段宣传语。", "call_to_action": "查看详情"},
@@ -255,7 +206,6 @@ class MockAgent:
             "marketing_title": full["marketing_title"],
             "marketing_content": full["marketing_content"],
             "creative_angle": full["creative_angle"],
-            "poster_style": full["poster_style"],
             "marketing_assets": full["marketing_assets"],
         }
 
