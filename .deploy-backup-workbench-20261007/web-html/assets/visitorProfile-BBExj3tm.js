@@ -1,0 +1,1 @@
+const e="stayscape.visitor.conversation-id";function r(){try{const t=sessionStorage.getItem(e);if(t)return t;const o=typeof(crypto==null?void 0:crypto.randomUUID)=="function"?crypto.randomUUID():`visitor-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;return sessionStorage.setItem(e,o),o}catch{return"visitor-ephemeral"}}export{r as v};
